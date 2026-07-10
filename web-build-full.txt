@@ -1,0 +1,266 @@
+﻿
+> cleannami-v2@0.1.0 build
+> next build --turbopack
+
+   Γû▓ Next.js 15.5.8 (Turbopack)
+
+   Creating an optimized production build ...
+node.exe :  ΓÜá Slow filesystem detected. The benchmark took 988ms. If C:\Users
+\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-mai
+n\.next is a network drive, consider moving it to a local folder. If you have 
+an antivirus enabled, consider excluding your project directory.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( ΓÜá Slow files...ject directory. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ Γ£ô Finished writing to disk in 3.1s
+ Γ£ô Compiled successfully in 37.5s
+   Linting and checking validity of types ...
+ Γ¿» ESLint: Config (unnamed): Unexpected key 
+"@typescript-eslint/no-explicit-any" found.
+   Collecting page data ...
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_add1b2
+47._.js:1:11640)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\customers\route.js:11
+:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_add1b2
+47._.js:1:11640)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\customers\route.js:11
+:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_55307b
+66._.js:1:3063)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\cleaners\[id]\route.j
+s:11:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\cron\sync-calendars\r
+oute.js:12:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_2d9f93
+f1._.js:1:484)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\financials\summary\ro
+ute.js:11:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_8b4299
+b9._.js:1:1555)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\cleaners\route.js:11:
+3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_add1b2
+47._.js:1:11640)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\customers\route.js:11
+:3)
+Error: DATABASE_URL environment variable is required.
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\_a00000
+05._.js:27:48158)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at getOrInstantiateModuleFromParent (C:\Users\Simushi\Documents\GitHub\Clea
+nNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopa
+ck]_runtime.js:725:12)
+    at Context.esmImport [as i] (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:215:20)
+    at __TURBOPACK__module__evaluation__ (C:\Users\Simushi\Documents\GitHub\Cle
+anNami\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[root-o
+f-the-server]__97b5efb8._.js:2:935)
+    at instantiateModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-
+Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:
+702:9)
+    at instantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNami\Cl
+eanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runt
+ime.js:730:12)
+    at getOrInstantiateRuntimeModule (C:\Users\Simushi\Documents\GitHub\CleanNa
+mi\Cleanami-Clean3-main(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]
+_runtime.js:743:12)
+    at Object.m (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami-Clean3-ma
+in(1)\Cleanami-Clean3-main\.next\server\chunks\[turbopack]_runtime.js:752:18)
+    at Object.<anonymous> (C:\Users\Simushi\Documents\GitHub\CleanNami\Cleanami
+-Clean3-main(1)\Cleanami-Clean3-main\.next\server\app\api\cron\process-payout\r
+oute.js:10:3)
+
+> Build error occurred
+[Error: Failed to collect page data for /api/customers] {
+  type: 'Error'
+}

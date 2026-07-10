@@ -1,0 +1,4 @@
+Rule_Type,Rate,Unit,Notes
+Base_Pay,17,per_hour,"Paid per expected hours, not actual time."
+Off-Site_Laundry_Bonus,5,per_load,"Paid to designated Laundry Lead only."
+Urgent_Accept_Bonus,10,per_job,"For jobs accepted <24h before start."

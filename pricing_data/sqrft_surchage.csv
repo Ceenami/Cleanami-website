@@ -1,0 +1,7 @@
+Range_Start,Range_End,Surcharge_Amount
+0,999,0
+1000,1499,25
+1500,1999,50
+2000,2499,75
+2500,2999,100
+3000,99999,Custom Quote

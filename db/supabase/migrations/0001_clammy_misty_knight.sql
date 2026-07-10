@@ -1,0 +1,23 @@
+CREATE TABLE "cancelled_jobs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"original_job_id" uuid NOT NULL,
+	"subscription_id" uuid NOT NULL,
+	"property_id" uuid NOT NULL,
+	"calendar_event_uid" text NOT NULL,
+	"check_in_time" timestamp with time zone NOT NULL,
+	"check_out_time" timestamp with time zone NOT NULL,
+	"status" "job_status" NOT NULL,
+	"expected_hours" text,
+	"addons_snapshot" jsonb,
+	"payment_intent_id" text,
+	"payment_status" "payment_status",
+	"payment_failed" boolean,
+	"notes" text,
+	"original_created_at" timestamp with time zone NOT NULL,
+	"original_updated_at" timestamp with time zone NOT NULL,
+	"cancelled_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"cancellation_source" text DEFAULT 'auto_detected' NOT NULL,
+	"cancellation_reason" text DEFAULT 'Calendar event no longer exists' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
