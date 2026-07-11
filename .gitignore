@@ -35,6 +35,12 @@ yarn-error.log*
 .env.*
 !.env.example
 
+# private audit / handoff notes — never commit (enumerates live security holes)
+_audit-private/
+
+# client-facing briefing & proposal docs — keep out of the client's code repo
+_client-docs/
+
 # vercel
 .vercel
 
