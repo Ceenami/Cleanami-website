@@ -29,3 +29,5 @@ export * from './pushNotificationTokens.schema';
 export * from './cancelledJobs.schema';
 export * from './onboardingSessions.schema';
 export * from './disputes.schema';
+export * from './propertyCleaners.schema';
+export * from './ratings.schema';

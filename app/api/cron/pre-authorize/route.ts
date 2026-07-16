@@ -6,6 +6,7 @@ import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { CancellationDetectionService } from "@/lib/services/cancellation-detection/cancellationDetection.service";
+import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 
 const pricingService = new PricingService();
 
@@ -203,6 +204,27 @@ export async function POST(req: NextRequest) {
             notes: error.message,
           })
           .where(eq(jobs.id, job.jobId));
+
+        // Notify the customer their payment failed (best-effort).
+        try {
+          const failedJob = await db.query.jobs.findFirst({
+            where: eq(jobs.id, job.jobId),
+            with: {
+              subscription: { with: { customer: true } },
+              property: true,
+            },
+          });
+          if (failedJob?.subscription?.customer?.email) {
+            await sendPaymentFailedEmail({
+              to: failedJob.subscription.customer.email,
+              name: failedJob.subscription.customer.name,
+              propertyAddress: failedJob.property?.address ?? "your property",
+            });
+          }
+        } catch (emailErr) {
+          console.error("[pre-authorize] failed-payment email failed:", emailErr);
+        }
+
         return { jobId: job.jobId, status: "failed", error: error.message };
       }
     });

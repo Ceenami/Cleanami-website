@@ -18,6 +18,7 @@ import { customerSkipsBilling } from "@/lib/billing/customer-billing";
 import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { sendCancellationEmail } from "@/lib/services/email.service";
 import { and, eq, gt, inArray, ne } from "drizzle-orm";
 
 const pricingService = new PricingService();
@@ -253,9 +254,12 @@ async function finalizeJobCancellation(
       hotTubServiceLevel: boolean;
       hotTubDrain: boolean;
       hotTubDrainCadence: string | null;
+      address?: string;
       customer: {
         stripeCustomerId: string | null;
         skipPayment: boolean;
+        email?: string;
+        name?: string;
       } | null;
     } | null;
   },
@@ -298,6 +302,22 @@ async function finalizeJobCancellation(
       ...(lateCancel ? {} : { paymentStatus: null, paymentIntentId: null }),
     })
     .where(eq(jobs.id, job.id));
+
+  // Notify the customer their clean was canceled (best-effort).
+  if (job.property?.customer?.email) {
+    try {
+      await sendCancellationEmail({
+        to: job.property.customer.email,
+        name: job.property.customer.name,
+        propertyAddress: job.property.address ?? "your property",
+        detail: lateCancel
+          ? "This was a late cancellation, so the assigned cleaner will still be paid."
+          : "No charge applies for this on-time cancellation.",
+      });
+    } catch (err) {
+      console.error("[cancellation] email failed:", err);
+    }
+  }
 
   return {
     jobId: job.id,
@@ -367,6 +387,150 @@ export async function cancelSubscriptionForCustomer(
       jobsCanceled > 0
         ? `Subscription canceled. ${jobsCanceled} upcoming clean(s) were canceled.`
         : "Subscription canceled. No upcoming cleans were scheduled.",
+  };
+}
+
+/**
+ * Admin cancel: cancels upcoming cleans then marks the subscription canceled.
+ * Unlike the customer path this does not enforce the minimum-term rule.
+ */
+export async function cancelSubscriptionAsAdmin(
+  subscriptionId: string
+): Promise<CancelSubscriptionResult> {
+  const subscription = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.id, subscriptionId),
+    with: { property: true },
+  });
+
+  if (!subscription) {
+    throw new Error("Subscription not found");
+  }
+
+  const upcomingJobs = await db.query.jobs.findMany({
+    where: and(
+      eq(jobs.subscriptionId, subscriptionId),
+      inArray(jobs.status, [...CANCELABLE_STATUSES]),
+      gt(jobs.checkInTime, new Date())
+    ),
+    with: {
+      cleaners: true,
+      property: { with: { customer: true } },
+      subscription: true,
+    },
+  });
+
+  let jobsCanceled = 0;
+  for (const upcomingJob of upcomingJobs) {
+    const jobEligibility = canCancelJob(
+      subscription,
+      upcomingJob,
+      upcomingJob.cleaners
+    );
+    // Admin can cancel regardless of the customer notice window; use the
+    // late flag purely to decide whether the cleaner is still paid.
+    await finalizeJobCancellation(upcomingJob, jobEligibility.late, "admin");
+    jobsCanceled += 1;
+  }
+
+  await db
+    .update(subscriptions)
+    .set({ status: "canceled", updatedAt: new Date() })
+    .where(eq(subscriptions.id, subscriptionId));
+
+  return {
+    subscriptionId,
+    jobsCanceled,
+    message:
+      jobsCanceled > 0
+        ? `Subscription canceled. ${jobsCanceled} upcoming clean(s) were canceled.`
+        : "Subscription canceled. No upcoming cleans were scheduled.",
+  };
+}
+
+export type SetSubscriptionStatusResult = {
+  subscriptionId: string;
+  status: "active" | "paused";
+  jobsAffected: number;
+  message: string;
+};
+
+/**
+ * Admin pause: mark paused and release upcoming unassigned/assigned cleans so
+ * no new work is dispatched while paused. On-time (no cleaner charge).
+ */
+export async function pauseSubscriptionAsAdmin(
+  subscriptionId: string
+): Promise<SetSubscriptionStatusResult> {
+  const subscription = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.id, subscriptionId),
+  });
+  if (!subscription) {
+    throw new Error("Subscription not found");
+  }
+  if (subscription.status === "canceled" || subscription.status === "expired") {
+    throw new Error("Cannot pause a canceled or expired subscription");
+  }
+
+  const upcomingJobs = await db.query.jobs.findMany({
+    where: and(
+      eq(jobs.subscriptionId, subscriptionId),
+      inArray(jobs.status, [...CANCELABLE_STATUSES]),
+      gt(jobs.checkInTime, new Date())
+    ),
+    with: {
+      cleaners: true,
+      property: { with: { customer: true } },
+      subscription: true,
+    },
+  });
+
+  let jobsAffected = 0;
+  for (const upcomingJob of upcomingJobs) {
+    // Pause releases scheduled cleans as on-time cancellations (no charge).
+    await finalizeJobCancellation(upcomingJob, false, "admin");
+    jobsAffected += 1;
+  }
+
+  await db
+    .update(subscriptions)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(eq(subscriptions.id, subscriptionId));
+
+  return {
+    subscriptionId,
+    status: "paused",
+    jobsAffected,
+    message:
+      jobsAffected > 0
+        ? `Subscription paused. ${jobsAffected} upcoming clean(s) were released.`
+        : "Subscription paused.",
+  };
+}
+
+/** Admin resume: flip a paused subscription back to active. */
+export async function resumeSubscriptionAsAdmin(
+  subscriptionId: string
+): Promise<SetSubscriptionStatusResult> {
+  const subscription = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.id, subscriptionId),
+  });
+  if (!subscription) {
+    throw new Error("Subscription not found");
+  }
+  if (subscription.status !== "paused") {
+    throw new Error("Only a paused subscription can be resumed");
+  }
+
+  await db
+    .update(subscriptions)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(eq(subscriptions.id, subscriptionId));
+
+  return {
+    subscriptionId,
+    status: "active",
+    jobsAffected: 0,
+    message: "Subscription resumed.",
   };
 }
 

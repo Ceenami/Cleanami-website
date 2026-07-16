@@ -42,6 +42,26 @@ const createFloridaDate = (date: Date, timeStr: string): Date => {
   return utcDate;
 };
 
+/**
+ * The cleaning job's start anchor = the guest checkout time. For date-only
+ * events this normalizes to the property's default checkout time in ET.
+ * Must match the `jobStartTime` used when jobs are created (see
+ * `_processAndSaveEventsInBatches`) so composite UIDs line up.
+ */
+export const getEventJobStartTime = (event: VEvent): Date =>
+  isDateOnly(event)
+    ? createFloridaDate(event.end, DEFAULT_CHECKOUT_TIME)
+    : event.end;
+
+/**
+ * Composite calendar UID stored on each job: `${event.uid}_${jobStartISO}`.
+ * Cancellation detection MUST compute the current calendar's keys with this
+ * same function, or it will compare composite-vs-raw and wrongly flag every
+ * job as cancelled (BUG-A).
+ */
+export const getEventCompositeUid = (event: VEvent): string =>
+  `${event.uid}_${getEventJobStartTime(event).toISOString()}`;
+
 type SyncInput = {
   subscriptionId?: string;
   propertyId?: string;

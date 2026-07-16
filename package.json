@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "-": "^0.0.1",
     "@react-email/components": "^1.0.2",
     "@react-google-maps/api": "^2.20.7",
     "@stripe/react-stripe-js": "^5.0.0",
@@ -20,7 +19,6 @@
     "@tanstack/react-query-devtools": "^5.90.2",
     "@types/papaparse": "^5.3.16",
     "clsx": "^2.1.1",
-    "D": "^1.0.0",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "dotenv": "^17.2.3",
@@ -38,7 +36,9 @@
     "sonner": "^2.0.4",
     "stripe": "^19.0.0",
     "tailwind-merge": "^3.3.1",
+    "twilio": "^6.0.2",
     "use-debounce": "^10.0.6",
+    "web-push": "^3.6.7",
     "zod": "^4.1.11"
   },
   "devDependencies": {
@@ -47,6 +47,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.5",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",

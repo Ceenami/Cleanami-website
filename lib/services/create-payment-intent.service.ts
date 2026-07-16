@@ -8,9 +8,16 @@ import { getDbOrNull } from "@/db";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
+import { geocodeAddress } from "@/lib/services/google-maps/geocoding";
+import { isPointInServiceArea } from "@/lib/google-maps/serviceArea/index.ts";
+import { getStartOfTodayEastern } from "@/lib/time/eastern";
+import { addDays } from "date-fns";
 import Stripe from "stripe";
 
 const pricingService = new PricingService();
+
+/** Mandatory setup window before the first clean; re-checked server-side. */
+const FIRST_CLEAN_BUFFER_DAYS = 7;
 
 async function resolveStripeCustomer(
   stripe: Stripe,
@@ -95,6 +102,35 @@ export async function createPaymentIntentForSignup(
     };
   }
 
+  // Re-enforce the 7-day first-clean buffer server-side (the client date picker
+  // is not trusted). Compare calendar days in US Eastern (ops timezone).
+  const firstCleanDate = normalizedFormData.firstCleanDate;
+  if (!(firstCleanDate instanceof Date) || Number.isNaN(firstCleanDate.getTime())) {
+    return { error: "Please select a valid first clean date." };
+  }
+  const earliestFirstClean = addDays(
+    getStartOfTodayEastern(),
+    FIRST_CLEAN_BUFFER_DAYS
+  );
+  if (firstCleanDate < earliestFirstClean) {
+    return {
+      error: `The first clean must be at least ${FIRST_CLEAN_BUFFER_DAYS} days out. Please choose a later date.`,
+    };
+  }
+
+  // Re-validate the service area against the geocoded address rather than
+  // trusting the client-sent `isAddressInServiceArea` boolean. Geocoding is a
+  // Google call, so degrade gracefully (allow) if it fails transiently.
+  if (normalizedFormData.address) {
+    const coords = await geocodeAddress(normalizedFormData.address);
+    if (coords && !isPointInServiceArea(coords.latitude, coords.longitude)) {
+      return {
+        error:
+          "The selected address is outside our current service area. Please contact CleanNami if you believe this is an error.",
+      };
+    }
+  }
+
   let stripeCustomerId: string | null = null;
 
   if (normalizedFormData.email) {
@@ -124,6 +160,10 @@ export async function createPaymentIntentForSignup(
     hot_tub_drain: (normalizedFormData.hotTubDrain && "drain hot tub") || "",
     hotTub_drain_cadence: normalizedFormData.hotTubDrainCadence || "",
     subscription_term: `${normalizedFormData.subscriptionMonths} month(s)`,
+    subscription_discount:
+      serverPriceDetails.discountRate > 0
+        ? `${Math.round(serverPriceDetails.discountRate * 100)}% (-$${serverPriceDetails.discountAmount.toFixed(2)})`
+        : "none",
   };
 
   const paymentIntent = await stripe.paymentIntents.create({

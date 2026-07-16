@@ -59,15 +59,16 @@ export const SubscriptionsPageClient = () => {
   }, [queryClient]);
   
   const handleUpdateSubscription = (updatedSub: Subscription) => {
-    console.log("Updating subscription:", updatedSub);
-    // Add API call logic here e.g., fetch(`/api/subscriptions/${updatedSub.id}`, { method: 'PUT', ... })
+    // The modal performs the pause/resume/cancel API call; here we just refresh
+    // the list and close. (Realtime also invalidates, but do it eagerly.)
+    void updatedSub;
     queryClient.invalidateQueries({ queryKey });
     setSelectedSubscription(null);
   }
 
   const allSubscriptions = data?.pages.flatMap(page => page.data) ?? [];
   const uniqueSubscriptions = Array.from(new Map(allSubscriptions.map(sub => [sub.id, sub])).values());
-  const statusOptions: (SubscriptionStatus | 'all')[] = ["all", "active", "pending", "canceled", "expired"];
+  const statusOptions: (SubscriptionStatus | 'all')[] = ["all", "active", "paused", "pending", "canceled", "expired"];
 
   return (
     <div className="space-y-6">

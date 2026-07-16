@@ -111,7 +111,7 @@ export const AddressAutocomplete = ({ formData, setFormData, errors }: Props) =>
         onPlaceChanged={onPlaceChanged}
         options={{
           types: ['address'],
-          componentRestrictions: { country: ['us', 'ca'] },
+          componentRestrictions: { country: ['us'] },
         }}
       >
         {inputElement}

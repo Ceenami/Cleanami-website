@@ -45,6 +45,22 @@ export const signupFormSchema = z
       message: "Upload a checklist or choose the default checklist",
       path: ["checklistFile"],
     }
+  )
+  .refine(
+    (data) => {
+      // Mandatory 7-day setup buffer before the first clean. Calendar-day
+      // comparison so a same-day pick of "today + 7" is accepted.
+      const earliest = new Date();
+      earliest.setHours(0, 0, 0, 0);
+      earliest.setDate(earliest.getDate() + 7);
+      const chosen = new Date(data.firstCleanDate);
+      chosen.setHours(0, 0, 0, 0);
+      return chosen.getTime() >= earliest.getTime();
+    },
+    {
+      message: "Your first clean must be at least 7 days from today.",
+      path: ["firstCleanDate"],
+    }
   );
 
 export type SignupFormData = Partial<z.infer<typeof signupFormSchema>>;
@@ -55,6 +71,12 @@ export interface PriceDetails {
   sqftSurcharge: number;
   laundryCost: number;
   hotTubCost: number;
+  /** Per-clean price before the subscription-term discount. */
+  subtotalPerClean: number;
+  /** Fractional discount applied for the chosen term (0, 0.10, or 0.15). */
+  discountRate: number;
+  /** Dollar amount discounted from the per-clean subtotal. */
+  discountAmount: number;
   totalPerClean: number;
   isCustomQuote: boolean;
   periodicCharges: Array<{

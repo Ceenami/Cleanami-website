@@ -12,6 +12,8 @@ export const payouts = pgTable('payouts', {
   amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
   urgentBonusAmount: numeric('urgent_bonus_amount', { precision: 10, scale: 2 }),
   laundryBonusAmount: numeric('laundry_bonus_amount', { precision: 10, scale: 2 }),
+  /** Late-arrival pay deduction applied to this payout (already reflected in `amount`). */
+  lateDeductionAmount: numeric('late_deduction_amount', { precision: 10, scale: 2 }),
   stripePayoutId: text('stripe_payout_id').unique(),
   status: payoutStatusEnum('status').default('pending'),
   createdAt: timestamp('created_at').defaultNow().notNull(),

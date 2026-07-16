@@ -16,7 +16,7 @@ export const SubscriptionDetailModal = ({
   onUpdate,
 }: SubscriptionModalProps) => {
   // Extract only the Subscription fields, plus autoRenew for UI state
-  const [localSub, setLocalSub] = useState<Subscription & { autoRenew: boolean }>(() => {
+  const [localSub] = useState<Subscription & { autoRenew: boolean }>(() => {
     const sub: Subscription = {
       id: subscription.id,
       customerId: subscription.customerId,
@@ -36,6 +36,10 @@ export const SubscriptionDetailModal = ({
     return { ...sub, autoRenew: true };
   });
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
+  const [actionLoading, setActionLoading] = useState<
+    "pause" | "resume" | "cancel" | null
+  >(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -51,14 +55,40 @@ export const SubscriptionDetailModal = ({
     onUpdate(subscriptionData);
   };
 
-  const handleStatusChange = (newStatus: 'active' | 'expired' | 'canceled' | 'pending') => {
-    setLocalSub((prev) => ({ ...prev, status: newStatus }));
+  const runAction = async (action: "pause" | "resume" | "cancel") => {
+    setActionLoading(action);
+    setActionError(null);
+    try {
+      const res = await fetch(
+        `/api/subscriptions/${subscription.id}/${action}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Failed to ${action} subscription`);
+      }
+      const nextStatus: Subscription["status"] =
+        action === "cancel"
+          ? "canceled"
+          : action === "pause"
+            ? "paused"
+            : "active";
+      // Notify parent to refresh + close the modal.
+      const { autoRenew, ...subscriptionData } = localSub;
+      void autoRenew;
+      onUpdate({ ...subscriptionData, status: nextStatus });
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : `Failed to ${action} subscription`
+      );
+    } finally {
+      setActionLoading(null);
+      setIsConfirmingCancel(false);
+    }
   };
 
   const handleCancelSubscription = () => {
-    handleStatusChange("canceled");
-    setLocalSub((prev) => ({ ...prev, autoRenew: false }));
-    setIsConfirmingCancel(false);
+    void runAction("cancel");
   };
 
   return (
@@ -93,7 +123,7 @@ export const SubscriptionDetailModal = ({
                 </div>
               )}
               
-              {localSub.status === "pending" && (
+              {localSub.status === "paused" && (
                 <div className="flex items-center text-sm">
                   <ClockIcon className="h-5 w-5 mr-3 text-yellow-500" />
                   <span className="font-semibold text-yellow-700">Subscription is Paused</span>
@@ -101,30 +131,47 @@ export const SubscriptionDetailModal = ({
               )}
             </div>
 
-            {/* <ToggleSwitch
-              label="Auto-renew at end of term"
-              enabled={localSub.autoRenew}
-              onChange={(enabled) => setLocalSub((prev) => ({ ...prev, autoRenew: enabled }))}
-            /> */}
-
-            {/* <div>
+            <div>
               <h3 className="text-base font-semibold text-gray-800 mb-3">Actions</h3>
               <div className="space-y-3">
-                 
                 {localSub.status === "active" && (
-                  <ActionButton onClick={() => handleStatusChange("pending")} text="Pause Subscription" className="bg-yellow-500 hover:bg-yellow-600" />
+                  <button
+                    type="button"
+                    onClick={() => runAction("pause")}
+                    disabled={actionLoading !== null}
+                    className="w-full rounded-lg bg-yellow-500 px-4 py-2 font-semibold text-white hover:bg-yellow-600 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  >
+                    {actionLoading === "pause" ? "Pausing..." : "Pause Subscription"}
+                  </button>
                 )}
-                {localSub.status === "pending" && (
-                  <ActionButton onClick={() => handleStatusChange("active")} text="Resume Subscription" className="bg-green-600 hover:bg-green-700" />
+                {localSub.status === "paused" && (
+                  <button
+                    type="button"
+                    onClick={() => runAction("resume")}
+                    disabled={actionLoading !== null}
+                    className="w-full rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  >
+                    {actionLoading === "resume" ? "Resuming..." : "Resume Subscription"}
+                  </button>
                 )}
-                {localSub.status !== "canceled" && (
-                  <ActionButton onClick={() => setIsConfirmingCancel(true)} text="Cancel Subscription" className="bg-red-600 hover:bg-red-700" />
+                {localSub.status !== "canceled" && localSub.status !== "expired" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmingCancel(true)}
+                    disabled={actionLoading !== null}
+                    className="w-full rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  >
+                    Cancel Subscription
+                  </button>
                 )}
                 {localSub.status === "canceled" && (
                   <p className="text-sm text-center text-red-700 font-medium bg-red-50 p-3 rounded-md">This subscription is canceled.</p>
                 )}
+                {actionError && (
+                  <p className="text-sm text-red-600">{actionError}</p>
+                )}
               </div>
-            </div> */}
+            </div>
           </div>
 
           <div className="p-6 border-t bg-gray-50 rounded-b-2xl flex justify-end items-center space-x-3">

@@ -3,13 +3,15 @@ import { users } from "./users.schema";
 import { jobs } from "./jobs.schema";
 
 export const notificationTypeEnum = pgEnum('notification_type', [
-  'job_reminder', 
-  'photo_reminder', 
-  'completion_reminder', 
-  'urgent_job', 
+  'job_reminder',
+  'photo_reminder',
+  'completion_reminder',
+  'urgent_job',
   'payment_ready',
   'reliability_check',
-  'swap_available'
+  'swap_available',
+  'dispute_update',
+  'assignment'
 ]);
 
 export const notifications = pgTable('notifications', {

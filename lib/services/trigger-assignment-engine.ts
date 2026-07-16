@@ -1,36 +1,26 @@
 import "server-only";
 
-/** Invoke the Supabase job-assignment-engine edge function (same as nightly sync). */
+import { runAssignmentEngine } from "@/lib/services/assignment/assignment-engine.service";
+
+/**
+ * Run the in-repo assignment engine. Replaces the former Supabase
+ * `job-assignment-engine` edge function (now reimplemented in this repo, see
+ * assignment-engine.service.ts). Fire-and-forget safe — logs failures.
+ */
 export async function triggerAssignmentEngine(): Promise<void> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.warn("[triggerAssignmentEngine] Missing Supabase env vars");
-    return;
-  }
-
   try {
-    const response = await fetch(
-      `${supabaseUrl}/functions/v1/job-assignment-engine`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      }
-    );
-
-    const result = await response.json();
-    if (!result?.success) {
+    const summary = await runAssignmentEngine();
+    if (summary.errors.length > 0) {
       console.error(
-        "[triggerAssignmentEngine] Engine returned failure:",
-        result?.error ?? response.status
+        "[triggerAssignmentEngine] completed with errors:",
+        summary.errors
+      );
+    } else {
+      console.log(
+        `[triggerAssignmentEngine] assigned=${summary.assigned} skipped=${summary.skipped}`
       );
     }
   } catch (error) {
-    console.error("[triggerAssignmentEngine] Request failed:", error);
+    console.error("[triggerAssignmentEngine] Engine failed:", error);
   }
 }

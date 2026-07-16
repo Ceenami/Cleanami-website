@@ -52,6 +52,12 @@ export const cleaners = pgTable("cleaners", {
   eligibleForAssignments: boolean("eligible_for_assignments").default(false).notNull(),
   /** Period start (Monday) for which the one-time late catch-up override was consumed */
   availabilityLateOverridePeriodStart: date("availability_late_override_period_start"),
+  /** Per-cleaner hourly pay rate in cents. Starts at $17.00; raised via §7/§8 rule. */
+  hourlyRateCents: integer("hourly_rate_cents").default(1700).notNull(),
+  /** Used to compute annual raise eligibility (anniversary). */
+  hireDate: date("hire_date"),
+  /** Last time the raise rule was evaluated for this cleaner. */
+  rateReviewedAt: date("rate_reviewed_at"),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

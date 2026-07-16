@@ -27,7 +27,7 @@ export const subscriptions = pgTable(
     stripeSubscriptionId: text("stripe_subscription_id").unique(),
     durationMonths: integer("duration_months").notNull(),
     status: varchar("status", {
-      enum: ["active", "expired", "canceled", "pending"],
+      enum: ["active", "expired", "canceled", "pending", "paused"],
     })
       .default("pending")
       .notNull(),

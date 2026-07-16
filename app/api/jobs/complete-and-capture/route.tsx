@@ -5,7 +5,34 @@ import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
-import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { evaluateBadgesForCleaner } from "@/lib/services/badges/badges.service";
+import { sendJobCompletionEmail } from "@/lib/services/email.service";
+
+async function awardBadges(cleanerIds: string[]): Promise<void> {
+  try {
+    await Promise.all(cleanerIds.map((id) => evaluateBadgesForCleaner(id)));
+  } catch (err) {
+    console.error("[complete-and-capture] badge evaluation failed:", err);
+  }
+}
+
+async function emailCompletion(
+  customerEmail: string | null | undefined,
+  customerName: string | null | undefined,
+  propertyAddress: string | null | undefined
+): Promise<void> {
+  if (!customerEmail) return;
+  try {
+    await sendJobCompletionEmail({
+      to: customerEmail,
+      name: customerName ?? undefined,
+      propertyAddress: propertyAddress ?? "your property",
+    });
+  } catch (err) {
+    console.error("[complete-and-capture] completion email failed:", err);
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -110,34 +137,37 @@ export async function POST(req: NextRequest) {
       }
 
       const expectedHours = parseFloat(job.expectedHours || "0");
-      const basePayPerCleaner = expectedHours * CLEANER_HOURLY_RATE;
 
       const payoutPromises = assignedCleaners.map(async (assignment) => {
-        let totalPayout = basePayPerCleaner;
-        let laundryBonus: number | null = null;
-        let urgentBonus: number | null = null;
-
-        if (assignment.role === "laundry_lead" && job.addonsSnapshot?.laundryLoads) {
-          laundryBonus = job.addonsSnapshot.laundryLoads * 5;
-          totalPayout += laundryBonus;
-        }
-
-        if (assignment.urgentBonus) {
-          urgentBonus = 10;
-          totalPayout += urgentBonus;
-        }
+        const pay = computeCleanerPay({
+          expectedHours,
+          hourlyRateCents: assignment.cleaner?.hourlyRateCents,
+          role: assignment.role,
+          laundryLoads: job.addonsSnapshot?.laundryLoads,
+          urgentBonus: assignment.urgentBonus,
+          arrivalDelayMinutes: evidence.arrivalDelayMinutes,
+        });
 
         return db.insert(payouts).values({
           jobId: jobId,
           cleanerId: assignment.cleanerId,
-          amount: totalPayout.toFixed(2),
-          urgentBonusAmount: urgentBonus ? urgentBonus.toFixed(2) : null,
-          laundryBonusAmount: laundryBonus ? laundryBonus.toFixed(2) : null,
+          amount: pay.total.toFixed(2),
+          urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
+          laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+          lateDeductionAmount: pay.lateDeduction
+            ? pay.lateDeduction.toFixed(2)
+            : null,
           status: "pending",
         });
       });
 
       await Promise.all(payoutPromises);
+      await awardBadges(assignedCleaners.map((a) => a.cleanerId));
+      await emailCompletion(
+        job.subscription?.customer?.email,
+        job.subscription?.customer?.name,
+        job.property?.address
+      );
 
       return NextResponse.json({
         success: true,
@@ -225,34 +255,37 @@ export async function POST(req: NextRequest) {
     }
 
     const expectedHours = parseFloat(job.expectedHours || "0");
-    const basePayPerCleaner = expectedHours * CLEANER_HOURLY_RATE;
 
     const payoutPromises = assignedCleaners.map(async (assignment) => {
-      let totalPayout = basePayPerCleaner;
-      let laundryBonus: number | null = null;
-      let urgentBonus: number | null = null;
-
-      if (assignment.role === "laundry_lead" && job.addonsSnapshot?.laundryLoads) {
-        laundryBonus = job.addonsSnapshot.laundryLoads * 5;
-        totalPayout += laundryBonus;
-      }
-
-      if (assignment.urgentBonus) {
-        urgentBonus = 10;
-        totalPayout += urgentBonus;
-      }
+      const pay = computeCleanerPay({
+        expectedHours,
+        hourlyRateCents: assignment.cleaner?.hourlyRateCents,
+        role: assignment.role,
+        laundryLoads: job.addonsSnapshot?.laundryLoads,
+        urgentBonus: assignment.urgentBonus,
+        arrivalDelayMinutes: evidence.arrivalDelayMinutes,
+      });
 
       return db.insert(payouts).values({
         jobId: jobId,
         cleanerId: assignment.cleanerId,
-        amount: totalPayout.toFixed(2),
-        urgentBonusAmount: urgentBonus ? urgentBonus.toFixed(2) : null,
-        laundryBonusAmount: laundryBonus ? laundryBonus.toFixed(2) : null,
+        amount: pay.total.toFixed(2),
+        urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
+        laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+        lateDeductionAmount: pay.lateDeduction
+          ? pay.lateDeduction.toFixed(2)
+          : null,
         status: "pending",
       });
     });
 
     await Promise.all(payoutPromises);
+    await awardBadges(assignedCleaners.map((a) => a.cleanerId));
+    await emailCompletion(
+      job.subscription?.customer?.email,
+      job.subscription?.customer?.name,
+      job.property?.address
+    );
 
     return NextResponse.json({
       success: true,

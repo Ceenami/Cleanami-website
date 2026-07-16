@@ -258,6 +258,75 @@ export async function mergeProperties(
   });
 }
 
+/** Allowlist of property fields an admin may edit. Anything not here is ignored. */
+export type UpdatePropertyInput = {
+  address?: string;
+  sqFt?: number | null;
+  bedCount?: number;
+  bathCount?: string; // numeric column -> string in Drizzle
+  hasHotTub?: boolean;
+  laundryType?: "in_unit" | "off_site" | "none";
+  laundryLoads?: number | null;
+  hotTubServiceLevel?: boolean;
+  hotTubDrain?: boolean;
+  hotTubDrainCadence?:
+    | "4_weeks"
+    | "6_weeks"
+    | "2_months"
+    | "3_months"
+    | "4_months"
+    | null;
+  iCalUrl?: string | null;
+  defaultCheckInTime?: string;
+  defaultCheckOutTime?: string;
+};
+
+export async function updateProperty(
+  propertyId: string,
+  input: UpdatePropertyInput
+): Promise<{ propertyId: string }> {
+  const existing = await db.query.properties.findFirst({
+    where: eq(properties.id, propertyId),
+    columns: { id: true, address: true },
+  });
+  if (!existing) {
+    throw new Error("Property not found");
+  }
+
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  const editableKeys: (keyof UpdatePropertyInput)[] = [
+    "address",
+    "sqFt",
+    "bedCount",
+    "bathCount",
+    "hasHotTub",
+    "laundryType",
+    "laundryLoads",
+    "hotTubServiceLevel",
+    "hotTubDrain",
+    "hotTubDrainCadence",
+    "iCalUrl",
+    "defaultCheckInTime",
+    "defaultCheckOutTime",
+  ];
+  for (const key of editableKeys) {
+    if (input[key] !== undefined) patch[key] = input[key];
+  }
+
+  // If the address changed, clear the stale geocode so it re-geocodes on next use.
+  if (
+    typeof input.address === "string" &&
+    input.address.trim() !== existing.address
+  ) {
+    patch.latitude = null;
+    patch.longitude = null;
+    patch.geocodedAt = null;
+  }
+
+  await db.update(properties).set(patch).where(eq(properties.id, propertyId));
+  return { propertyId };
+}
+
 export type DeletePropertyResult = {
   propertyId: string;
   address: string;
