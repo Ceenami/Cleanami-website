@@ -61,7 +61,15 @@ export const PriceSummary = ({ priceDetails }: Props) => {
             value={`$${priceDetails.hotTubCost.toFixed(2)}`}
           />
         )}
-        
+        {priceDetails.discountAmount > 0 && (
+          <div className="text-teal-600">
+            <PriceRow
+              label={`Subscription Discount (${Math.round(priceDetails.discountRate * 100)}%)`}
+              value={`-$${priceDetails.discountAmount.toFixed(2)}`}
+            />
+          </div>
+        )}
+
         <div className="pt-2 border-t border-gray-200 mt-2">
           <PriceRow
             label="Total per Clean"

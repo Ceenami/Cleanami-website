@@ -20,6 +20,7 @@ import { KpiCard } from "./ui/KpiCard";
 import { ClientTime } from "./ui/ClientTime";
 import { getStatusBadge } from "../utils";
 import { CustomerJobCancelButton } from "@/components/customer/CustomerJobCancelButton";
+import { CustomerJobRatingButton } from "@/components/customer/CustomerJobRatingButton";
 
 async function fetchJobs({
   pageParam = 1,
@@ -300,6 +301,12 @@ export const RealTimeJobBoard = () => {
                                   ? String(job.checkInTime)
                                   : null
                               }
+                            />
+                          )}
+                          {showOwnerView && (
+                            <CustomerJobRatingButton
+                              jobId={job.id}
+                              status={job.status}
                             />
                           )}
                           <Link

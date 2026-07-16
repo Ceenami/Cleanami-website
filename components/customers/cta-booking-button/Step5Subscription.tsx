@@ -14,12 +14,8 @@ interface Step5Props extends StepsProps {
   onContinueSetup?: () => void;
 }
 
-const LAUNCH_DATE = new Date('2025-10-22');
-const sevenDaysFromNow = addDays(new Date(), 7);
-
-const firstAvailableDay = sevenDaysFromNow < LAUNCH_DATE 
-  ? LAUNCH_DATE 
-  : sevenDaysFromNow;
+/** Mandatory 7-day setup buffer before the first clean (re-enforced server-side). */
+export const FIRST_CLEAN_BUFFER_DAYS = 7;
 
 /** 1 month minimum (first month), up to 6 months. */
 const SUBSCRIPTION_LENGTH_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
@@ -43,6 +39,10 @@ export const Step5Subscription = ({
 
   const hasSelectedDate = !!formData.firstCleanDate;
   const selectedMonths = formData.subscriptionMonths ?? 1;
+
+  // First selectable day = today + 7-day buffer. Computed at render (no stale
+  // hardcoded launch date); the same rule is re-enforced server-side.
+  const firstAvailableDay = addDays(new Date(), FIRST_CLEAN_BUFFER_DAYS);
 
   return (
     <div className="space-y-8">
@@ -84,7 +84,7 @@ export const Step5Subscription = ({
         </div>
 
         <p className="mt-4 text-sm text-gray-600">
-          To ensure cleaner availability, there is a mandatory 7-day buffer before your first turnover can be scheduled. October 21st is our first available date. We&apos;ll contact you with a welcome call.
+          To ensure cleaner availability, there is a mandatory {FIRST_CLEAN_BUFFER_DAYS}-day buffer before your first turnover can be scheduled. Our first available date is {format(firstAvailableDay, 'PPP')}. We&apos;ll contact you with a welcome call.
         </p>
         
         <div className="mt-4 flex flex-col gap-8 items-start">

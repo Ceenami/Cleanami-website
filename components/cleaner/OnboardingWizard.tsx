@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Loader } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LegalDocumentsStep } from "@/components/cleaner/LegalDocumentsStep";
 
 type OnboardingState = {
   step: number;
@@ -216,41 +217,14 @@ export function OnboardingWizard({
       )}
 
       {step === 3 && (
-        <div className="space-y-4 rounded-xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-gray-600">
-            Confirm you have reviewed and agree to the contractor documents:
-            W-9, contractor agreement, liability waiver, and GPS consent.
-          </p>
-          <label className="flex items-start gap-3 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={legalDocsAcknowledged}
-              onChange={(e) => setLegalDocsAcknowledged(e.target.checked)}
-              className="mt-1"
-            />
-            <span>
-              I agree to the required contractor documents and consent to GPS
-              tracking during active jobs.
-            </span>
-          </label>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setStep(2)}
-              className="flex-1 rounded-lg border py-3 text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              disabled={saving || !legalDocsAcknowledged}
-              onClick={() => saveStep(4, { complete: true, launchStripe: true })}
-              className="flex-1 rounded-lg bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              Continue to Stripe
-            </button>
-          </div>
-        </div>
+        <LegalDocumentsStep
+          completing={saving}
+          onBack={() => setStep(2)}
+          onComplete={() => {
+            setLegalDocsAcknowledged(true);
+            saveStep(4, { complete: true, launchStripe: true });
+          }}
+        />
       )}
 
       {step >= 4 && (

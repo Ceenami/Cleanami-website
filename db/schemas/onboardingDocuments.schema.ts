@@ -9,6 +9,9 @@ export const onboardingDocuments = pgTable('onboarding_documents', {
   documentType: documentTypeEnum('document_type').notNull(),
   signed: boolean('signed').default(false).notNull(),
   signedAt: timestamp('signed_at', { withTimezone: true }),
+  /** Typed e-signature name for click-to-sign documents. */
+  signedName: text('signed_name'),
+  /** Storage object path (private bucket) for uploaded docs, e.g. the W-9. */
   documentUrl: text('document_url'),
   ipAddress: text('ip_address'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

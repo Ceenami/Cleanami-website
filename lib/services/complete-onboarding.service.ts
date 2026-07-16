@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer-account.service";
+import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
 
 export type CompleteOnboardingResult =
   | {
@@ -370,6 +371,19 @@ export async function completeOnboardingForPayment(
 
     if (!accountResult.success) {
       return { success: false, error: accountResult.error };
+    }
+
+    // Booking confirmation email (best-effort; never blocks onboarding).
+    try {
+      await sendBookingConfirmationEmail({
+        to: email,
+        name,
+        propertyAddress: result.property.address,
+        firstCleanDate: firstCleanDate.toDateString(),
+        amount: `$${(paymentIntent.amount / 100).toFixed(2)}`,
+      });
+    } catch (emailError) {
+      console.error("[complete-onboarding] confirmation email failed:", emailError);
     }
 
     return {

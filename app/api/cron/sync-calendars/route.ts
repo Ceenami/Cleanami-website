@@ -128,48 +128,31 @@ export async function GET(request: Request) {
 
     console.log("Sync completed:", results);
 
-    // After the sync completes successfully, call the job assignment engine
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-if (supabaseUrl && supabaseAnonKey) {
-  try {
-    console.log("=== JOB ASSIGNMENT ENGINE ===");
-    const assignmentResponse = await fetch(
-      `${supabaseUrl}/functions/v1/job-assignment-engine`,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${supabaseAnonKey}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const assignmentResult = await assignmentResponse.json();
-
-    if (assignmentResult.success) {
-      console.log(
-        `✓ Job assignment completed: ${assignmentResult.summary.assigned} assigned, ${assignmentResult.summary.skipped} skipped`
+    // After the sync completes, run the in-repo assignment engine (replaces the
+    // former Supabase `job-assignment-engine` edge function).
+    try {
+      console.log("=== JOB ASSIGNMENT ENGINE ===");
+      const { runAssignmentEngine } = await import(
+        "@/lib/services/assignment/assignment-engine.service"
       );
-    } else {
-      console.error(`✗ Job assignment failed: ${assignmentResult.error}`);
+      const assignmentResult = await runAssignmentEngine();
+      console.log(
+        `✓ Job assignment completed: ${assignmentResult.assigned} assigned, ${assignmentResult.skipped} skipped, ${assignmentResult.errors.length} errors`
+      );
+    } catch (assignmentError) {
+      console.error("Job assignment error:", assignmentError);
     }
-  } catch (assignmentError) {
-    console.error("Job assignment error:", assignmentError);
-  }
 
-  console.log("=== JOB RECONCILIATION (stale active jobs) ===");
-  try {
-    const { reconcileStaleJobs } = await import(
-      "@/lib/services/job-reconciliation.service"
-    );
-    const reconciliation = await reconcileStaleJobs();
-    console.log("✓ Job reconciliation:", reconciliation);
-  } catch (reconcileError) {
-    console.error("Job reconciliation error:", reconcileError);
-  }
-}
+    console.log("=== JOB RECONCILIATION (stale active jobs) ===");
+    try {
+      const { reconcileStaleJobs } = await import(
+        "@/lib/services/job-reconciliation.service"
+      );
+      const reconciliation = await reconcileStaleJobs();
+      console.log("✓ Job reconciliation:", reconciliation);
+    } catch (reconcileError) {
+      console.error("Job reconciliation error:", reconcileError);
+    }
 
     return new Response(
       JSON.stringify({

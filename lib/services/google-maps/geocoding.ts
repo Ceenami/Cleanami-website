@@ -9,7 +9,7 @@ export type Coordinates = {
   longitude: number;
 };
 
-async function geocodeAddress(address: string): Promise<Coordinates | null> {
+export async function geocodeAddress(address: string): Promise<Coordinates | null> {
   try {
     const response = await fetch(
       `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(

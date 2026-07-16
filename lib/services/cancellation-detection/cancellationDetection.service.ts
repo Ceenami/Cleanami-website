@@ -4,6 +4,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as webcal from "node-ical";
 import { VEvent } from "node-ical";
+import { getEventCompositeUid } from "@/lib/services/iCal/ical.service";
 
 type DrizzleDb = NodePgDatabase<typeof schema>;
 
@@ -93,6 +94,23 @@ export class CancellationDetectionService {
         totalProcessed: 0,
         totalCancelled: 0,
         cancelledJobIds: []
+      };
+    }
+
+    // Safety guard: an empty (but successfully fetched) calendar alongside
+    // existing jobs is far more likely a transient feed glitch than the host
+    // genuinely clearing every booking. Refuse to mass-cancel in that case.
+    if (events.length === 0) {
+      console.warn(
+        `Calendar returned 0 events but ${existingJobs.length} jobs exist for subscription ${subscriptionId}. Skipping cancellation to avoid mass data loss.`
+      );
+      return {
+        success: true,
+        message:
+          "Calendar returned no events; skipping cancellation as a safety measure.",
+        totalProcessed: existingJobs.length,
+        totalCancelled: 0,
+        cancelledJobIds: [],
       };
     }
 
@@ -221,19 +239,22 @@ export class CancellationDetectionService {
   }
 
   private _findCancelledJobs(existingJobs: ExistingJob[], calendarEvents: VEvent[]): ExistingJob[] {
+    // Jobs store a COMPOSITE uid (`${event.uid}_${jobStartISO}`), so the
+    // comparison set must be built with the same composite key — not the raw
+    // event.uid — or every job would look cancelled (BUG-A).
     const currentCalendarUIDs = new Set(
       calendarEvents
-        .map(event => event.uid)
-        .filter(uid => uid)
+        .filter(event => event.uid)
+        .map(event => getEventCompositeUid(event))
     );
 
-    console.log(`Current calendar has ${currentCalendarUIDs.size} valid event UIDs.`);
+    console.log(`Current calendar has ${currentCalendarUIDs.size} composite event UIDs.`);
 
     const cancelledJobs = existingJobs.filter(job => {
       if (!job.calendarEventUid) {
         return false;
       }
-      
+
       return !currentCalendarUIDs.has(job.calendarEventUid);
     });
 

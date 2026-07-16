@@ -1,5 +1,7 @@
 import { getPropertyDetails } from "@/lib/queries/properties";
 import { PropertyDetailesRightColumn } from "@/components/dashbboard/admin/properties/PropertyDetailsRightColumn";
+import { PropertyEditForm } from "@/components/dashbboard/admin/properties/PropertyEditForm";
+import { PropertyCleanerRoster } from "@/components/dashbboard/admin/properties/PropertyCleanerRoster";
 import PropertyDetailsLeftColumn from "@/components/dashbboard/admin/properties/PropertyDetailsLeftColumn";
 import { PropertyHeader } from "@/components/dashbboard/admin/properties/PropertyHeader";
 
@@ -26,8 +28,12 @@ export default async function Page({
           subscription={propertyDetails.activeSubscription} 
         />
         
-         {/* checklistFiles={propertyDetails.checklistFiles}  */}
-        <PropertyDetailesRightColumn />
+        <div className="space-y-6">
+          <PropertyEditForm property={propertyDetails} />
+          <PropertyCleanerRoster propertyId={propertyDetails.id} />
+          {/* checklistFiles={propertyDetails.checklistFiles}  */}
+          <PropertyDetailesRightColumn />
+        </div>
       </div>
     </div>
   );

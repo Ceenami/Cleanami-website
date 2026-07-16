@@ -69,11 +69,30 @@ export const PropertiesPageClient = () => {
     return () => { supabase.removeChannel(channel) };
   }, [queryClient]);
   
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const handleDeleteProperty = async () => {
       if (!propertyToDelete) return;
-      console.log("Deleting property:", propertyToDelete.id);
-      queryClient.invalidateQueries({ queryKey: ['properties'] });
-      setPropertyToDelete(null);
+      setIsDeleting(true);
+      setDeleteError(null);
+      try {
+        const res = await fetch(`/api/properties/${propertyToDelete.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error ?? "Failed to delete property");
+        }
+        queryClient.invalidateQueries({ queryKey: ['properties'] });
+        setPropertyToDelete(null);
+      } catch (err) {
+        setDeleteError(
+          err instanceof Error ? err.message : "Failed to delete property"
+        );
+      } finally {
+        setIsDeleting(false);
+      }
   }
 
   const allProperties = data?.pages.flatMap(page => page.data) ?? [];
@@ -110,14 +129,17 @@ export const PropertiesPageClient = () => {
         {propertyToDelete && (
             <ConfirmationModal
                 isOpen={!!propertyToDelete}
-                onClose={() => setPropertyToDelete(null)}
+                onClose={() => { setPropertyToDelete(null); setDeleteError(null); }}
                 onConfirm={handleDeleteProperty}
                 title="Delete Property"
-                confirmButtonText="Delete"
+                confirmButtonText={isDeleting ? "Deleting..." : "Delete"}
                 confirmButtonClassName="bg-red-600 hover:bg-red-500"
                 icon={<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100"><TriangleAlertIcon className="h-6 w-6 text-red-600" /></div>}
             >
                 Are you sure you want to delete the property at <strong>{propertyToDelete.address}</strong>? This action cannot be undone.
+                {deleteError && (
+                  <p className="mt-3 text-sm text-red-600">{deleteError}</p>
+                )}
             </ConfirmationModal>
         )}
     </div>

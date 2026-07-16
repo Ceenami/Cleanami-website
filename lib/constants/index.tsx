@@ -1,4 +1,4 @@
-import { BadgeDollarSignIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, UserIcon, UsersIcon } from "lucide-react";
+import { BadgeDollarSignIcon, ChartBarIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, Shield, UserIcon, UsersIcon } from "lucide-react";
 
 export const Logo = "https://ymccorozcd.ufs.sh/f/CFfiFeS2XelzZy5o0ZubBmJY75j80sif9WEVdIAGnpCtTSqr"
 export const APP_NAME =
@@ -65,16 +65,16 @@ export const PRIVATE_ADMIN_NAV_ROUTES = [
     label: "Follow Mee",
     route: "/admin/follow-mee",
   },
-  // {
-  //   icon: <Shield />,
-  //   label: "disputes",
-  //   route: "/admin/disputes",
-  // },
-  // {
-  //   icon: <ChartBarIcon />,
-  //   label: "reporting",
-  //   route: "/admin/reporting",
-  // },
+  {
+    icon: <Shield />,
+    label: "disputes",
+    route: "/admin/disputes",
+  },
+  {
+    icon: <ChartBarIcon />,
+    label: "reporting",
+    route: "/admin/reporting",
+  },
   {
     icon: <MailIcon />,
     label: "notifications",

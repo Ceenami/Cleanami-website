@@ -2,6 +2,19 @@ import { db } from "@/db";
 import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 
+/**
+ * Subscription-term discount on the recurring per-clean price.
+ * Threshold-based so a longer term never earns a smaller discount:
+ *   >= 6 months -> 15%,  >= 3 months -> 10%,  otherwise 0%.
+ * (Client spec: 3 months = 10%, 6 months = 15%.)
+ */
+export function getSubscriptionDiscountRate(subscriptionMonths: number): number {
+  const months = Number(subscriptionMonths) || 0;
+  if (months >= 6) return 0.15;
+  if (months >= 3) return 0.1;
+  return 0;
+}
+
 export class PricingService {
   public async calculatePrice(formData: SignupFormData): Promise<PriceDetails> {
     const normalized = normalizeSignupFormDataForPricing(formData);
@@ -14,7 +27,12 @@ export class PricingService {
       ]);
 
     const rules = { basePrices, sqftSurcharges, laundryRules, hotTubRules };
-    const { bedrooms = 0, bathrooms = 0, sqft = 0 } = normalized;
+    const {
+      bedrooms = 0,
+      bathrooms = 0,
+      sqft = 0,
+      subscriptionMonths = 1,
+    } = normalized;
 
     const basePrice = this._calculateBasePrice(
       bedrooms,
@@ -38,14 +56,24 @@ export class PricingService {
       ? sqft >= customQuoteRule.rangeStart
       : false;
 
-    const totalPerClean =
+    const subtotalPerClean =
       basePrice + sqftSurcharge + laundryCost.total + hotTubCost.total;
+
+    // Term discount applies to the recurring per-clean subtotal only (not the
+    // periodic hot-tub drain charges). Round to cents to avoid float drift.
+    const discountRate = getSubscriptionDiscountRate(subscriptionMonths);
+    const discountAmount =
+      Math.round(subtotalPerClean * discountRate * 100) / 100;
+    const totalPerClean = subtotalPerClean - discountAmount;
 
     return {
       basePrice,
       sqftSurcharge,
       laundryCost: laundryCost.total,
       hotTubCost: hotTubCost.total,
+      subtotalPerClean,
+      discountRate,
+      discountAmount,
       totalPerClean,
       isCustomQuote,
       periodicCharges: hotTubCost.periodic,
