@@ -68,6 +68,9 @@ export async function POST(req: NextRequest) {
         checkOutTime: jobs.checkOutTime,
         // CHANGED: Added skipPayment to the selection
         skipPayment: customers.skipPayment,
+        // Needed so the subscription-term discount applies to recurring cleans
+        // too (not just the first clean).
+        subscriptionMonths: subscriptions.durationMonths,
       })
       .from(jobs)
       .innerJoin(subscriptions, eq(jobs.subscriptionId, subscriptions.id))
@@ -117,6 +120,7 @@ export async function POST(req: NextRequest) {
           hotTubService: job.propertyData.hotTubServiceLevel,
           hotTubDrain: job.propertyData.hotTubDrain,
           hotTubDrainCadence: job.propertyData.hotTubDrainCadence,
+          subscriptionMonths: job.subscriptionMonths,
         };
 
         const priceDetails = await pricingService.calculatePrice(
