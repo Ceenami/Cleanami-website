@@ -4,7 +4,10 @@ import { getAdminAuth } from "@/lib/admin-auth";
 import { deleteProperty, updateProperty } from "@/lib/queries/properties";
 import { deletePropertyParamsSchema } from "@/lib/validations/customer-record";
 
-const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
+// Accept HH:MM or HH:MM:SS (some browsers' <input type="time"> omit seconds);
+// normalized to HH:MM:SS before storage so the column format stays consistent.
+const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
+const normalizeTime = (t: string) => (t.length === 5 ? `${t}:00` : t);
 
 const updatePropertySchema = z
   .object({
@@ -27,8 +30,8 @@ const updatePropertySchema = z
       .nullable()
       .optional(),
     iCalUrl: z.string().url().nullable().optional(),
-    defaultCheckInTime: z.string().regex(timeRegex).optional(),
-    defaultCheckOutTime: z.string().regex(timeRegex).optional(),
+    defaultCheckInTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
+    defaultCheckOutTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
   })
   .strict();
 
