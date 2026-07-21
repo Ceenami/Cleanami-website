@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cancelJobAsAdmin } from "@/lib/services/customer-cancellation.service";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const userRole = data?.claims?.user_metadata?.role as string | undefined;
-
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { isAdmin, error: authError } = await getAdminAuth(request);
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: authError ?? "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const { id } = await params;

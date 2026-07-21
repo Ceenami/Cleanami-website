@@ -7,16 +7,13 @@ import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { CancellationDetectionService } from "@/lib/services/cancellation-detection/cancellationDetection.service";
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
+import { assertCronAuth } from "@/lib/auth/cron-auth";
 
 const pricingService = new PricingService();
 
 export async function POST(req: NextRequest) {
-  const authToken = (req.headers.get("authorization") || "").split(
-    "Bearer "
-  )[1];
-  if (authToken !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const unauthorized = assertCronAuth(req);
+  if (unauthorized) return unauthorized;
 
   const stripe = getStripe();
   if (!stripe) {
@@ -177,18 +174,24 @@ export async function POST(req: NextRequest) {
         }
         const paymentMethodId = paymentMethods.data[0].id;
 
-        const paymentIntent = await stripe.paymentIntents.create({
-          amount: amountInCents,
-          currency: "usd",
-          customer: job.stripeCustomerId,
-          payment_method: paymentMethodId,
-          capture_method: "manual",
-          confirm: true,
-          automatic_payment_methods: {
-            enabled: true,
-            allow_redirects: "never",
+        const paymentIntent = await stripe.paymentIntents.create(
+          {
+            amount: amountInCents,
+            currency: "usd",
+            customer: job.stripeCustomerId,
+            payment_method: paymentMethodId,
+            capture_method: "manual",
+            confirm: true,
+            automatic_payment_methods: {
+              enabled: true,
+              allow_redirects: "never",
+            },
+            metadata: { jobId: job.jobId },
           },
-        });
+          // Deterministic key: a retried pre-authorize for the same job never
+          // creates a second authorization / hold (2.2).
+          { idempotencyKey: `preauth_${job.jobId}` }
+        );
 
         await db
           .update(jobs)

@@ -69,10 +69,14 @@ export async function POST(
     // Read the SCHEDULED check-in time before we overwrite it with `now`.
     const jobBefore = await db.query.jobs.findFirst({
       where: eq(jobs.id, jobId),
-      columns: { propertyId: true, checkInTime: true },
+      columns: { propertyId: true, checkInTime: true, status: true },
     });
     const scheduledCheckIn = jobBefore?.checkInTime ?? null;
     const propertyId = jobBefore?.propertyId ?? null;
+    // Idempotency: a repeat check-in on an already in-progress job must not
+    // insert a second arrival reliability event (which would skew the score)
+    // or re-flag the arrival to admins.
+    const alreadyCheckedIn = jobBefore?.status === "in-progress";
 
     const geofence = propertyId
       ? await evaluateGeofence(propertyId, device)
@@ -172,7 +176,8 @@ export async function POST(
     }
 
     // Record arrival reliability event (feeds the reliability score + late pay).
-    if (arrival) {
+    // Only on the first check-in — never duplicate on a repeat.
+    if (arrival && !alreadyCheckedIn) {
       await recordArrivalEvent({
         cleanerId,
         jobId,
@@ -189,7 +194,7 @@ export async function POST(
     if (arrival && !arrival.onTime) {
       flags.push(`arrived ${arrival.delayMinutes} min late`);
     }
-    if (flags.length > 0) {
+    if (flags.length > 0 && !alreadyCheckedIn) {
       await notifyAdminsOfJobAlert({
         title: "Check-in flagged for review",
         message: flags.join("; "),

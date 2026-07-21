@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUserNotificationsBySupabaseId, markAllUserNotificationsRead } from "@/lib/queries/user-notifications";
-
-function roleFromClaims(claims: Record<string, unknown> | undefined) {
-  const metadata = claims?.user_metadata;
-  if (metadata && typeof metadata === "object" && "role" in metadata) {
-    const role = (metadata as { role?: unknown }).role;
-    if (typeof role === "string") return role;
-  }
-  return undefined;
-}
+import { isAdminRole } from "@/lib/auth/roles";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 
 export async function GET() {
   try {
@@ -21,13 +14,12 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userRole = roleFromClaims(claims);
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const email =
       typeof claims.email === "string" ? claims.email : undefined;
+    const userRole = await resolveRoleFromDatabase(claims.sub, email);
+    if (!isAdminRole(userRole)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const result = await getUserNotificationsBySupabaseId(claims.sub, {
       email,
@@ -53,13 +45,12 @@ export async function PATCH() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userRole = roleFromClaims(claims);
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const email =
       typeof claims.email === "string" ? claims.email : undefined;
+    const userRole = await resolveRoleFromDatabase(claims.sub, email);
+    if (!isAdminRole(userRole)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     await markAllUserNotificationsRead(claims.sub, { email, role: userRole });
 

@@ -136,7 +136,8 @@ async function chargeCustomerForLateCancel(
     hotTubDrainCadence: string | null;
   },
   stripeCustomerId: string | null,
-  skipPayment: boolean
+  skipPayment: boolean,
+  subscriptionMonths: number
 ): Promise<boolean> {
   if (skipPayment || customerSkipsBilling({ skipPayment })) return false;
 
@@ -172,6 +173,9 @@ async function chargeCustomerForLateCancel(
     hotTubService: property.hotTubServiceLevel,
     hotTubDrain: property.hotTubDrain,
     hotTubDrainCadence: property.hotTubDrainCadence,
+    // Apply the same subscription-term discount the customer agreed to, so a
+    // late-cancel charge is not more than a normal clean would have cost.
+    subscriptionMonths,
   } as never);
 
   const amountInCents = Math.round(priceDetails.totalPerClean * 100);
@@ -215,7 +219,12 @@ export async function cancelJobForCustomer(
     throw new Error(eligibility.reason ?? "Cannot cancel this clean");
   }
 
-  return finalizeJobCancellation(job, eligibility.late, "customer");
+  return finalizeJobCancellation(
+    job,
+    eligibility.late,
+    "customer",
+    job.subscription.durationMonths
+  );
 }
 
 export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> {
@@ -229,7 +238,12 @@ export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> 
       new Date(job.checkInTime).getTime() - Date.now() < 24 * 60 * 60 * 1000
     : false;
 
-  return finalizeJobCancellation(job, late, "admin");
+  return finalizeJobCancellation(
+    job,
+    late,
+    "admin",
+    job.subscription.durationMonths
+  );
 }
 
 async function finalizeJobCancellation(
@@ -264,7 +278,8 @@ async function finalizeJobCancellation(
     } | null;
   },
   lateCancel: boolean,
-  source: "customer" | "admin"
+  source: "customer" | "admin",
+  subscriptionMonths: number
 ): Promise<CancelJobResult> {
   const assignments = job.cleaners;
   let customerCharged = false;
@@ -279,7 +294,8 @@ async function finalizeJobCancellation(
       job,
       job.property,
       job.property.customer?.stripeCustomerId ?? null,
-      job.property.customer?.skipPayment ?? false
+      job.property.customer?.skipPayment ?? false,
+      subscriptionMonths
     );
     cleanerPaid =
       (await createCleanerPayouts(job.id, job.expectedHours, assignments)) > 0;
@@ -371,7 +387,12 @@ export async function cancelSubscriptionForCustomer(
     const jobEligibility = canCancelJob(subscription, upcomingJob, upcomingJob.cleaners);
     if (!jobEligibility.allowed) continue;
 
-    await finalizeJobCancellation(upcomingJob, jobEligibility.late, "customer");
+    await finalizeJobCancellation(
+      upcomingJob,
+      jobEligibility.late,
+      "customer",
+      subscription.durationMonths
+    );
     jobsCanceled += 1;
   }
 
@@ -428,7 +449,12 @@ export async function cancelSubscriptionAsAdmin(
     );
     // Admin can cancel regardless of the customer notice window; use the
     // late flag purely to decide whether the cleaner is still paid.
-    await finalizeJobCancellation(upcomingJob, jobEligibility.late, "admin");
+    await finalizeJobCancellation(
+      upcomingJob,
+      jobEligibility.late,
+      "admin",
+      subscription.durationMonths
+    );
     jobsCanceled += 1;
   }
 
@@ -487,7 +513,12 @@ export async function pauseSubscriptionAsAdmin(
   let jobsAffected = 0;
   for (const upcomingJob of upcomingJobs) {
     // Pause releases scheduled cleans as on-time cancellations (no charge).
-    await finalizeJobCancellation(upcomingJob, false, "admin");
+    await finalizeJobCancellation(
+      upcomingJob,
+      false,
+      "admin",
+      subscription.durationMonths
+    );
     jobsAffected += 1;
   }
 

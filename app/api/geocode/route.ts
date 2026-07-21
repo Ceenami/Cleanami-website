@@ -3,17 +3,16 @@ import {
   geocodeAllCleaners,
   geocodeAllProperties,
 } from "@/lib/services/google-maps/geocoding";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const user = data?.claims;
-    const userRole = user?.user_metadata?.role;
-
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { isAdmin, error: authError } = await getAdminAuth(request);
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: authError ?? "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const { target } = await request.json();
@@ -56,7 +55,15 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const { isAdmin, error: authError } = await getAdminAuth(request);
+  if (!isAdmin) {
+    return NextResponse.json(
+      { error: authError ?? "Unauthorized" },
+      { status: 401 }
+    );
+  }
+
   const { db } = await import("@/db");
   const { cleaners, properties } = await import("@/db/schemas");
   const { isNull } = await import("drizzle-orm");

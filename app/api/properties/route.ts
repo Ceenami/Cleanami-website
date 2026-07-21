@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPropertiesWithOwner } from "@/lib/queries/properties";
-import { createClient } from "@/lib/supabase/server";
 import {
   customerAuthErrorStatus,
   resolvePortalCustomerScope,
@@ -8,11 +7,7 @@ import {
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const userRole = data?.claims?.user_metadata?.role as string | undefined;
-
-    const scope = await resolvePortalCustomerScope(request, userRole);
+    const scope = await resolvePortalCustomerScope(request);
     if (scope.error) {
       return NextResponse.json(
         { error: scope.error, data: [], nextPage: null },

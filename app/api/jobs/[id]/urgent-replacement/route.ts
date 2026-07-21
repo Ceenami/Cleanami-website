@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { triggerUrgentReplacement } from "@/lib/services/urgent-replacement.service";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const user = data?.claims;
-    const userRole = user?.user_metadata?.role;
-
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { isAdmin, error: authError } = await getAdminAuth(request);
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: authError ?? "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const { id } = await params;

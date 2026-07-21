@@ -174,6 +174,7 @@ export async function inviteCustomerToPortalAfterPayment(input: {
       const { error: updateError } =
         await supabaseAdmin.auth.admin.updateUserById(existingAuthUserId, {
           email_confirm: true,
+          app_metadata: { role: "user" },
           user_metadata: {
             role: "user",
             full_name: input.name,
@@ -188,6 +189,7 @@ export async function inviteCustomerToPortalAfterPayment(input: {
       const { data, error } = await supabaseAdmin.auth.admin.createUser({
         email,
         email_confirm: true,
+        app_metadata: { role: "user" },
         user_metadata: {
           role: "user",
           full_name: input.name,

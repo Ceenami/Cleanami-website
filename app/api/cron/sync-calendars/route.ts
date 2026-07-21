@@ -3,14 +3,11 @@ import { subscriptions } from "@/db/schemas/subscriptions.schema";
 import { eq } from "drizzle-orm";
 import { ICalService } from "@/lib/services/iCal/ical.service";
 import { CancellationDetectionService } from "@/lib/services/cancellation-detection/cancellationDetection.service";
+import { assertCronAuth } from "@/lib/auth/cron-auth";
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-    });
-  }
+  const unauthorized = assertCronAuth(request);
+  if (unauthorized) return unauthorized;
 
   console.log("=== CANCELLATION DETECTION ===");
   const cancellationService = new CancellationDetectionService(db);

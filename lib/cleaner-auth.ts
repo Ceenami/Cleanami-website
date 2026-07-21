@@ -30,11 +30,6 @@ export async function getCleanerAuth(): Promise<CleanerAuthResult> {
     return { cleanerId: null, error: "Unauthorized" };
   }
 
-  const userRole = claims.user_metadata?.role;
-  if (userRole !== "cleaner") {
-    return { cleanerId: null, error: "Forbidden" };
-  }
-
   const database = getDbOrNull();
   if (!database) {
     return { cleanerId: null, error: SERVICE_UNAVAILABLE.database };
@@ -43,11 +38,17 @@ export async function getCleanerAuth(): Promise<CleanerAuthResult> {
   try {
     const dbUser = await database.query.users.findFirst({
       where: eq(users.supabaseUserId, claims.sub),
-      columns: { id: true },
+      columns: { id: true, role: true },
     });
 
     if (!dbUser) {
       return { cleanerId: null, error: PROFILE_NOT_FOUND_MESSAGE };
+    }
+
+    // Authoritative role check against the DB, not the self-editable
+    // `user_metadata.role` claim.
+    if (dbUser.role !== "cleaner") {
+      return { cleanerId: null, error: "Forbidden" };
     }
 
     const cleaner = await database.query.cleaners.findFirst({

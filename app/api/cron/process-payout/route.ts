@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { payouts } from "@/db/schemas";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
+import { assertCronAuth } from "@/lib/auth/cron-auth";
+
+/** A claim older than this is reclaimable (recovers from a crashed run). */
+const CLAIM_STALE_MS = 15 * 60 * 1000;
 
 export async function POST(req: NextRequest) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const token = authHeader?.split("Bearer ")[1];
-    
-    if (token !== process.env.CRON_SECRET) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const unauthorized = assertCronAuth(req);
+    if (unauthorized) return unauthorized;
 
     const stripe = getStripe();
     if (!stripe) {
@@ -57,13 +57,40 @@ export async function POST(req: NextRequest) {
 
     for (const payout of pendingPayouts) {
       try {
+        // Row-claim lock: atomically flip pending → claimed before any Stripe
+        // call so two concurrent cron runs can't process the same payout. A
+        // claim older than the stale window is reclaimable (crash recovery).
+        // Combined with the transfer idempotency key this is double-pay-safe.
+        const staleBefore = new Date(Date.now() - CLAIM_STALE_MS);
+        const claimed = await db
+          .update(payouts)
+          .set({ processingStartedAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(payouts.id, payout.id),
+              eq(payouts.status, "pending"),
+              or(
+                isNull(payouts.processingStartedAt),
+                lt(payouts.processingStartedAt, staleBefore)
+              )
+            )
+          )
+          .returning({ id: payouts.id });
+
+        if (claimed.length === 0) {
+          // Another concurrent run already claimed this payout — skip it.
+          continue;
+        }
+
         // Skip payment processing for owners who pay cleaners directly
         if (payout.job?.subscription?.customer?.skipPayment) {
           await db
             .update(payouts)
             .set({
               status: "released",
-              stripePayoutId: "skipped_owner_direct_payment",
+              // No Stripe transfer for owner-direct payouts; leave the unique
+              // stripe_payout_id NULL (the old sentinel collided). (2.2)
+              stripePayoutId: null,
               updatedAt: new Date(),
             })
             .where(eq(payouts.id, payout.id));
@@ -134,22 +161,27 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        const transfer = await stripe.transfers.create({
-          amount: amountInCents,
-          currency: "usd",
-          destination: payout.cleaner.stripeAccountId,
-          description: `CleanNami Job #${payout.jobId.slice(0, 8)}`,
-          metadata: {
-            payoutId: payout.id,
-            jobId: payout.jobId,
-            cleanerId: payout.cleanerId,
-            cleanerName: payout.cleaner.fullName,
-            propertyAddress: payout.job?.property?.address || "N/A",
-            totalAmount: totalAmount.toFixed(2),
-            urgentBonus: urgentBonus > 0 ? urgentBonus.toFixed(2) : "0",
-            laundryBonus: laundryBonus > 0 ? laundryBonus.toFixed(2) : "0",
+        const transfer = await stripe.transfers.create(
+          {
+            amount: amountInCents,
+            currency: "usd",
+            destination: payout.cleaner.stripeAccountId,
+            description: `CleanNami Job #${payout.jobId.slice(0, 8)}`,
+            metadata: {
+              payoutId: payout.id,
+              jobId: payout.jobId,
+              cleanerId: payout.cleanerId,
+              cleanerName: payout.cleaner.fullName,
+              propertyAddress: payout.job?.property?.address || "N/A",
+              totalAmount: totalAmount.toFixed(2),
+              urgentBonus: urgentBonus > 0 ? urgentBonus.toFixed(2) : "0",
+              laundryBonus: laundryBonus > 0 ? laundryBonus.toFixed(2) : "0",
+            },
           },
-        });
+          // Deterministic key: a retried transfer for the same payout never
+          // double-pays the cleaner (2.2).
+          { idempotencyKey: `payout_${payout.id}` }
+        );
 
         await db
           .update(payouts)
@@ -171,8 +203,8 @@ export async function POST(req: NextRequest) {
           error.type === "StripeAPIError" ||
           error.code === "rate_limit";
 
-        // Only mark as held for permanent failures
-        // Retriable errors keep status as pending for next run
+        // Only mark as held for permanent failures.
+        // Retriable errors release the claim so the next run retries.
         if (!isRetriable) {
           await db
             .update(payouts)
@@ -180,6 +212,11 @@ export async function POST(req: NextRequest) {
               status: "held",
               updatedAt: new Date(),
             })
+            .where(eq(payouts.id, payout.id));
+        } else {
+          await db
+            .update(payouts)
+            .set({ processingStartedAt: null, updatedAt: new Date() })
             .where(eq(payouts.id, payout.id));
         }
 

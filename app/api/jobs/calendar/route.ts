@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJobsForCalendar } from "@/lib/queries/jobs";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const user = data?.claims;
-    const userRole = user?.user_metadata?.role;
-
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { isAdmin, error: authError } = await getAdminAuth(request);
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: authError ?? "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const searchParams = request.nextUrl.searchParams;

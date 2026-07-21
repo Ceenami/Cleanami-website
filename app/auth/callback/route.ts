@@ -1,5 +1,6 @@
 import { resolveAuthCallbackDestination } from "@/lib/auth-redirects";
 import { createClient } from "@/lib/supabase/server";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -13,7 +14,14 @@ export async function GET(request: Request) {
 
     if (!error) {
       const { data } = await supabase.auth.getClaims();
-      const role = data?.claims?.user_metadata?.role as string | undefined;
+      const claims = data?.claims as Record<string, unknown> | undefined;
+      const supabaseUserId =
+        typeof claims?.sub === "string" ? claims.sub : undefined;
+      const email =
+        typeof claims?.email === "string" ? claims.email : undefined;
+      const role = supabaseUserId
+        ? await resolveRoleFromDatabase(supabaseUserId, email)
+        : undefined;
       const destination = resolveAuthCallbackDestination(role, requestedNext);
 
       return NextResponse.redirect(`${origin}${destination}`);
