@@ -3,6 +3,10 @@ import "server-only";
 import { getDbOrNull } from "@/db";
 import { customers, jobs, properties } from "@/db/schemas";
 import { createClient } from "@/lib/supabase/server";
+import {
+  getSessionRole,
+  resolveRoleFromDatabase,
+} from "@/lib/auth/server-roles";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { and, eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
@@ -72,7 +76,9 @@ export async function getCustomerAuth(): Promise<CustomerAuthResult> {
     return { customerId: null, error: "Unauthorized" };
   }
 
-  const userRole = claims.user_metadata?.role as string | undefined;
+  const claimsEmail =
+    typeof claims.email === "string" ? claims.email : undefined;
+  const userRole = await resolveRoleFromDatabase(claims.sub, claimsEmail);
   if (userRole === "cleaner") {
     return { customerId: null, error: "Forbidden" };
   }
@@ -109,7 +115,9 @@ export async function getCustomerPortalLayoutAuth(): Promise<CustomerAuthResult>
     return { customerId: null, error: "Unauthorized" };
   }
 
-  const userRole = claims.user_metadata?.role as string | undefined;
+  const claimsEmail =
+    typeof claims.email === "string" ? claims.email : undefined;
+  const userRole = await resolveRoleFromDatabase(claims.sub, claimsEmail);
   if (userRole === "cleaner") {
     return { customerId: null, error: "Forbidden" };
   }
@@ -143,11 +151,14 @@ export type PortalCustomerScope = {
 /**
  * Admin portal: full data unless ownerScope=1.
  * Customer portal (or ownerScope): data scoped to the linked customer row.
+ *
+ * The role is resolved authoritatively from the DB (`users.role`) — callers no
+ * longer pass a client-derived role.
  */
 export async function resolvePortalCustomerScope(
-  request: NextRequest,
-  userRole: string | undefined
+  request: NextRequest
 ): Promise<PortalCustomerScope> {
+  const userRole = await getSessionRole();
   const isAdmin = userRole === "admin" || userRole === "super_admin";
   const isCustomer = userRole === "user";
   const ownerScope = request.nextUrl.searchParams.get("ownerScope") === "1";

@@ -16,6 +16,10 @@ import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer-account.service";
 import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
+import { PricingService } from "@/lib/services/pricing.service";
+import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+
+const pricingService = new PricingService();
 
 export type CompleteOnboardingResult =
   | {
@@ -162,6 +166,44 @@ export async function completeOnboardingForPayment(
         success: false,
         error:
           "Critical: Could not find a Stripe Customer ID associated with this payment.",
+      };
+    }
+
+    // Verify the PaymentIntent actually belongs to THIS booking and was charged
+    // the correct amount — not merely that some PI "succeeded" (2.5 / PAY-6).
+    // Without this, a third party's succeeded PI id could be replayed to mint a
+    // subscription bound to attacker-chosen form data.
+    if (paymentIntent.currency !== "usd") {
+      return {
+        success: false,
+        error: "Payment currency mismatch. Please contact support.",
+      };
+    }
+
+    const piEmail =
+      typeof paymentIntent.metadata?.customer_email === "string"
+        ? paymentIntent.metadata.customer_email
+        : null;
+    if (
+      !piEmail ||
+      piEmail.toLowerCase() !== validatedData.email.toLowerCase()
+    ) {
+      return {
+        success: false,
+        error:
+          "This payment does not match the submitted booking. Please contact support.",
+      };
+    }
+
+    const expectedPrice = await pricingService.calculatePrice(
+      normalizeSignupFormDataForPricing(validatedData)
+    );
+    const expectedAmountInCents = Math.round(expectedPrice.totalPerClean * 100);
+    if (paymentIntent.amount !== expectedAmountInCents) {
+      return {
+        success: false,
+        error:
+          "The payment amount does not match the expected price for this booking. Please contact support.",
       };
     }
 

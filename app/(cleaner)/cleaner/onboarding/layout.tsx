@@ -1,17 +1,14 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/server-roles";
 
 export default async function CleanerOnboardingLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const user = data?.claims;
-  const userRole = user?.user_metadata?.role;
-
-  if (!user || userRole !== "cleaner") {
+  // Authoritative role from the DB (`users.role`), not `user_metadata`.
+  const userRole = await getSessionRole();
+  if (userRole !== "cleaner") {
     redirect("/sign-in");
   }
 

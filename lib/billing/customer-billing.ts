@@ -29,7 +29,7 @@ export async function syncSkipPaymentForSuperAdminCustomers(): Promise<void> {
   }
 
   const superAdminEmails = data.users
-    .filter((user) => user.user_metadata?.role === "super_admin")
+    .filter((user) => user.app_metadata?.role === "super_admin")
     .map((user) => user.email?.toLowerCase())
     .filter((email): email is string => Boolean(email));
 

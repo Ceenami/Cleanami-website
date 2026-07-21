@@ -60,7 +60,6 @@ export async function getAvailableCleanersForProperty(
       stripeChargesEnabled: true,
       stripeOnboardingComplete: true,
       eligibleForAssignments: true,
-      legalDocsSigned: true,
     },
   });
 

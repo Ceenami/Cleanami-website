@@ -85,6 +85,7 @@ async function syncAuthAndAppUser(input: {
     const { error } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
       email: input.email,
       email_confirm: true,
+      app_metadata: { role: "user" },
       user_metadata: {
         role: "user",
         full_name: input.name,

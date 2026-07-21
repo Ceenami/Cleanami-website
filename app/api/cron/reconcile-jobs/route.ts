@@ -1,12 +1,9 @@
 import { reconcileStaleJobs } from "@/lib/services/job-reconciliation.service";
+import { assertCronAuth } from "@/lib/auth/cron-auth";
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-    });
-  }
+  const unauthorized = assertCronAuth(request);
+  if (unauthorized) return unauthorized;
 
   try {
     const summary = await reconcileStaleJobs();

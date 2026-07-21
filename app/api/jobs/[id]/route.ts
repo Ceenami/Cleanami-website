@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJobDetails } from "@/lib/queries/jobs";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/auth/server-roles";
 import {
   customerAuthErrorStatus,
   customerOwnsJob,
@@ -12,10 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const user = data?.claims;
-    const userRole = user?.user_metadata?.role;
+    const userRole = await getSessionRole();
 
     const isAdmin = userRole === "admin" || userRole === "super_admin";
     const isCustomer = userRole === "user";

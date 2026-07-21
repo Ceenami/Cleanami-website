@@ -1,9 +1,8 @@
 import "server-only";
 
-import { getDbOrNull } from "@/db";
-import { users } from "@/db/schemas";
 import { createClient } from "@/lib/supabase/server";
-import { eq } from "drizzle-orm";
+import { isAdminRole } from "@/lib/auth/roles";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import type { NextRequest } from "next/server";
 
 export type AdminAuthResult = {
@@ -12,49 +11,11 @@ export type AdminAuthResult = {
   error: string | null;
 };
 
-function isAdminRole(role: string | undefined): boolean {
-  return role === "admin" || role === "super_admin";
-}
-
-function roleFromClaims(
-  claims: Record<string, unknown> | undefined
-): string | undefined {
-  const metadata = claims?.user_metadata;
-  if (metadata && typeof metadata === "object" && "role" in metadata) {
-    const role = (metadata as { role?: unknown }).role;
-    if (typeof role === "string") return role;
-  }
-  if (typeof claims?.role === "string") return claims.role;
-  return undefined;
-}
-
-async function resolveRoleFromDatabase(
-  supabaseUserId: string,
-  email?: string
-): Promise<string | undefined> {
-  const database = getDbOrNull();
-  if (!database) return undefined;
-
-  const byId = await database.query.users.findFirst({
-    where: eq(users.supabaseUserId, supabaseUserId),
-    columns: { role: true },
-  });
-  if (byId?.role) return byId.role;
-
-  if (email) {
-    const byEmail = await database.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase()),
-      columns: { role: true },
-    });
-    return byEmail?.role ?? undefined;
-  }
-
-  return undefined;
-}
-
 /**
- * Resolves admin access for API routes. Matches the getClaims() flow used by
- * working admin routes, then falls back to Bearer token, getUser(), and DB role.
+ * Resolves admin access for API routes. The role is read from the application
+ * DB (`users.role`) — the authoritative source — never from the client-editable
+ * `user_metadata`. Supports the cookie session, a Bearer access token, and the
+ * getUser() fallback for resolving the caller's identity.
  */
 export async function getAdminAuth(
   request?: NextRequest | Request
@@ -66,9 +27,7 @@ export async function getAdminAuth(
 
   let supabaseUserId =
     typeof claims?.sub === "string" ? claims.sub : undefined;
-  let userRole = roleFromClaims(claims);
-  const claimsEmail =
-    typeof claims?.email === "string" ? claims.email : undefined;
+  let email = typeof claims?.email === "string" ? claims.email : undefined;
 
   if (!supabaseUserId) {
     const authHeader = request?.headers.get("authorization");
@@ -76,8 +35,7 @@ export async function getAdminAuth(
       const { data, error } = await supabase.auth.getUser(authHeader.slice(7));
       if (!error && data.user) {
         supabaseUserId = data.user.id;
-        userRole =
-          (data.user.user_metadata?.role as string | undefined) ?? userRole;
+        email = data.user.email ?? email;
       }
     }
   }
@@ -93,20 +51,10 @@ export async function getAdminAuth(
     }
 
     supabaseUserId = userData.user.id;
-    userRole =
-      (userData.user.user_metadata?.role as string | undefined) ?? userRole;
+    email = userData.user.email ?? email;
   }
 
-  if (!isAdminRole(userRole) && supabaseUserId) {
-    const dbRole = await resolveRoleFromDatabase(
-      supabaseUserId,
-      claimsEmail
-    );
-    if (isAdminRole(dbRole)) {
-      userRole = dbRole;
-    }
-  }
-
+  const userRole = await resolveRoleFromDatabase(supabaseUserId, email);
   const isAdmin = isAdminRole(userRole);
 
   if (!isAdmin) {
