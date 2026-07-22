@@ -2,5 +2,14 @@
   command = "pnpm run build"
   publish = ".next"
 
+# Scheduled functions live here — one per cron route, each fetching the route
+# with CRON_SECRET as a Bearer token. Schedules are declared in the functions
+# themselves (`export const config`), not in this file.
+# Requires CRON_SECRET in the Netlify site environment; the functions fail
+# closed and log an error without it. Scheduled functions run on production
+# deploys only.
+[functions]
+  directory = "netlify/functions"
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
