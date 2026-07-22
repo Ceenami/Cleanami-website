@@ -1,10 +1,4 @@
-// Mirrors getSubscriptionDiscountRate() in lib/services/pricing.service.ts.
-// Kept inline because that module is server-only (imports the DB client).
-const subscriptionDiscountPercent = (months: number): number => {
-  if (months >= 6) return 15;
-  if (months >= 3) return 10;
-  return 0;
-};
+import { getSubscriptionDiscountPercent } from "@/lib/pricing/subscription-discount";
 
 export const SubscriptionCard = ({
   months,
@@ -15,7 +9,7 @@ export const SubscriptionCard = ({
   selected: boolean;
   onSelect: (months: number) => void;
 }) => {
-  const discountPercent = subscriptionDiscountPercent(months);
+  const discountPercent = getSubscriptionDiscountPercent(months);
 
   return (
     <button

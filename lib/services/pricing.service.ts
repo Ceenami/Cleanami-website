@@ -2,19 +2,9 @@ import { db } from "@/db";
 import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import { resolveBasePrice } from "@/lib/pricing/base-price";
+import { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
-/**
- * Subscription-term discount on the recurring per-clean price.
- * Threshold-based so a longer term never earns a smaller discount:
- *   >= 6 months -> 15%,  >= 3 months -> 10%,  otherwise 0%.
- * (Client spec: 3 months = 10%, 6 months = 15%.)
- */
-export function getSubscriptionDiscountRate(subscriptionMonths: number): number {
-  const months = Number(subscriptionMonths) || 0;
-  if (months >= 6) return 0.15;
-  if (months >= 3) return 0.1;
-  return 0;
-}
+export { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
 export class PricingService {
   public async calculatePrice(formData: SignupFormData): Promise<PriceDetails> {
