@@ -19,6 +19,10 @@ import {
   type DeviceLocation,
 } from "@/lib/services/gps/geofence";
 import { recordArrivalEvent } from "@/lib/services/reliability/reliability.service";
+import {
+  evaluateCheckInWindow,
+  formatWindowTimeEt,
+} from "@/lib/cleaner/check-in-window";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { eq, inArray } from "drizzle-orm";
 
@@ -66,10 +70,18 @@ export async function POST(
   try {
     const now = new Date();
 
-    // Read the SCHEDULED check-in time before we overwrite it with `now`.
+    // `jobs.checkInTime` is the SCHEDULED start (the guest checkout anchor set
+    // when the job was created). It is a planned value and is never overwritten
+    // with the actual arrival — the arrival lives on the evidence packet as
+    // `gpsCheckInTimestamp`. Clobbering it would destroy the reference that the
+    // spec's on-time definition ("no more than 10 minutes late beyond the
+    // assigned start time"), reconciliation and the window check below rely on.
     const jobBefore = await db.query.jobs.findFirst({
       where: eq(jobs.id, jobId),
       columns: { propertyId: true, checkInTime: true, status: true },
+      with: {
+        property: { columns: { defaultCheckOutTime: true } },
+      },
     });
     const scheduledCheckIn = jobBefore?.checkInTime ?? null;
     const propertyId = jobBefore?.propertyId ?? null;
@@ -77,6 +89,30 @@ export async function POST(
     // insert a second arrival reliability event (which would skew the score)
     // or re-flag the arrival to admins.
     const alreadyCheckedIn = jobBefore?.status === "in-progress";
+
+    // 1.17 — restrict check-in to the allowed cleaning window. Before the guest
+    // checks out the property is still occupied and the clean cannot start, so
+    // an early check-in is refused. Late check-in is NOT blocked (see
+    // `evaluateCheckInWindow`). Skipped for an already in-progress job so a
+    // repeat call stays idempotent.
+    const checkInWindow = evaluateCheckInWindow({
+      scheduledCheckIn,
+      propertyCheckOutTime: jobBefore?.property?.defaultCheckOutTime,
+      now,
+    });
+    if (checkInWindow?.isEarly && !alreadyCheckedIn) {
+      return NextResponse.json(
+        {
+          error: `Check-in opens at ${formatWindowTimeEt(
+            checkInWindow.opensAt
+          )}, when the guest checks out.`,
+          code: "check_in_window_not_open",
+          opensAt: checkInWindow.opensAt.toISOString(),
+          minutesEarly: checkInWindow.minutesEarly,
+        },
+        { status: 409 }
+      );
+    }
 
     const geofence = propertyId
       ? await evaluateGeofence(propertyId, device)
@@ -110,11 +146,11 @@ export async function POST(
         }
       }
 
+      // `checkInTime` is intentionally left alone — see the note above.
       await tx
         .update(jobs)
         .set({
           status: "in-progress",
-          checkInTime: now,
           updatedAt: now,
         })
         .where(eq(jobs.id, jobId));
