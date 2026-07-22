@@ -141,8 +141,14 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
 
   const pricingFormSnapshot = useMemo(() => JSON.stringify(formData), [formData]);
 
-  // Fetch price when form data changes
+  // Fetch price when form data changes.
+  //
+  // The displayed price must never disappear or go backwards: a failed request
+  // leaves the previous price on screen, and a slow response that is overtaken
+  // by a newer one is discarded rather than clobbering the fresher value.
   useEffect(() => {
+    let superseded = false;
+
     const fetchPrice = async () => {
       try {
         const res = await fetch("/api/pricing", {
@@ -150,12 +156,15 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(serializeSignupFormDataForServer(formData)),
         });
+        if (superseded) return;
         if (res.ok) {
           const details = (await res.json()) as PriceDetails | null;
-          setPriceDetails(details);
+          if (!superseded && details) {
+            setPriceDetails(details);
+          }
         }
       } catch {
-        // price fetch errors are non-fatal
+        // Price fetch errors are non-fatal — keep showing the last good price.
       }
     };
 
@@ -164,6 +173,7 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     }, 500);
 
     return () => {
+      superseded = true;
       clearTimeout(timerId);
     };
   }, [pricingFormSnapshot, formData]);
