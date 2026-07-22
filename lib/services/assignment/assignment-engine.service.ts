@@ -13,7 +13,8 @@ import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getAvailableCleanersForProperty } from "@/lib/queries/cleaners-proximity";
 import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { sendCleanerAssignmentEmail } from "@/lib/services/email.service";
-import { and, eq, gt, ne } from "drizzle-orm";
+import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
+import { and, eq, gt } from "drizzle-orm";
 
 /** Best-effort multichannel notify of a newly-assigned primary cleaner. */
 async function notifyAssignedPrimary(
@@ -101,29 +102,6 @@ export type AssignmentSummary = {
   outcomes: AssignmentOutcome[];
 };
 
-/** True if the cleaner already has a job starting at exactly this time. */
-async function hasScheduleConflict(
-  cleanerId: string,
-  checkInTime: Date,
-  excludeJobId: string
-): Promise<boolean> {
-  const rows = await db
-    .select({ jobId: jobs.id })
-    .from(jobsToCleaners)
-    .innerJoin(jobs, eq(jobsToCleaners.jobId, jobs.id))
-    .where(
-      and(
-        eq(jobsToCleaners.cleanerId, cleanerId),
-        eq(jobs.checkInTime, checkInTime),
-        ne(jobs.status, "canceled"),
-        ne(jobs.id, excludeJobId)
-      )
-    )
-    .limit(1);
-
-  return rows.length > 0;
-}
-
 /** Property hierarchy roster, tier-then-sortOrder ordered, eligibility resolved. */
 async function getPropertyRosterCandidates(
   propertyId: string
@@ -194,6 +172,8 @@ export async function assignJob(job: {
   id: string;
   propertyId: string | null;
   checkInTime: Date | null;
+  /** Used to size this job's window when checking for schedule clashes. */
+  expectedHours?: string | number | null;
 }): Promise<AssignmentOutcome> {
   if (!job.propertyId || !job.checkInTime) {
     return { jobId: job.id, status: "skipped", reason: "missing property or check-in time" };
@@ -205,7 +185,15 @@ export async function assignJob(job: {
   const eligible: Candidate[] = [];
   for (const c of candidates) {
     if (c.score < RELIABILITY_MIN_ELIGIBLE) continue;
-    if (await hasScheduleConflict(c.cleanerId, job.checkInTime, job.id)) continue;
+    if (
+      await hasScheduleConflict({
+        cleanerId: c.cleanerId,
+        checkInTime: job.checkInTime,
+        expectedHours: job.expectedHours,
+        excludeJobId: job.id,
+      })
+    )
+      continue;
     eligible.push(c);
   }
 
@@ -290,7 +278,12 @@ export async function runAssignmentEngine(): Promise<AssignmentSummary> {
 
   const unassigned = await db.query.jobs.findMany({
     where: and(eq(jobs.status, "unassigned"), gt(jobs.checkInTime, new Date())),
-    columns: { id: true, propertyId: true, checkInTime: true },
+    columns: {
+      id: true,
+      propertyId: true,
+      checkInTime: true,
+      expectedHours: true,
+    },
   });
 
   for (const job of unassigned) {
