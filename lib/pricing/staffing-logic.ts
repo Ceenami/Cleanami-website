@@ -8,6 +8,25 @@ export const CLEANER_HOURLY_RATE = 17;
 export type PropertySize = "small" | "medium" | "large" | "custom";
 export type LaundryType = "in_unit" | "off_site" | "none";
 
+/**
+ * Hot-tub time additions, configured per service type in `hot_tub_pricing_rules`
+ * and editable by the client through the admin pricing upload.
+ */
+export type HotTubTimeAdditions = {
+  basicHours: number;
+  deepCleanHours: number;
+};
+
+/**
+ * Fallback used only when the rules cannot be loaded. These are the spec
+ * values (Basic +0.333 hrs, Full Drain & Clean +1.0 hr) and match the seeded
+ * `hot_tub_pricing_rules` rows — prefer the configured values.
+ */
+export const DEFAULT_HOT_TUB_TIME_ADDITIONS: HotTubTimeAdditions = {
+  basicHours: 0.333,
+  deepCleanHours: 1.0,
+};
+
 export type StaffingPropertyInput = {
   bedCount: number;
   bathCount: number | string;
@@ -16,6 +35,11 @@ export type StaffingPropertyInput = {
   hotTubServiceLevel?: boolean;
   /** When true, add deep-drain hot tub hours instead of basic service hours. */
   hotTubDeepClean?: boolean;
+  /**
+   * Configured hot-tub time additions (from `hot_tub_pricing_rules`). Omit to
+   * fall back to `DEFAULT_HOT_TUB_TIME_ADDITIONS`.
+   */
+  hotTubTimeAdditions?: HotTubTimeAdditions | null;
 };
 
 export type JobStaffingResult = {
@@ -122,8 +146,12 @@ function expectedLaundryLoads(
   }
 }
 
-function hotTubServiceHours(deepClean: boolean): number {
-  return deepClean ? 1.0 : 0.3;
+function hotTubServiceHours(
+  deepClean: boolean,
+  additions?: HotTubTimeAdditions | null
+): number {
+  const configured = additions ?? DEFAULT_HOT_TUB_TIME_ADDITIONS;
+  return deepClean ? configured.deepCleanHours : configured.basicHours;
 }
 
 /** §4 team size by property size and laundry type. */
@@ -188,7 +216,7 @@ export function calculateJobStaffing(
   const isDeepClean = Boolean(input.hotTubDeepClean);
   const hotTubHours =
     input.hotTubServiceLevel && propertySize !== "custom"
-      ? hotTubServiceHours(isDeepClean)
+      ? hotTubServiceHours(isDeepClean, input.hotTubTimeAdditions)
       : 0;
 
   const expectedHoursPerCleaner = roundHours(
