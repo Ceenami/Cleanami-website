@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import { resolveBasePrice } from "@/lib/pricing/base-price";
 
 /**
  * Subscription-term discount on the recurring per-clean price.
@@ -34,11 +35,15 @@ export class PricingService {
       subscriptionMonths = 1,
     } = normalized;
 
-    const basePrice = this._calculateBasePrice(
+    // `null` = this bedroom/bathroom combination has no entry in the matrix
+    // (over 5 beds/baths, or a fractional bath count such as 2.5). That is a
+    // custom quote, NOT a $0 price — see `isCustomQuote` below.
+    const resolvedBasePrice = resolveBasePrice(
       bedrooms,
       bathrooms,
       rules.basePrices
     );
+    const basePrice = resolvedBasePrice ?? 0;
     const sqftSurcharge = this._calculateSqftSurcharge(
       sqft,
       rules.sqftSurcharges
@@ -52,9 +57,20 @@ export class PricingService {
     const customQuoteRule = rules.sqftSurcharges.find(
       (r: any) => r.isCustomQuote
     );
-    const isCustomQuote = customQuoteRule
+    const isOverSqftCeiling = customQuoteRule
       ? sqft >= customQuoteRule.rangeStart
       : false;
+
+    // No rules loaded at all -> the pricing tables were never populated. That
+    // is a misconfiguration, not a quotable property, and must not be reported
+    // as a $0 price.
+    const pricingUnavailable = rules.basePrices.length === 0;
+
+    // Out of the matrix (>5 beds/baths, or a fractional bath count) is quotable
+    // by hand, exactly like an over-ceiling sq ft.
+    const isOutOfMatrix = !pricingUnavailable && resolvedBasePrice === null;
+
+    const isCustomQuote = isOverSqftCeiling || isOutOfMatrix;
 
     const subtotalPerClean =
       basePrice + sqftSurcharge + laundryCost.total + hotTubCost.total;
@@ -76,20 +92,9 @@ export class PricingService {
       discountAmount,
       totalPerClean,
       isCustomQuote,
+      pricingUnavailable,
       periodicCharges: hotTubCost.periodic,
     };
-  }
-
-  private _calculateBasePrice(
-    beds: number,
-    baths: number,
-    rules: any[]
-  ): number {
-    const bedRule = rules.find((r) => r.bedrooms === beds);
-    if (!bedRule) return 0;
-
-    const priceInCents = bedRule[`price${baths}BathCents`];
-    return priceInCents ? priceInCents / 100 : 0;
   }
 
   private _calculateSqftSurcharge(sqft: number, rules: any[]): number {

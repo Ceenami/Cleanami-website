@@ -78,7 +78,18 @@ export interface PriceDetails {
   /** Dollar amount discounted from the per-clean subtotal. */
   discountAmount: number;
   totalPerClean: number;
+  /**
+   * The property cannot be priced from the rules and needs a manual quote —
+   * either it is over the sq ft ceiling, or its bedroom/bathroom combination
+   * falls outside the base price matrix.
+   */
   isCustomQuote: boolean;
+  /**
+   * The pricing rules themselves are missing (the rule tables are empty). This
+   * is a server misconfiguration, NOT a custom quote — surface it as an error
+   * rather than quietly showing $0.
+   */
+  pricingUnavailable: boolean;
   periodicCharges: Array<{
     description: string;
     amount: number;
