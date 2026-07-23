@@ -42,8 +42,11 @@ _audit-private/
 _client-docs/
 
 # local-only agent memory pointer (imports AGENTS.md). Kept out of the remote so no
-# Claude/Anthropic-named file appears in the client's repo. AGENTS.md IS committed.
+# Claude/Anthropic-named file appears in the client's repo.
 CLAUDE.md
+
+# internal operating guide for agents/humans — kept local, out of the client's repo.
+AGENTS.md
 
 # vercel
 .vercel
