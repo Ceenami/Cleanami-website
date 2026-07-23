@@ -13,6 +13,8 @@ export type AvailableCleanerWithDistance = {
   onCallStatus: 'available' | 'unavailable' | 'on_job';
   /** Miles from property; null when address is not geocoded. */
   distance: number | null;
+  /** Hot-tub-capable flag (self-attested at onboarding) — required-skills gate. */
+  hasHotTubCert: boolean;
 };
 
 type CleanerProximityOptions = {
@@ -53,6 +55,7 @@ export async function getAvailableCleanersForProperty(
       longitude: true,
       reliabilityScore: true,
       onCallStatus: true,
+      hasHotTubCert: true,
       accountStatus: true,
       onboardingCompleted: true,
       onboardingStarted: true,
@@ -89,6 +92,7 @@ export async function getAvailableCleanersForProperty(
         reliabilityScore: cleaner.reliabilityScore,
         onCallStatus: cleaner.onCallStatus!,
         distance,
+        hasHotTubCert: cleaner.hasHotTubCert ?? false,
       };
     })
     .filter((c) => {

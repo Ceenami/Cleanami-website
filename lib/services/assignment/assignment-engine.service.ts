@@ -89,7 +89,21 @@ type Candidate = {
   /** roster candidates come first (respect the property hierarchy). */
   source: "roster" | "proximity";
   tier?: PropertyCleanerTier;
+  /** Hot-tub-capable flag — used by the required-skills gate (spec §4/§280). */
+  hotTubCapable: boolean;
 };
+
+/**
+ * Whether this job requires a hot-tub-capable cleaner. The iCal service writes
+ * `hotTubServiceLevel` as "basic"/"deep_clean" for hot-tub properties and the
+ * literal "none" otherwise, so a truthy, non-"none" value means hot tub applies.
+ */
+function jobRequiresHotTub(
+  addonsSnapshot: { hotTubServiceLevel?: string | null } | null | undefined
+): boolean {
+  const level = addonsSnapshot?.hotTubServiceLevel;
+  return !!level && level !== "none";
+}
 
 export type AssignmentOutcome =
   | { jobId: string; status: "assigned"; primaryCleanerId: string; backupCleanerId: string | null }
@@ -113,6 +127,7 @@ async function getPropertyRosterCandidates(
       sortOrder: propertyCleaners.sortOrder,
       reliabilityScore: cleaners.reliabilityScore,
       eligibleForAssignments: cleaners.eligibleForAssignments,
+      hasHotTubCert: cleaners.hasHotTubCert,
     })
     .from(propertyCleaners)
     .innerJoin(cleaners, eq(propertyCleaners.cleanerId, cleaners.id))
@@ -131,6 +146,7 @@ async function getPropertyRosterCandidates(
       score: scoreOf(r.reliabilityScore),
       source: "roster" as const,
       tier: r.tier as PropertyCleanerTier,
+      hotTubCapable: r.hasHotTubCert ?? false,
     }));
 }
 
@@ -155,6 +171,7 @@ async function buildCandidates(
         cleanerId: c.id,
         score: scoreOf(c.reliabilityScore),
         source: "proximity" as const,
+        hotTubCapable: c.hasHotTubCert,
       }));
   } catch (err) {
     // Property not geocoded / no coords — roster-only assignment still works.
@@ -174,6 +191,8 @@ export async function assignJob(job: {
   checkInTime: Date | null;
   /** Used to size this job's window when checking for schedule clashes. */
   expectedHours?: string | number | null;
+  /** Drives the required-skills gate (hot tub). Read from the job's snapshot. */
+  addonsSnapshot?: { hotTubServiceLevel?: string | null } | null;
 }): Promise<AssignmentOutcome> {
   if (!job.propertyId || !job.checkInTime) {
     return { jobId: job.id, status: "skipped", reason: "missing property or check-in time" };
@@ -201,14 +220,33 @@ export async function assignJob(job: {
     return { jobId: job.id, status: "skipped", reason: "no eligible cleaner" };
   }
 
+  // Step 2 required-skills gate (spec §4). A hot-tub clean must be worked by a
+  // hot-tub-capable cleaner. We filter the whole pool — not just the primary —
+  // so a backup elevated into the job is capable too; §280's "at least one
+  // hot-tub-capable cleaner must be assigned" has to still hold after a swap.
+  let pool = eligible;
+  if (jobRequiresHotTub(job.addonsSnapshot)) {
+    const capable = eligible.filter((c) => c.hotTubCapable);
+    if (capable.length === 0) {
+      // Available cleaners exist, but none is hot-tub-capable — distinct from a
+      // plain starvation skip so an admin knows to certify or hand-assign one.
+      return {
+        jobId: job.id,
+        status: "skipped",
+        reason: "no hot-tub-capable cleaner available",
+      };
+    }
+    pool = capable;
+  }
+
   // Primary: prefer >=95 in priority order, then >=90, else the first eligible.
   const primary =
-    eligible.find((c) => c.score >= RELIABILITY_PREFERRED_PRIMARY) ??
-    eligible.find((c) => c.score >= RELIABILITY_FALLBACK_PRIMARY) ??
-    eligible[0];
+    pool.find((c) => c.score >= RELIABILITY_PREFERRED_PRIMARY) ??
+    pool.find((c) => c.score >= RELIABILITY_FALLBACK_PRIMARY) ??
+    pool[0];
 
   const backup =
-    eligible.find((c) => c.cleanerId !== primary.cleanerId) ?? null;
+    pool.find((c) => c.cleanerId !== primary.cleanerId) ?? null;
 
   await db.transaction(async (tx) => {
     // Clear any prior auto-assignment for these roles (idempotent re-run).
@@ -283,6 +321,7 @@ export async function runAssignmentEngine(): Promise<AssignmentSummary> {
       propertyId: true,
       checkInTime: true,
       expectedHours: true,
+      addonsSnapshot: true,
     },
   });
 
