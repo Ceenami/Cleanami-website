@@ -11,7 +11,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'reliability_check',
   'swap_available',
   'dispute_update',
-  'assignment'
+  'assignment',
+  'availability_reminder'
 ]);
 
 export const notifications = pgTable('notifications', {
