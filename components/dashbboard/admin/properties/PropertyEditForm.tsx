@@ -40,6 +40,10 @@ export const PropertyEditForm = ({ property }: Props) => {
     iCalUrl: property.iCalUrl ?? "",
     defaultCheckInTime: property.defaultCheckInTime ?? "16:00:00",
     defaultCheckOutTime: property.defaultCheckOutTime ?? "09:00:00",
+    priceOverrideDollars:
+      property.priceOverrideCents != null
+        ? (property.priceOverrideCents / 100).toString()
+        : "",
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -63,6 +67,10 @@ export const PropertyEditForm = ({ property }: Props) => {
       iCalUrl: form.iCalUrl.trim() === "" ? null : form.iCalUrl.trim(),
       defaultCheckInTime: form.defaultCheckInTime,
       defaultCheckOutTime: form.defaultCheckOutTime,
+      priceOverrideCents:
+        form.priceOverrideDollars.trim() === ""
+          ? null
+          : Math.round(Number(form.priceOverrideDollars) * 100),
     };
 
     try {
@@ -258,6 +266,25 @@ export const PropertyEditForm = ({ property }: Props) => {
               }
             />
           </div>
+        </div>
+
+        <div>
+          <label className={labelClass}>Price override ($ per clean)</label>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            placeholder="Leave blank to use calculated price"
+            className={inputClass}
+            value={form.priceOverrideDollars}
+            onChange={(e) =>
+              setForm({ ...form, priceOverrideDollars: e.target.value })
+            }
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            Overrides the calculated per-clean price for this property on every
+            charge (recurring and one-off). Blank = use standard pricing.
+          </p>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

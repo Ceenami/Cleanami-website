@@ -53,6 +53,33 @@ export class PricingService {
     );
     const hotTubCost = this._calculateHotTubCost(normalized, rules.hotTubRules);
 
+    // Admin per-property price override (task 1.9). When set, it IS the per-clean
+    // price — base/surcharges/laundry/hot-tub and the term discount are bypassed
+    // (an admin-negotiated price is final). Periodic hot-tub drain charges still
+    // apply on top, since they are separate scheduled charges. New-customer
+    // booking has no property yet, so no override; it flows in from the
+    // recurring/one-off paths that pass the property's value.
+    const overrideCents = (
+      normalized as { priceOverrideCents?: number | null }
+    ).priceOverrideCents;
+    if (typeof overrideCents === "number" && overrideCents > 0) {
+      const overridePrice = overrideCents / 100;
+      return {
+        basePrice: overridePrice,
+        sqftSurcharge: 0,
+        largePropertySurcharge: 0,
+        laundryCost: 0,
+        hotTubCost: 0,
+        subtotalPerClean: overridePrice,
+        discountRate: 0,
+        discountAmount: 0,
+        totalPerClean: overridePrice,
+        isCustomQuote: false,
+        pricingUnavailable: false,
+        periodicCharges: hotTubCost.periodic,
+      };
+    }
+
     const customQuoteRule = rules.sqftSurcharges.find(
       (r: any) => r.isCustomQuote
     );

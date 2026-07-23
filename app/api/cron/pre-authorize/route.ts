@@ -118,6 +118,9 @@ export async function POST(req: NextRequest) {
           hotTubDrain: job.propertyData.hotTubDrain,
           hotTubDrainCadence: job.propertyData.hotTubDrainCadence,
           subscriptionMonths: job.subscriptionMonths,
+          // Admin per-property price override (task 1.9), applied to recurring
+          // charges too when set.
+          priceOverrideCents: job.propertyData.priceOverrideCents,
         };
 
         const priceDetails = await pricingService.calculatePrice(

@@ -32,6 +32,8 @@ const updatePropertySchema = z
     iCalUrl: z.string().url().nullable().optional(),
     defaultCheckInTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
     defaultCheckOutTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
+    // Admin price override in cents; 0 or null clears it (task 1.9).
+    priceOverrideCents: z.number().int().min(0).nullable().optional(),
   })
   .strict();
 
