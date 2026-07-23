@@ -7,7 +7,11 @@ import {
   jobsToCleaners,
   reliabilityEvents,
 } from "@/db/schemas";
-import { createAdminClient } from "@/lib/supabase/server";
+import {
+  CHECKLISTS_BUCKET,
+  EVIDENCE_BUCKET,
+  createSignedUrls,
+} from "@/lib/storage/signed-url";
 import { buildPayBreakdown } from "@/lib/cleaner/pay-breakdown";
 import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
@@ -32,6 +36,33 @@ function formatDateTime(date: Date | null): string | null {
     hour12: true,
     timeZone: "America/New_York",
   });
+}
+
+async function signChecklistFiles(
+  files: { id: string; fileName: string; storagePath: string }[]
+): Promise<{ id: string; fileName: string; url: string }[]> {
+  const urls = await createSignedUrls(
+    CHECKLISTS_BUCKET,
+    files.map((file) => file.storagePath)
+  );
+  return files.map((file, i) => ({
+    id: file.id,
+    fileName: file.fileName,
+    url: urls[i] ?? "",
+  }));
+}
+
+// Room-photo maps hold private-bucket object paths; sign each one for viewing.
+async function signRoomPhotos(
+  roomPhotos: Record<string, string[]>
+): Promise<Record<string, string[]>> {
+  const entries = await Promise.all(
+    Object.entries(roomPhotos).map(async ([roomKey, paths]) => {
+      const urls = await createSignedUrls(EVIDENCE_BUCKET, paths);
+      return [roomKey, urls.map((u) => u ?? "")] as const;
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 export type CleanerJobDetail = {
@@ -101,17 +132,7 @@ export async function getCleanerJobDetail(
     ? Math.min(lateEvent.penaltyPoints, 25)
     : 0;
 
-  const supabase = createAdminClient();
-  const checklistFiles = (property?.checklistFiles ?? []).map((file) => {
-    const { data } = supabase.storage
-      .from("checklists")
-      .getPublicUrl(file.storagePath);
-    return {
-      id: file.id,
-      fileName: file.fileName,
-      url: data.publicUrl,
-    };
-  });
+  const checklistFiles = await signChecklistFiles(property?.checklistFiles ?? []);
 
   const payBreakdown = buildPayBreakdown({
     expectedHours: job.expectedHours,
@@ -176,17 +197,11 @@ export async function getCleanerEvidenceFormData(
     | { items?: { id: string; task: string; completed: boolean }[]; roomPhotos?: Record<string, string[]> }
     | null;
 
-  const supabase = createAdminClient();
-  const checklistFiles = property.checklistFiles.map((file) => {
-    const { data } = supabase.storage
-      .from("checklists")
-      .getPublicUrl(file.storagePath);
-    return {
-      id: file.id,
-      fileName: file.fileName,
-      url: data.publicUrl,
-    };
-  });
+  const checklistFiles = await signChecklistFiles(property.checklistFiles);
+
+  // roomPhotos stores object paths (for submit); previews are signed for <img>.
+  const roomPhotos = existingLog?.roomPhotos ?? {};
+  const roomPhotoPreviews = await signRoomPhotos(roomPhotos);
 
   return {
     jobId,
@@ -201,7 +216,8 @@ export async function getCleanerEvidenceFormData(
     checklistItems: existingLog?.items?.length
       ? existingLog.items
       : DEFAULT_CHECKLIST_ITEMS,
-    roomPhotos: existingLog?.roomPhotos ?? {},
+    roomPhotos,
+    roomPhotoPreviews,
     cleanerNotes: evidence?.cleanerNotes ?? "",
     isSubmitted: evidence?.isChecklistComplete ?? false,
   };

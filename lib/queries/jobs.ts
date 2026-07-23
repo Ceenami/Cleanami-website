@@ -3,6 +3,7 @@ import 'server-only';
 import { db } from '@/db';
 import { jobs, properties, subscriptions, jobsToCleaners, cleaners, evidencePackets, payouts } from '@/db/schemas';
 import { eq, sql, and, gte, lte, asc, desc } from 'drizzle-orm';
+import { EVIDENCE_BUCKET, createSignedUrls } from '@/lib/storage/signed-url';
 import {
   PaginationParams,
   SearchParams,
@@ -201,8 +202,21 @@ export async function getJobDetails(jobId: string) {
 
   const totalPayout = job.payouts.reduce((sum, p) => sum + parseFloat(p.amount), 0);
 
+  // Evidence photos live in a private bucket; the stored values are object
+  // paths (older rows hold legacy public URLs). Swap them for short-lived
+  // signed URLs so the admin viewer can render them.
+  const evidencePacket = job.evidencePacket
+    ? {
+        ...job.evidencePacket,
+        photoUrls: (
+          await createSignedUrls(EVIDENCE_BUCKET, job.evidencePacket.photoUrls ?? [])
+        ).map((url) => url ?? ''),
+      }
+    : job.evidencePacket;
+
   return {
     ...job,
+    evidencePacket,
     totalPayout: totalPayout.toFixed(2),
     hasEvidencePacket: !!job.evidencePacket,
     isPayoutComplete: job.payouts.every((p) => p.status === 'released'),
