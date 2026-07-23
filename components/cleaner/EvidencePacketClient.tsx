@@ -24,6 +24,7 @@ type EvidenceFormData = {
     bedCount: number;
     bathCount: string | number;
     hasHotTub: boolean;
+    laundryType: string;
     useDefaultChecklist: boolean;
   };
   checklistFiles: { id: string; fileName: string; url: string }[];

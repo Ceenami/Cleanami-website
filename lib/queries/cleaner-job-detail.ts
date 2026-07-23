@@ -194,6 +194,7 @@ export async function getCleanerEvidenceFormData(
       bedCount: property.bedCount,
       bathCount: property.bathCount,
       hasHotTub: property.hasHotTub,
+      laundryType: property.laundryType,
       useDefaultChecklist: property.useDefaultChecklist,
     },
     checklistFiles,
