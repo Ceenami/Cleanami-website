@@ -13,6 +13,7 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { computeReserveRate } from "@/lib/services/payment/reserve";
 import { sendJobCompletionEmail } from "@/lib/services/email.service";
 
 /**
@@ -247,7 +248,10 @@ export async function captureAndCreatePayouts(
   }
 
   const capturedAmount = paymentIntent.amount;
-  const reserveAmount = Math.round(capturedAmount * 0.02);
+  // Reserve is normally 2%, auto-escalating to 5% when the 30-day dispute rate
+  // exceeds 0.5% (spec §5/§20).
+  const reserveRate = await computeReserveRate();
+  const reserveAmount = Math.round(capturedAmount * reserveRate);
   const netAmount = capturedAmount - reserveAmount;
 
   // The Stripe capture above is idempotent, but everything after it must be too:

@@ -14,6 +14,7 @@ export * from './relationships.schema';
 export * from './users.schema';
 export * from './pricing.schema';
 export * from './reserveTransactions.schema';
+export * from './stripeDisputes.schema';
 export * from './swapRequests.schema';
 export * from './onboardingDocuments.schema';
 export * from './capabilityFlags.schema';
