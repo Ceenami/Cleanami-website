@@ -37,6 +37,21 @@ export function getRoomPhotoRequirements(property: {
     minPhotos: 1,
   });
 
+  // Spec §14.1: 1 photo per room — bedroom, kitchen, living area, hallway. Bed
+  // rooms are counted above; a property always has one kitchen and one hallway
+  // for evidence purposes (the schema does not track their counts).
+  requirements.push({
+    roomKey: "kitchen",
+    label: "Kitchen",
+    minPhotos: 1,
+  });
+
+  requirements.push({
+    roomKey: "hallway",
+    label: "Hallway",
+    minPhotos: 1,
+  });
+
   if (property.hasHotTub) {
     requirements.push({
       roomKey: "hot-tub",
