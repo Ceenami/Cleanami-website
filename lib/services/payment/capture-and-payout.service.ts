@@ -15,6 +15,14 @@ import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
 import { sendJobCompletionEmail } from "@/lib/services/email.service";
 
+/**
+ * Roles that actually worked the job and are paid. Shadow backups (and unaccepted
+ * on-call) are NOT paid unless they were promoted in, at which point their role
+ * is changed to `primary`. Without this, a backup left on the job was paid full
+ * pay for not working.
+ */
+const PAID_ROLES = new Set(["primary", "laundry_lead"]);
+
 export type CaptureOutcome = {
   ok: boolean;
   httpStatus: number;
@@ -146,9 +154,12 @@ export async function captureAndCreatePayouts(
     }
 
     const expectedHours = parseFloat(job.expectedHours || "0");
+    const workingCleaners = assignedCleaners.filter((a) =>
+      PAID_ROLES.has(a.role)
+    );
 
     await Promise.all(
-      assignedCleaners.map((assignment) => {
+      workingCleaners.map((assignment) => {
         const pay = computeCleanerPay({
           expectedHours,
           hourlyRateCents: assignment.cleaner?.hourlyRateCents,
@@ -192,7 +203,7 @@ export async function captureAndCreatePayouts(
         type: "prepaid",
         message: "Prepaid job marked captured and payouts created",
         jobId,
-        payoutsCreated: assignedCleaners.length,
+        payoutsCreated: workingCleaners.length,
       },
     };
   }
@@ -292,9 +303,12 @@ export async function captureAndCreatePayouts(
   }
 
   const expectedHours = parseFloat(job.expectedHours || "0");
+  const workingCleaners = assignedCleaners.filter((a) =>
+    PAID_ROLES.has(a.role)
+  );
 
   await Promise.all(
-    assignedCleaners.map((assignment) => {
+    workingCleaners.map((assignment) => {
       const pay = computeCleanerPay({
         expectedHours,
         hourlyRateCents: assignment.cleaner?.hourlyRateCents,
@@ -342,7 +356,7 @@ export async function captureAndCreatePayouts(
       reserveAmount,
       netAmount,
       paymentIntentId: paymentIntent.id,
-      payoutsCreated: assignedCleaners.length,
+      payoutsCreated: workingCleaners.length,
     },
   };
 }

@@ -17,10 +17,11 @@ import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
-function mapRole(role: string): CleanerJobRole {
+function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
   if (role === "laundry_lead") return "laundryLead";
-  if (role === "primary") return "teamLeader";
   if (role === "backup") return "backup";
+  // Only the flagged team leader shows as leader; other team members are primary.
+  if (role === "primary") return isTeamLeader ? "teamLeader" : "primary";
   return "primary";
 }
 
@@ -151,7 +152,7 @@ export async function getCleanerJobDetail(
     propertyAddress: property?.address ?? null,
     arrivalWindow: formatDateTime(job.checkInTime),
     mustFinishBefore: formatDateTime(job.checkOutTime),
-    role: mapRole(assignment.role),
+    role: mapRole(assignment.role, assignment.isTeamLeader),
     urgentBonus: assignment.urgentBonus ?? false,
     teammates: teammateRows
       .filter((row) => row.cleanerId !== cleanerId)
