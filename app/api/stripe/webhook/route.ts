@@ -4,6 +4,7 @@ import { cleaners, jobs, payouts, processedStripeEvents } from "@/db/schemas";
 import { applyStripeAccountState } from "@/lib/cleaner/stripe-account-state";
 import { markStripeEventProcessed } from "@/lib/services/stripe/event-dedupe";
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
+import { recordDisputeAndHoldPayouts } from "@/lib/services/payment/dispute.service";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { stripe } from "@/lib/stripe/config";
 import { eq } from "drizzle-orm";
@@ -150,6 +151,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         typeof dispute.payment_intent === "string"
           ? dispute.payment_intent
           : null;
+      // Record the dispute (feeds reserve escalation) and, on open, hold the
+      // job's pending payouts + alert admin (spec §5/§20.4 claw-back policy).
+      await recordDisputeAndHoldPayouts(dispute, pi, type);
       await appendJobNoteByPaymentIntent(
         pi,
         `[Stripe] Dispute ${type.split(".").pop()}: status=${dispute.status}, reason=${dispute.reason} (${new Date().toISOString()})`
