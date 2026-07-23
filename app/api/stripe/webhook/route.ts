@@ -3,6 +3,8 @@ import { db } from "@/db";
 import { cleaners, jobs, payouts, processedStripeEvents } from "@/db/schemas";
 import { applyStripeAccountState } from "@/lib/cleaner/stripe-account-state";
 import { markStripeEventProcessed } from "@/lib/services/stripe/event-dedupe";
+import { sendPaymentFailedEmail } from "@/lib/services/email.service";
+import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { stripe } from "@/lib/stripe/config";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
@@ -27,6 +29,48 @@ async function appendJobNoteByPaymentIntent(
       updatedAt: new Date(),
     })
     .where(eq(jobs.id, job.id));
+}
+
+/**
+ * Best-effort customer + admin notification for a failed charge. Spec §20.5:
+ * `payment_intent.failed` → notify customer + admin. Never throws — a mail
+ * failure must not fail the webhook (which would trigger a full Stripe retry).
+ */
+async function notifyPaymentFailed(
+  paymentIntentId: string,
+  reason: string
+): Promise<void> {
+  try {
+    const job = await db.query.jobs.findFirst({
+      where: eq(jobs.paymentIntentId, paymentIntentId),
+      columns: { id: true },
+      with: {
+        subscription: { with: { customer: true } },
+        property: { columns: { address: true } },
+      },
+    });
+    if (!job) return;
+
+    const customer = job.subscription?.customer;
+    const address = job.property?.address ?? "your property";
+
+    if (customer?.email) {
+      await sendPaymentFailedEmail({
+        to: customer.email,
+        name: customer.name,
+        propertyAddress: address,
+      });
+    }
+
+    await notifyAdminsOfJobAlert({
+      title: "Customer payment failed",
+      message: `Payment failed for ${address}: ${reason}`,
+      jobId: job.id,
+      outcome: "payment_failed",
+    });
+  } catch (err) {
+    console.error("[stripe webhook] payment-failed notification failed", err);
+  }
 }
 
 async function handleEvent(event: Stripe.Event): Promise<void> {
@@ -80,6 +124,8 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         pi.id,
         `[Stripe] Payment failed: ${reason} (${new Date().toISOString()})`
       );
+      // Spec §20.5: notify customer + admin (best-effort; not just a note).
+      await notifyPaymentFailed(pi.id, reason);
       break;
     }
 
