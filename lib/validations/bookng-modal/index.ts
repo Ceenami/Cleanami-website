@@ -11,8 +11,10 @@ export const signupFormSchema = z
       message: "The selected address must be within our service area.",
     }),
     sqft: z.number().positive(),
-    bedrooms: z.number().min(1, "Must have at least 1 bedroom"),
-    bathrooms: z.number().min(1, "Must have at least 1 bathroom"),
+    bedrooms: z.number().int("Please enter a whole number of bedrooms").min(1, "Must have at least 1 bedroom"),
+    // Only full bathrooms are priced (the base-price matrix and v12 use whole
+    // bath counts); half baths are not a supported concept.
+    bathrooms: z.number().int("Please enter a whole number of bathrooms").min(1, "Must have at least 1 bathroom"),
     checklistFile: z
       .array(z.instanceof(File))
       .optional(),
