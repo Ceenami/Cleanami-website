@@ -46,6 +46,9 @@ export type JobStaffingResult = {
   propertySize: PropertySize;
   bedroomBathroomTotal: number;
   baseCleaningHours: number;
+  /** Time to run the expected laundry loads (loads × 0.25h); any laundry type. */
+  inUnitLaundryHours: number;
+  /** Extra off-site handling time, on top of the laundry-load time above. */
   offSiteLaundryHours: number;
   hotTubHours: number;
   /** Full expected cleaning time paid to each assigned cleaner (not split by team). */
@@ -132,11 +135,18 @@ function offSiteLaundryHours(propertySize: PropertySize): number {
   }
 }
 
+/**
+ * Expected laundry loads by size (§4). v12 assigns loads to both in-unit and
+ * off-site laundry — they drive the laundry *time* add either way (and, for
+ * off-site only, the $5/load Laundry Lead bonus, which is gated on role
+ * downstream, not on this count). "none" and custom get no loads.
+ */
 function expectedLaundryLoads(
   propertySize: PropertySize,
   laundryType: string
 ): number {
-  if (laundryType !== "off_site" || propertySize === "custom") return 0;
+  const hasLaundry = laundryType === "off_site" || laundryType === "in_unit";
+  if (!hasLaundry || propertySize === "custom") return 0;
   switch (propertySize) {
     case "small":
       return 2;
@@ -211,6 +221,13 @@ export function calculateJobStaffing(
     input.sqFt
   );
 
+  // §4 laundry-load time (loads × 0.25h). v12's Total Time includes this for
+  // in-unit laundry, and for off-site it is *added to* the off-site handling
+  // time below — not replaced by it. Leaving it out under-counted every
+  // laundry job's hours (and therefore each cleaner's pay).
+  const expectedLoads = expectedLaundryLoads(propertySize, input.laundryType);
+  const inUnitLaundryHours = roundHours(expectedLoads * 0.25);
+
   const isOffSite = input.laundryType === "off_site";
   const offSiteHours = isOffSite
     ? offSiteLaundryHours(propertySize)
@@ -223,7 +240,7 @@ export function calculateJobStaffing(
       : 0;
 
   const expectedHoursPerCleaner = roundHours(
-    baseCleaningHours + offSiteHours + hotTubHours
+    baseCleaningHours + inUnitLaundryHours + offSiteHours + hotTubHours
   );
 
   const { teamSize, requiresManualStaffing } = getTeamSize(
@@ -235,15 +252,13 @@ export function calculateJobStaffing(
     propertySize,
     bedroomBathroomTotal,
     baseCleaningHours,
+    inUnitLaundryHours,
     offSiteLaundryHours: offSiteHours,
     hotTubHours,
     expectedHoursPerCleaner,
     teamSize,
     requiresManualStaffing,
-    expectedLaundryLoads: expectedLaundryLoads(
-      propertySize,
-      input.laundryType
-    ),
+    expectedLaundryLoads: expectedLoads,
     isDeepClean,
   };
 }
