@@ -16,7 +16,8 @@ type CleanerNotificationType =
   | "reliability_check"
   | "swap_available"
   | "dispute_update"
-  | "assignment";
+  | "assignment"
+  | "availability_reminder";
 
 /**
  * Fan a cleaner-facing notification out across channels: always in-app; web
