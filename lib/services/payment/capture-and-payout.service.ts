@@ -239,22 +239,34 @@ export async function captureAndCreatePayouts(
   const reserveAmount = Math.round(capturedAmount * 0.02);
   const netAmount = capturedAmount - reserveAmount;
 
-  await db.insert(reserveTransactions).values({
-    jobId,
-    paymentIntentId: job.paymentIntentId,
-    totalAmountCents: capturedAmount,
-    reserveAmountCents: reserveAmount,
-    netAmountCents: netAmount,
-  });
+  // The Stripe capture above is idempotent, but everything after it must be too:
+  // a crash between the capture and the job update leaves the money taken and
+  // the job still marked uncaptured, so the next run repeats this block.
+  //
+  // Both writes go in one transaction, and the ledger insert no-ops if a row
+  // for this job already exists (unique on job_id). Without that, a retry
+  // inserted a second reserve row and double-counted the 2% hold.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(reserveTransactions)
+      .values({
+        jobId,
+        paymentIntentId: job.paymentIntentId!,
+        totalAmountCents: capturedAmount,
+        reserveAmountCents: reserveAmount,
+        netAmountCents: netAmount,
+      })
+      .onConflictDoNothing({ target: reserveTransactions.jobId });
 
-  await db
-    .update(jobs)
-    .set({
-      status: "completed",
-      paymentStatus: "captured",
-      updatedAt: new Date(),
-    })
-    .where(eq(jobs.id, jobId));
+    await tx
+      .update(jobs)
+      .set({
+        status: "completed",
+        paymentStatus: "captured",
+        updatedAt: new Date(),
+      })
+      .where(eq(jobs.id, jobId));
+  });
 
   const assignedCleaners = await db.query.jobsToCleaners.findMany({
     where: eq(jobsToCleaners.jobId, jobId),
