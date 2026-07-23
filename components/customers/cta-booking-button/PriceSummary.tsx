@@ -69,6 +69,12 @@ export const PriceSummary = ({ priceDetails }: Props) => {
             value={`$${priceDetails.sqftSurcharge.toFixed(2)}`}
           />
         )}
+        {priceDetails.largePropertySurcharge > 0 && (
+          <PriceRow
+            label="Large Property Surcharge"
+            value={`$${priceDetails.largePropertySurcharge.toFixed(2)}`}
+          />
+        )}
         {priceDetails.laundryCost > 0 && (
           <PriceRow
             label="Laundry Service"

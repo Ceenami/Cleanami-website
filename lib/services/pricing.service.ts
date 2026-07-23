@@ -6,6 +6,12 @@ import { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount
 
 export { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
+// v12 Pricing Rules §3 — "Large Property Surcharge: +$50 if Sq Ft > 1,800",
+// applied to customer revenue (both in-unit and off-site). It sits on top of the
+// normal per-500-sq-ft surcharge and does not affect cleaner pay.
+const LARGE_PROPERTY_SURCHARGE = 50;
+const LARGE_PROPERTY_SQFT_THRESHOLD = 1800;
+
 export class PricingService {
   public async calculatePrice(formData: SignupFormData): Promise<PriceDetails> {
     const normalized = normalizeSignupFormDataForPricing(formData);
@@ -38,6 +44,9 @@ export class PricingService {
       sqft,
       rules.sqftSurcharges
     );
+    // v12 §3: flat +$50 once the property is over 1,800 sq ft.
+    const largePropertySurcharge =
+      sqft > LARGE_PROPERTY_SQFT_THRESHOLD ? LARGE_PROPERTY_SURCHARGE : 0;
     const laundryCost = this._calculateLaundryCost(
       normalized,
       rules.laundryRules
@@ -63,7 +72,11 @@ export class PricingService {
     const isCustomQuote = isOverSqftCeiling || isOutOfMatrix;
 
     const subtotalPerClean =
-      basePrice + sqftSurcharge + laundryCost.total + hotTubCost.total;
+      basePrice +
+      sqftSurcharge +
+      largePropertySurcharge +
+      laundryCost.total +
+      hotTubCost.total;
 
     // Term discount applies to the recurring per-clean subtotal only (not the
     // periodic hot-tub drain charges). Round to cents to avoid float drift.
@@ -75,6 +88,7 @@ export class PricingService {
     return {
       basePrice,
       sqftSurcharge,
+      largePropertySurcharge,
       laundryCost: laundryCost.total,
       hotTubCost: hotTubCost.total,
       subtotalPerClean,
