@@ -127,8 +127,8 @@ export const PropertyEditForm = ({ property }: Props) => {
             <label className={labelClass}>Bathrooms</label>
             <input
               type="number"
-              min={0.5}
-              step={0.5}
+              min={1}
+              step={1}
               className={inputClass}
               value={form.bathCount}
               onChange={(e) => setForm({ ...form, bathCount: e.target.value })}
