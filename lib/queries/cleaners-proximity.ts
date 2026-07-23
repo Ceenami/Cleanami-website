@@ -15,6 +15,8 @@ export type AvailableCleanerWithDistance = {
   distance: number | null;
   /** Hot-tub-capable flag (self-attested at onboarding) — required-skills gate. */
   hasHotTubCert: boolean;
+  /** Laundry-lead eligible — preferred for the off-site $5/load Laundry Lead role. */
+  hasLaundryLeadCert: boolean;
 };
 
 type CleanerProximityOptions = {
@@ -56,6 +58,7 @@ export async function getAvailableCleanersForProperty(
       reliabilityScore: true,
       onCallStatus: true,
       hasHotTubCert: true,
+      hasLaundryLeadCert: true,
       accountStatus: true,
       onboardingCompleted: true,
       onboardingStarted: true,
@@ -93,6 +96,7 @@ export async function getAvailableCleanersForProperty(
         onCallStatus: cleaner.onCallStatus!,
         distance,
         hasHotTubCert: cleaner.hasHotTubCert ?? false,
+        hasLaundryLeadCert: cleaner.hasLaundryLeadCert ?? false,
       };
     })
     .filter((c) => {
@@ -110,13 +114,19 @@ export async function getAvailableCleanersForProperty(
       return true;
     })
     .sort((a, b) => {
+      // Distance-first dispatch (spec §13.4 "Order of consideration: 1.
+      // Location/distance, 2. Reliability"): the nearest cleaner wins, with
+      // reliability as the tie-breaker. Reliability is still enforced as the
+      // eligibility gate/tier by the assignment engine (min 80; primaries prefer
+      // >=95), so this ranks the *nearest sufficiently-reliable* cleaner first.
+      // Ungeocoded cleaners (null distance) sort last, ordered by reliability.
       const scoreA = parseFloat(a.reliabilityScore || '0');
       const scoreB = parseFloat(b.reliabilityScore || '0');
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      if (a.distance === null && b.distance === null) return 0;
+      if (a.distance === null && b.distance === null) return scoreB - scoreA;
       if (a.distance === null) return 1;
       if (b.distance === null) return -1;
-      return a.distance - b.distance;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      return scoreB - scoreA;
     });
 
   return availableCleaners;

@@ -14,7 +14,7 @@ import { getAvailableCleanersForProperty } from "@/lib/queries/cleaners-proximit
 import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { sendCleanerAssignmentEmail } from "@/lib/services/email.service";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, inArray } from "drizzle-orm";
 
 /** Best-effort multichannel notify of a newly-assigned primary cleaner. */
 async function notifyAssignedPrimary(
@@ -60,15 +60,12 @@ async function notifyAssignedPrimary(
 }
 
 /**
- * Reliability gates (0–100), from the functionality spec §13:
- *  - >= 95  : eligible to be a job's PRIMARY cleaner
- *  - >= 90  : may still be primary only if no >=95 candidate exists (degrade)
- *  - >= 80  : eligible for backup / on-call, never preferred as primary
- *  - <  80  : flagged — not auto-assigned at all
+ * Reliability eligibility gate (0–100), from the functionality spec §13: below
+ * 80 a cleaner is flagged and never auto-assigned. Above the gate, ranking is
+ * distance-first (spec §13.4) and the Team Leader is the most reliable of the
+ * assigned team.
  */
 const RELIABILITY_MIN_ELIGIBLE = 80;
-const RELIABILITY_PREFERRED_PRIMARY = 95;
-const RELIABILITY_FALLBACK_PRIMARY = 90;
 
 /** Missing score defaults to 100 (a brand-new cleaner with no events). */
 function scoreOf(reliabilityScore: string | null): number {
@@ -91,6 +88,8 @@ type Candidate = {
   tier?: PropertyCleanerTier;
   /** Hot-tub-capable flag — used by the required-skills gate (spec §4/§280). */
   hotTubCapable: boolean;
+  /** Laundry-lead eligible — preferred for the off-site Laundry Lead role. */
+  laundryLeadCapable: boolean;
 };
 
 /**
@@ -128,6 +127,7 @@ async function getPropertyRosterCandidates(
       reliabilityScore: cleaners.reliabilityScore,
       eligibleForAssignments: cleaners.eligibleForAssignments,
       hasHotTubCert: cleaners.hasHotTubCert,
+      hasLaundryLeadCert: cleaners.hasLaundryLeadCert,
     })
     .from(propertyCleaners)
     .innerJoin(cleaners, eq(propertyCleaners.cleanerId, cleaners.id))
@@ -147,6 +147,7 @@ async function getPropertyRosterCandidates(
       source: "roster" as const,
       tier: r.tier as PropertyCleanerTier,
       hotTubCapable: r.hasHotTubCert ?? false,
+      laundryLeadCapable: r.hasLaundryLeadCert ?? false,
     }));
 }
 
@@ -172,6 +173,7 @@ async function buildCandidates(
         score: scoreOf(c.reliabilityScore),
         source: "proximity" as const,
         hotTubCapable: c.hasHotTubCert,
+        laundryLeadCapable: c.hasLaundryLeadCert,
       }));
   } catch (err) {
     // Property not geocoded / no coords — roster-only assignment still works.
@@ -191,8 +193,12 @@ export async function assignJob(job: {
   checkInTime: Date | null;
   /** Used to size this job's window when checking for schedule clashes. */
   expectedHours?: string | number | null;
-  /** Drives the required-skills gate (hot tub). Read from the job's snapshot. */
-  addonsSnapshot?: { hotTubServiceLevel?: string | null } | null;
+  /** Drives the required-skills gate + team size. Read from the job's snapshot. */
+  addonsSnapshot?: {
+    hotTubServiceLevel?: string | null;
+    teamSize?: number | null;
+    laundryType?: string | null;
+  } | null;
 }): Promise<AssignmentOutcome> {
   if (!job.propertyId || !job.checkInTime) {
     return { jobId: job.id, status: "skipped", reason: "missing property or check-in time" };
@@ -239,14 +245,29 @@ export async function assignJob(job: {
     pool = capable;
   }
 
-  // Primary: prefer >=95 in priority order, then >=90, else the first eligible.
-  const primary =
-    pool.find((c) => c.score >= RELIABILITY_PREFERRED_PRIMARY) ??
-    pool.find((c) => c.score >= RELIABILITY_FALLBACK_PRIMARY) ??
-    pool[0];
+  // Team size from the job's staffing snapshot (v12). The pool is ordered
+  // roster-tier-first then nearest, so the working team is the top N candidates;
+  // clamp to what is actually available rather than failing to staff.
+  const desiredTeamSize = Math.max(1, job.addonsSnapshot?.teamSize ?? 1);
+  const teamSize = Math.min(desiredTeamSize, pool.length);
+  const team = pool.slice(0, teamSize);
 
-  const backup =
-    pool.find((c) => c.cleanerId !== primary.cleanerId) ?? null;
+  // Team Leader = highest reliability on the team (spec §3). No extra pay.
+  const leader = team.reduce(
+    (best, c) => (c.score > best.score ? c : best),
+    team[0]
+  );
+
+  // Off-site laundry: exactly one team member is the Laundry Lead ($5/load,
+  // spec §3/§8), preferring a laundry-lead-eligible cleaner, else the leader.
+  const isOffSite = job.addonsSnapshot?.laundryType === "off_site";
+  const laundryLead = isOffSite
+    ? team.find((c) => c.laundryLeadCapable) ?? leader
+    : null;
+
+  // One backup from the next-ranked candidate outside the team (shadow — not paid
+  // unless promoted in). May be absent on a thin pool.
+  const backup = pool[teamSize] ?? null;
 
   await db.transaction(async (tx) => {
     // Clear any prior auto-assignment for these roles (idempotent re-run).
@@ -255,23 +276,19 @@ export async function assignJob(job: {
       .where(
         and(
           eq(jobsToCleaners.jobId, job.id),
-          eq(jobsToCleaners.role, "primary")
-        )
-      );
-    await tx
-      .delete(jobsToCleaners)
-      .where(
-        and(
-          eq(jobsToCleaners.jobId, job.id),
-          eq(jobsToCleaners.role, "backup")
+          inArray(jobsToCleaners.role, ["primary", "laundry_lead", "backup"])
         )
       );
 
-    await tx.insert(jobsToCleaners).values({
-      jobId: job.id,
-      cleanerId: primary.cleanerId,
-      role: "primary",
-    });
+    for (const member of team) {
+      const isLaundryLead = laundryLead?.cleanerId === member.cleanerId;
+      await tx.insert(jobsToCleaners).values({
+        jobId: job.id,
+        cleanerId: member.cleanerId,
+        role: isLaundryLead ? "laundry_lead" : "primary",
+        isTeamLeader: member.cleanerId === leader.cleanerId,
+      });
+    }
 
     if (backup) {
       await tx.insert(jobsToCleaners).values({
@@ -287,17 +304,22 @@ export async function assignJob(job: {
       .where(eq(jobs.id, job.id));
   });
 
-  await notifyAssignedPrimary(
-    job.id,
-    primary.cleanerId,
-    job.propertyId,
-    job.checkInTime
+  // Notify every working team member.
+  await Promise.all(
+    team.map((member) =>
+      notifyAssignedPrimary(
+        job.id,
+        member.cleanerId,
+        job.propertyId!,
+        job.checkInTime
+      )
+    )
   );
 
   return {
     jobId: job.id,
     status: "assigned",
-    primaryCleanerId: primary.cleanerId,
+    primaryCleanerId: leader.cleanerId,
     backupCleanerId: backup?.cleanerId ?? null,
   };
 }

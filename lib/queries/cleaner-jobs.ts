@@ -29,10 +29,10 @@ export type CleanerJobSummary = {
   teammates: CleanerJobTeammate[];
 };
 
-function mapRole(role: string): CleanerJobRole {
+function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
   if (role === "laundry_lead") return "laundryLead";
-  if (role === "primary") return "teamLeader";
   if (role === "backup") return "backup";
+  if (role === "primary") return isTeamLeader ? "teamLeader" : "primary";
   return "primary";
 }
 
@@ -86,6 +86,7 @@ export async function getCleanerUpcomingJobs(
       addonsSnapshot: jobs.addonsSnapshot,
       propertyAddress: properties.address,
       role: jobsToCleaners.role,
+      isTeamLeader: jobsToCleaners.isTeamLeader,
       urgentBonus: jobsToCleaners.urgentBonus,
     })
     .from(jobsToCleaners)
@@ -144,7 +145,7 @@ export async function getCleanerUpcomingJobs(
         assignment.urgentBonus,
         assignment.addonsSnapshot?.laundryLoads
       ),
-      role: mapRole(assignment.role),
+      role: mapRole(assignment.role, assignment.isTeamLeader),
       urgentBonus: assignment.urgentBonus ?? false,
       teammates: teammatesByJob.get(assignment.jobId) ?? [],
     };

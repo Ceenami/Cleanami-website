@@ -7,9 +7,11 @@ import {
   jobs,
   jobsToCleaners,
   notifications,
+  propertyCleaners,
   reliabilityEvents,
   swapRequests,
 } from "@/db/schemas";
+import type { PropertyCleanerTier } from "@/db/schemas";
 import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
 import { getAllEligibleCleanersForJob, getAvailableCleanersForJob } from "@/lib/queries/cleaners-proximity";
@@ -106,7 +108,52 @@ async function getOnCallOpenPoolCleanerIds(
   return ids;
 }
 
-/** Nearby first, then on-call/open pool, then all other eligible cleaners. */
+const ROSTER_TIER_RANK: Record<PropertyCleanerTier, number> = {
+  main_primary: 0,
+  secondary_primary: 1,
+  preferred_backup: 2,
+  on_call: 3,
+};
+
+/**
+ * Task 1.13 — the property's own roster (main/secondary primary, preferred
+ * backup, on-call), tier-then-sortOrder ordered and eligibility-filtered. These
+ * are the cleaners designated for THIS property, so a replacement is offered to
+ * them first ("reassignment to a cleaner's primary property").
+ */
+async function getPropertyRosterCleanerIds(jobId: string): Promise<string[]> {
+  const job = await db.query.jobs.findFirst({
+    where: eq(jobs.id, jobId),
+    columns: { propertyId: true },
+  });
+  if (!job?.propertyId) return [];
+
+  const roster = await db
+    .select({
+      cleanerId: propertyCleaners.cleanerId,
+      tier: propertyCleaners.tier,
+      sortOrder: propertyCleaners.sortOrder,
+      eligibleForAssignments: cleaners.eligibleForAssignments,
+    })
+    .from(propertyCleaners)
+    .innerJoin(cleaners, eq(propertyCleaners.cleanerId, cleaners.id))
+    .where(eq(propertyCleaners.propertyId, job.propertyId));
+
+  return roster
+    .filter((r) => isCleanerAssignmentEligible(r))
+    .sort((a, b) => {
+      const ta = ROSTER_TIER_RANK[a.tier as PropertyCleanerTier];
+      const tb = ROSTER_TIER_RANK[b.tier as PropertyCleanerTier];
+      if (ta !== tb) return ta - tb;
+      return a.sortOrder - b.sortOrder;
+    })
+    .map((r) => r.cleanerId);
+}
+
+/**
+ * Property roster first (spec §1.13), then nearby, then on-call/open pool, then
+ * all other eligible cleaners.
+ */
 async function buildUrgentNotificationCleanerIds(
   jobId: string,
   checkInTime: Date,
@@ -122,9 +169,6 @@ async function buildUrgentNotificationCleanerIds(
     ordered.push(cleanerId);
   };
 
-  const { cleaners: nearby } = await getAvailableCleanersForJob(jobId, {
-    includeOnJob: false,
-  });
   const conflicts = (cleanerId: string) =>
     hasScheduleConflict({
       cleanerId,
@@ -132,6 +176,16 @@ async function buildUrgentNotificationCleanerIds(
       expectedHours,
       excludeJobId: jobId,
     });
+
+  // C4: the property's designated roster is offered the replacement first.
+  for (const cleanerId of await getPropertyRosterCleanerIds(jobId)) {
+    if (await conflicts(cleanerId)) continue;
+    add(cleanerId);
+  }
+
+  const { cleaners: nearby } = await getAvailableCleanersForJob(jobId, {
+    includeOnJob: false,
+  });
 
   for (const candidate of nearby.slice(0, URGENT_NEARBY_NOTIFY_LIMIT)) {
     if (await conflicts(candidate.id)) continue;
