@@ -9,7 +9,28 @@ export type Coordinates = {
   longitude: number;
 };
 
-export async function geocodeAddress(address: string): Promise<Coordinates | null> {
+/**
+ * Why a geocode did not produce coordinates.
+ *
+ * `not_found` means Google answered and the address does not resolve — a fact
+ * about the address. `unavailable` means we could not get an answer at all
+ * (missing/denied key, quota, network). Callers gating on service area must
+ * treat these differently: the first is the customer's address being wrong,
+ * the second is our own infrastructure failing.
+ */
+export type GeocodeResult =
+  | { status: 'ok'; coordinates: Coordinates }
+  | { status: 'not_found' }
+  | { status: 'unavailable'; reason: string };
+
+export async function geocodeAddressResult(
+  address: string
+): Promise<GeocodeResult> {
+  if (!GOOGLE_MAPS_API_KEY) {
+    console.error('[geocoding] NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is not set.');
+    return { status: 'unavailable', reason: 'missing_api_key' };
+  }
+
   try {
     const response = await fetch(
       `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
@@ -22,17 +43,34 @@ export async function geocodeAddress(address: string): Promise<Coordinates | nul
     if (data.status === 'OK' && data.results.length > 0) {
       const location = data.results[0].geometry.location;
       return {
-        latitude: location.lat,
-        longitude: location.lng,
+        status: 'ok',
+        coordinates: { latitude: location.lat, longitude: location.lng },
       };
     }
 
-    console.warn('Geocoding failed:', data.status, address);
-    return null;
+    // Google answered definitively: this address does not resolve.
+    if (data.status === 'ZERO_RESULTS' || data.status === 'INVALID_REQUEST') {
+      console.warn('[geocoding] address did not resolve:', data.status, address);
+      return { status: 'not_found' };
+    }
+
+    // REQUEST_DENIED, OVER_QUERY_LIMIT, UNKNOWN_ERROR — our problem, not theirs.
+    console.error('[geocoding] unavailable:', data.status, address);
+    return { status: 'unavailable', reason: String(data.status ?? 'unknown') };
   } catch (error) {
-    console.error('Geocoding error:', error);
-    return null;
+    console.error('[geocoding] request failed:', error);
+    return { status: 'unavailable', reason: 'request_failed' };
   }
+}
+
+/**
+ * Coordinates or null. Retained for callers that only need a best-effort
+ * position (distance sorting, backfills) and cannot act on the distinction.
+ * Anything gating access or money should use `geocodeAddressResult`.
+ */
+export async function geocodeAddress(address: string): Promise<Coordinates | null> {
+  const result = await geocodeAddressResult(address);
+  return result.status === 'ok' ? result.coordinates : null;
 }
 
 export async function getCleanerCoordinates(cleanerId: string): Promise<Coordinates | null> {

@@ -8,7 +8,7 @@ import { getDbOrNull } from "@/db";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
-import { geocodeAddress } from "@/lib/services/google-maps/geocoding";
+import { geocodeAddressResult } from "@/lib/services/google-maps/geocoding";
 import { isPointInServiceArea } from "@/lib/google-maps/serviceArea/index.ts";
 import { getStartOfTodayEastern } from "@/lib/time/eastern";
 import { addDays } from "date-fns";
@@ -119,15 +119,46 @@ export async function createPaymentIntentForSignup(
   }
 
   // Re-validate the service area against the geocoded address rather than
-  // trusting the client-sent `isAddressInServiceArea` boolean. Geocoding is a
-  // Google call, so degrade gracefully (allow) if it fails transiently.
+  // trusting the client-sent `isAddressInServiceArea` boolean, which the client
+  // can set to anything.
+  //
+  // Previously this ran as `if (coords && outside) reject`, so a null geocode
+  // skipped the check entirely and the booking went through unvalidated —
+  // including when the Google key is unset, which makes every lookup fail.
+  //
+  // An address Google resolves outside the area, or refuses to resolve at all,
+  // is now rejected. A geocoder we simply cannot reach is NOT treated as the
+  // customer's fault: the booking proceeds and the failure is logged loudly,
+  // so our own outage cannot block every booking. That leaves a deliberate,
+  // narrow hole — an out-of-area booking can still land while geocoding is
+  // down — which is why the log is an error, not a warning.
   if (normalizedFormData.address) {
-    const coords = await geocodeAddress(normalizedFormData.address);
-    if (coords && !isPointInServiceArea(coords.latitude, coords.longitude)) {
+    const geocode = await geocodeAddressResult(normalizedFormData.address);
+
+    if (
+      geocode.status === "ok" &&
+      !isPointInServiceArea(
+        geocode.coordinates.latitude,
+        geocode.coordinates.longitude
+      )
+    ) {
       return {
         error:
           "The selected address is outside our current service area. Please contact CleanNami if you believe this is an error.",
       };
+    }
+
+    if (geocode.status === "not_found") {
+      return {
+        error:
+          "We could not verify that address. Please check it and try again, or contact CleanNami and we will help.",
+      };
+    }
+
+    if (geocode.status === "unavailable") {
+      console.error(
+        `[create-payment-intent] service-area check skipped, geocoding unavailable (${geocode.reason}). Booking allowed WITHOUT service-area validation.`
+      );
     }
   }
 
