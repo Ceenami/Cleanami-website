@@ -79,13 +79,16 @@ export function classifyPropertySize(
 
   const eligible: PropertySize[] = [];
 
+  // v12 bed/bath-total bands: Medium = 5–7, Large = 8–9, Custom = 10+. The
+  // upper bounds are half-open (`< 8`, `< 10`) so a fractional bath total such
+  // as 7.5 still lands in a band instead of falling through the gap.
   if (bbTotal >= 10 || bedCount >= 6 || baths >= 5 || sq >= 3000) {
     eligible.push("custom");
   }
-  if ((bbTotal >= 7 && bbTotal <= 9) || (sq >= 2000 && sq <= 2999)) {
+  if ((bbTotal >= 8 && bbTotal < 10) || (sq >= 2000 && sq <= 2999)) {
     eligible.push("large");
   }
-  if ((bbTotal >= 5 && bbTotal <= 6) || (sq >= 1251 && sq <= 1999)) {
+  if ((bbTotal >= 5 && bbTotal < 8) || (sq >= 1251 && sq <= 1999)) {
     eligible.push("medium");
   }
   if (bbTotal < 5 && sq <= 1250) {
