@@ -69,6 +69,8 @@ export type SignupFormData = Partial<z.infer<typeof signupFormSchema>>;
 export interface PriceDetails {
   basePrice: number;
   sqftSurcharge: number;
+  /** v12 large-property surcharge: +$50 when sq ft is over 1,800. */
+  largePropertySurcharge: number;
   laundryCost: number;
   hotTubCost: number;
   /** Per-clean price before the subscription-term discount. */
