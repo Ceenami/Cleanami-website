@@ -39,6 +39,8 @@ export const properties = pgTable(
     longitude: numeric("longitude", { precision: 11, scale: 8 }),
     geocodedAt: timestamp("geocoded_at"),
     iCalUrl: text('ical_url'),
+    /** Admin per-property price override in cents; null = use calculated price. */
+    priceOverrideCents: integer('price_override_cents'),
     defaultCheckInTime: text('default_check_in_time').default('16:00:00'),
     defaultCheckOutTime: text('default_check_out_time').default('09:00:00'),
     createdAt: timestamp("created_at").defaultNow().notNull(),

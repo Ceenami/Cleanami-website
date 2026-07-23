@@ -3,6 +3,10 @@ import "server-only";
 import { PricingService } from "@/lib/services/pricing.service";
 import { SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import {
+  applyFirstCleanDiscount,
+  getFirstCleanDiscountPercent,
+} from "@/lib/pricing/first-clean-discount";
 import { customers } from "@/db/schemas";
 import { getDbOrNull } from "@/db";
 import { eq } from "drizzle-orm";
@@ -102,6 +106,14 @@ export async function createPaymentIntentForSignup(
     };
   }
 
+  // Admin-configurable first-clean discount (task 1.9): applies to the prepaid
+  // first clean only (this is the signup charge). 0% by default.
+  const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
+  const chargeAmountCents = applyFirstCleanDiscount(
+    serverAmountInCents,
+    firstCleanDiscountPercent
+  );
+
   // Re-enforce the 7-day first-clean buffer server-side (the client date picker
   // is not trusted). Compare calendar days in US Eastern (ops timezone).
   const firstCleanDate = normalizedFormData.firstCleanDate;
@@ -198,7 +210,7 @@ export async function createPaymentIntentForSignup(
   };
 
   const paymentIntent = await stripe.paymentIntents.create({
-    amount: serverAmountInCents,
+    amount: chargeAmountCents,
     currency: "usd",
     customer: stripeCustomer.id,
     automatic_payment_methods: {
@@ -214,6 +226,6 @@ export async function createPaymentIntentForSignup(
 
   return {
     clientSecret: paymentIntent.client_secret,
-    amountInCents: serverAmountInCents,
+    amountInCents: chargeAmountCents,
   };
 }

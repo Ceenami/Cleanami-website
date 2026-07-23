@@ -279,6 +279,7 @@ export type UpdatePropertyInput = {
   iCalUrl?: string | null;
   defaultCheckInTime?: string;
   defaultCheckOutTime?: string;
+  priceOverrideCents?: number | null;
 };
 
 export async function updateProperty(
@@ -308,6 +309,7 @@ export async function updateProperty(
     "iCalUrl",
     "defaultCheckInTime",
     "defaultCheckOutTime",
+    "priceOverrideCents",
   ];
   for (const key of editableKeys) {
     if (input[key] !== undefined) patch[key] = input[key];

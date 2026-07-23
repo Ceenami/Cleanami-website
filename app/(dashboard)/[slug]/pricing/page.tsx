@@ -7,7 +7,9 @@ import {
 } from "@/db/schemas";
 import { format } from "date-fns";
 import { PricingUploadModal } from "@/components/dashbboard/admin/ui/PricingUploadModal";
+import { FirstCleanDiscountControl } from "@/components/dashbboard/admin/ui/FirstCleanDiscountControl";
 import { PRICING_BUCKET, createSignedUrls } from "@/lib/storage/signed-url";
+import { getFirstCleanDiscountPercent } from "@/lib/pricing/first-clean-discount";
 
 export default async function AdminPricingPage() {
   const [
@@ -23,6 +25,8 @@ export default async function AdminPricingPage() {
     db.query.hotTubPricingRules.findMany(),
     db.query.pricingUploads.findMany({ orderBy: desc(pricingUploads.createdAt), limit: 10 }),
   ]);
+
+  const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
 
   // pricing-files is a private bucket; sign the stored paths for the file links.
   const uploadSignedUrls = await createSignedUrls(
@@ -82,6 +86,11 @@ export default async function AdminPricingPage() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">First-Clean Discount</h2>
+        <FirstCleanDiscountControl initialPercent={firstCleanDiscountPercent} />
       </div>
 
       <div>
