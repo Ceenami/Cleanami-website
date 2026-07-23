@@ -83,6 +83,7 @@ export function buildJobStaffingUpdate(input: {
       requiresManualStaffing: staffing.requiresManualStaffing,
       bedroomBathroomTotal: staffing.bedroomBathroomTotal,
       baseCleaningHours: staffing.baseCleaningHours,
+      inUnitLaundryHours: staffing.inUnitLaundryHours,
       offSiteLaundryHours: staffing.offSiteLaundryHours,
       hotTubHours: staffing.hotTubHours,
     },

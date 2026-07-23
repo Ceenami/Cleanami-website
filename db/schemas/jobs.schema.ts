@@ -36,6 +36,7 @@ export const jobs = pgTable('jobs', {
     requiresManualStaffing?: boolean;
     bedroomBathroomTotal?: number;
     baseCleaningHours?: number;
+    inUnitLaundryHours?: number;
     offSiteLaundryHours?: number;
     hotTubHours?: number;
   }>(),

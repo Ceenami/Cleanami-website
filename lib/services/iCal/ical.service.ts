@@ -386,6 +386,7 @@ export class ICalService {
           requiresManualStaffing: jobDetails.requiresManualStaffing,
           bedroomBathroomTotal: jobDetails.bedroomBathroomTotal,
           baseCleaningHours: jobDetails.baseCleaningHours,
+          inUnitLaundryHours: jobDetails.inUnitLaundryHours,
           offSiteLaundryHours: jobDetails.offSiteLaundryHours,
           hotTubHours: jobDetails.hotTubHours,
         },
