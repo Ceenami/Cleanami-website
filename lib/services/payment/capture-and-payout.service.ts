@@ -15,6 +15,8 @@ import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
 import { computeReserveRate } from "@/lib/services/payment/reserve";
 import { sendJobCompletionEmail } from "@/lib/services/email.service";
+import { evaluateArrival } from "@/lib/services/gps/geofence";
+import { reconcileEvidenceAccountability } from "@/lib/services/gps/reconcile-evidence";
 
 /**
  * Roles that actually worked the job and are paid. Shadow backups (and unaccepted
@@ -117,6 +119,22 @@ export async function captureAndCreatePayouts(
     };
   }
 
+  // Derive arrival lateness server-side rather than trusting the value the
+  // cleaner app wrote, which feeds the late-pay deduction below. Pure date math
+  // — no I/O, so it always resolves; fall back to the stored value only when
+  // there is no timestamp to compute from. See reconcileEvidenceAccountability
+  // for the fuller (best-effort) recompute of the geofence flags + admin alert.
+  const serverArrival = evidence.gpsCheckInTimestamp
+    ? evaluateArrival(job.checkInTime, evidence.gpsCheckInTimestamp)
+    : null;
+  const arrivalDelayMinutes =
+    serverArrival?.delayMinutes ?? evidence.arrivalDelayMinutes;
+
+  // Overwrite the stored accountability fields with server-derived values and
+  // flag out-of-geofence / late check-ins for admin review. Best-effort: this
+  // never throws and never blocks capture.
+  await reconcileEvidenceAccountability({ job, evidence });
+
   // ====================================================================
   // CASE 1: PREPAID JOB — No paymentIntentId
   // ====================================================================
@@ -167,7 +185,7 @@ export async function captureAndCreatePayouts(
           role: assignment.role,
           laundryLoads: job.addonsSnapshot?.laundryLoads,
           urgentBonus: assignment.urgentBonus,
-          arrivalDelayMinutes: evidence.arrivalDelayMinutes,
+          arrivalDelayMinutes,
         });
 
         return db
@@ -319,7 +337,7 @@ export async function captureAndCreatePayouts(
         role: assignment.role,
         laundryLoads: job.addonsSnapshot?.laundryLoads,
         urgentBonus: assignment.urgentBonus,
-        arrivalDelayMinutes: evidence.arrivalDelayMinutes,
+        arrivalDelayMinutes,
       });
 
       return db
