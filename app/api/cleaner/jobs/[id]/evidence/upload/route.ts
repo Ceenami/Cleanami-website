@@ -5,6 +5,7 @@ import {
   getCleanerAuth,
   requireCleanerJobAssignment,
 } from "@/lib/cleaner-auth";
+import { EVIDENCE_BUCKET, createSignedUrl } from "@/lib/storage/signed-url";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_SIZE = 10 * 1024 * 1024;
@@ -61,7 +62,7 @@ export async function POST(
     const filePath = `${cleanerId}/${jobId}/${roomKey}/${Date.now()}_${file.name}`;
 
     const { error: uploadError } = await supabase.storage
-      .from("evidence-photos")
+      .from(EVIDENCE_BUCKET)
       .upload(filePath, file, { upsert: false });
 
     if (uploadError) {
@@ -72,11 +73,11 @@ export async function POST(
       );
     }
 
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("evidence-photos").getPublicUrl(filePath);
+    // Persist the object path (returned as `path`); the bucket is private, so
+    // hand back a short-lived signed URL only for immediate client preview.
+    const previewUrl = await createSignedUrl(EVIDENCE_BUCKET, filePath);
 
-    return NextResponse.json({ url: publicUrl, roomKey });
+    return NextResponse.json({ path: filePath, url: previewUrl, roomKey });
   } catch (err) {
     console.error("[POST /api/cleaner/jobs/[id]/evidence/upload]", err);
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });

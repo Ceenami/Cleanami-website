@@ -66,18 +66,6 @@ export function getAssignmentEligibilityLabel(cleaner: {
   return "Eligible (admin override)";
 }
 
-export function hasRequiredLegalDocs(
-  legalDocsSigned: typeof cleaners.$inferSelect.legalDocsSigned
-): boolean {
-  if (!legalDocsSigned) return false;
-  return Boolean(
-    legalDocsSigned.w9Url &&
-      legalDocsSigned.liabilityWaiverUrl &&
-      legalDocsSigned.gpsConsentUrl &&
-      legalDocsSigned.contractorAgreementUrl
-  );
-}
-
 export function isCleanerPortalUnlocked(
   cleaner: Pick<
     typeof cleaners.$inferSelect,

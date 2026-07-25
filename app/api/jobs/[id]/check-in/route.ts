@@ -1,21 +1,20 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { cleaners, evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const user = data?.claims;
-  const userRole = user?.user_metadata?.role;
-
-  if (userRole !== "admin" && userRole !== "super_admin") {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
+  const { isAdmin, error: authError } = await getAdminAuth(request);
+  if (!isAdmin) {
+    return NextResponse.json(
+      { error: authError ?? "Unauthorized" },
+      { status: 401 }
+    );
+  }
 
   const { id: jobId } = await params;
 
@@ -34,7 +33,10 @@ export async function POST(
         .select({ cleanerId: jobsToCleaners.cleanerId })
         .from(jobsToCleaners)
         .where(
-          eq(jobsToCleaners.jobId, jobId) && eq(jobsToCleaners.role, "primary")
+          and(
+            eq(jobsToCleaners.jobId, jobId),
+            eq(jobsToCleaners.role, "primary")
+          )
         );
 
       const primaryCleanerId = assignments[0]?.cleanerId;

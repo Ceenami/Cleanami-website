@@ -35,3 +35,15 @@ export const mergePropertiesSchema = z.object({
 export const deletePropertyParamsSchema = z.object({
   propertyId: propertyIdSchema,
 });
+
+/** Same Postgres-UUID shape as `propertyIdSchema`, worded for customers. */
+export const customerIdSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "Invalid customer record"
+  );
+
+export const deleteCustomerParamsSchema = z.object({
+  customerId: customerIdSchema,
+});

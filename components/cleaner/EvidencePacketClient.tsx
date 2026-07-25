@@ -24,11 +24,15 @@ type EvidenceFormData = {
     bedCount: number;
     bathCount: string | number;
     hasHotTub: boolean;
+    laundryType: string;
     useDefaultChecklist: boolean;
   };
   checklistFiles: { id: string; fileName: string; url: string }[];
   checklistItems: ChecklistItem[];
+  // Object paths that get persisted on submit.
   roomPhotos: RoomPhotosMap;
+  // Signed URLs, index-aligned with roomPhotos, for on-screen preview only.
+  roomPhotoPreviews: RoomPhotosMap;
   cleanerNotes: string;
   isSubmitted: boolean;
 };
@@ -38,6 +42,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
   const [formData, setFormData] = useState<EvidenceFormData | null>(null);
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
   const [roomPhotos, setRoomPhotos] = useState<RoomPhotosMap>({});
+  const [roomPhotoPreviews, setRoomPhotoPreviews] = useState<RoomPhotosMap>({});
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -53,6 +58,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         setFormData(data);
         setChecklistItems(data.checklistItems);
         setRoomPhotos(data.roomPhotos);
+        setRoomPhotoPreviews(data.roomPhotoPreviews ?? {});
         setNotes(data.cleanerNotes);
       } catch {
         setError("Could not load evidence form.");
@@ -101,7 +107,11 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
         setRoomPhotos((prev) => ({
           ...prev,
-          [roomKey]: [...(prev[roomKey] ?? []), data.url as string],
+          [roomKey]: [...(prev[roomKey] ?? []), data.path as string],
+        }));
+        setRoomPhotoPreviews((prev) => ({
+          ...prev,
+          [roomKey]: [...(prev[roomKey] ?? []), (data.url as string) ?? ""],
         }));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Upload failed");
@@ -114,6 +124,10 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
   const removePhoto = (roomKey: string, index: number) => {
     setRoomPhotos((prev) => ({
+      ...prev,
+      [roomKey]: (prev[roomKey] ?? []).filter((_, i) => i !== index),
+    }));
+    setRoomPhotoPreviews((prev) => ({
       ...prev,
       [roomKey]: (prev[roomKey] ?? []).filter((_, i) => i !== index),
     }));
@@ -244,6 +258,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         <h2 className="text-sm font-semibold text-gray-900">Photos by room</h2>
         {roomRequirements.map((req) => {
           const photos = roomPhotos[req.roomKey] ?? [];
+          const previews = roomPhotoPreviews[req.roomKey] ?? [];
           const met = photos.length >= req.minPhotos;
           const isUploading = uploadingRoom === req.roomKey;
 
@@ -273,11 +288,11 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
               {photos.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-2">
-                  {photos.map((url, index) => (
-                    <div key={url} className="relative">
+                  {photos.map((path, index) => (
+                    <div key={path} className="relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={url}
+                        src={previews[index] ?? ""}
                         alt={`${req.label} ${index + 1}`}
                         className="h-16 w-16 rounded-lg object-cover"
                       />

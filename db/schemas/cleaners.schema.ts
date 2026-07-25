@@ -24,7 +24,8 @@ export const cleaners = pgTable("cleaners", {
   profilePhotoUrl: text("profile_photo_url"),
   experienceYears: integer("experience_years"),
   hasHotTubCert: boolean("has_hot_tub_cert").default(false),
-  reliabilityScore: numeric("reliability_score", { precision: 5, scale: 2 }), 
+  hasLaundryLeadCert: boolean("has_laundry_lead_cert").default(false).notNull(),
+  reliabilityScore: numeric("reliability_score", { precision: 5, scale: 2 }),
   onCallStatus: onCallStatusEnum("on_call_status").default('unavailable'),
   stripeAccountId: text("stripe_account_id").unique(),
   stripeOnboardingComplete: boolean("stripe_onboarding_complete").default(false),
@@ -52,6 +53,12 @@ export const cleaners = pgTable("cleaners", {
   eligibleForAssignments: boolean("eligible_for_assignments").default(false).notNull(),
   /** Period start (Monday) for which the one-time late catch-up override was consumed */
   availabilityLateOverridePeriodStart: date("availability_late_override_period_start"),
+  /** Per-cleaner hourly pay rate in cents. Starts at $17.00; raised via §7/§8 rule. */
+  hourlyRateCents: integer("hourly_rate_cents").default(1700).notNull(),
+  /** Used to compute annual raise eligibility (anniversary). */
+  hireDate: date("hire_date"),
+  /** Last time the raise rule was evaluated for this cleaner. */
+  rateReviewedAt: date("rate_reviewed_at"),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

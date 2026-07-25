@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import { db } from "@/db";
 import { cleaners } from "@/db/schemas";
 import { eq } from "drizzle-orm";
@@ -10,18 +9,16 @@ import {
 import { CleanerLayoutShell } from "@/components/cleaner/CleanerLayoutShell";
 import { CleanerRouteGuard } from "@/components/cleaner/CleanerRouteGuard";
 import { getCleanerAuth } from "@/lib/cleaner-auth";
+import { getSessionRole } from "@/lib/auth/server-roles";
 
 export default async function CleanerLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const user = data?.claims;
-  const userRole = user?.user_metadata?.role;
-
-  if (!user || userRole !== "cleaner") {
+  // Authoritative role from the DB (`users.role`), not `user_metadata`.
+  const userRole = await getSessionRole();
+  if (userRole !== "cleaner") {
     redirect("/sign-in");
   }
 

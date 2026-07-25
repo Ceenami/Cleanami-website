@@ -21,6 +21,7 @@ import { notifications } from "./notifications.schema";
 import { badges } from "./badges.schema";
 import { userPreferences } from "./userPreferences.schema";
 import { disputes } from "./disputes.schema";
+import { propertyCleaners } from "./propertyCleaners.schema";
 
 // --- No changes needed for customer, property, checklist, or subscription relations ---
 export const customerRelations = relations(customers, ({ many }) => ({
@@ -35,7 +36,22 @@ export const propertyRelations = relations(properties, ({ one, many }) => ({
   }),
   checklistFiles: many(checklistFiles),
   subscriptions: many(subscriptions),
+  propertyCleaners: many(propertyCleaners),
 }));
+
+export const propertyCleanerRelations = relations(
+  propertyCleaners,
+  ({ one }) => ({
+    property: one(properties, {
+      fields: [propertyCleaners.propertyId],
+      references: [properties.id],
+    }),
+    cleaner: one(cleaners, {
+      fields: [propertyCleaners.cleanerId],
+      references: [cleaners.id],
+    }),
+  })
+);
 
 export const checklistFileRelations = relations(checklistFiles, ({ one }) => ({
   property: one(properties, {
@@ -99,6 +115,7 @@ export const cleanerRelations = relations(cleaners, ({ one, many }) => ({
   }),
   disputes: many(disputes),
   userPreferences: one(userPreferences), // Add this line
+  propertyCleaners: many(propertyCleaners),
 }));
 
 // New relation definition for the join table

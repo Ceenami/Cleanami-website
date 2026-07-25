@@ -1,4 +1,7 @@
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
+import {
+  calculateJobStaffing,
+  type HotTubTimeAdditions,
+} from "@/lib/pricing/staffing-logic";
 import { differenceInDays, startOfDay } from "date-fns";
 
 export type JobStaffingProperty = {
@@ -40,6 +43,8 @@ export function buildJobStaffingUpdate(input: {
   checkInTime: Date;
   subscriptionStart: Date;
   existingSnapshot?: Record<string, unknown> | null;
+  /** From `loadHotTubTimeAdditions()`; omit to use the spec defaults. */
+  hotTubTimeAdditions?: HotTubTimeAdditions | null;
 }) {
   const staffing = calculateJobStaffing({
     bedCount: input.property.bedCount,
@@ -47,6 +52,7 @@ export function buildJobStaffingUpdate(input: {
     sqFt: input.property.sqFt,
     laundryType: input.property.laundryType,
     hotTubServiceLevel: input.property.hotTubServiceLevel,
+    hotTubTimeAdditions: input.hotTubTimeAdditions,
     hotTubDeepClean: input.property.hotTubServiceLevel
       ? isHotTubDeepCleanDue(
           input.checkInTime,
@@ -77,6 +83,7 @@ export function buildJobStaffingUpdate(input: {
       requiresManualStaffing: staffing.requiresManualStaffing,
       bedroomBathroomTotal: staffing.bedroomBathroomTotal,
       baseCleaningHours: staffing.baseCleaningHours,
+      inUnitLaundryHours: staffing.inUnitLaundryHours,
       offSiteLaundryHours: staffing.offSiteLaundryHours,
       hotTubHours: staffing.hotTubHours,
     },

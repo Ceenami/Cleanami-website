@@ -36,6 +36,7 @@ export const jobs = pgTable('jobs', {
     requiresManualStaffing?: boolean;
     bedroomBathroomTotal?: number;
     baseCleaningHours?: number;
+    inUnitLaundryHours?: number;
     offSiteLaundryHours?: number;
     hotTubHours?: number;
   }>(),
@@ -56,6 +57,7 @@ export const jobsToCleaners = pgTable('jobs_to_cleaners', {
   cleanerId: uuid('cleaner_id').notNull().references(() => cleaners.id, { onDelete: 'cascade' }),
   role: jobCleanerRoleEnum('role').notNull(),
   urgentBonus: boolean('urgent_bonus').default(false),
+  isTeamLeader: boolean('is_team_leader').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({

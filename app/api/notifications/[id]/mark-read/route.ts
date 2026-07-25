@@ -1,15 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { markUserNotificationRead } from "@/lib/queries/user-notifications";
-
-function roleFromClaims(claims: Record<string, unknown> | undefined) {
-  const metadata = claims?.user_metadata;
-  if (metadata && typeof metadata === "object" && "role" in metadata) {
-    const role = (metadata as { role?: unknown }).role;
-    if (typeof role === "string") return role;
-  }
-  return undefined;
-}
+import { isAdminRole } from "@/lib/auth/roles";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 
 export async function POST(
   _request: NextRequest,
@@ -24,14 +17,13 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userRole = roleFromClaims(claims);
-    if (userRole !== "admin" && userRole !== "super_admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const { id } = await params;
     const email =
       typeof claims.email === "string" ? claims.email : undefined;
+    const userRole = await resolveRoleFromDatabase(claims.sub, email);
+    if (!isAdminRole(userRole)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const updated = await markUserNotificationRead(claims.sub, id, {
       email,

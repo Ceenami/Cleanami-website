@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
+import { isAdminRole, trustedRoleFromClaims } from "@/lib/auth/roles";
 
 const allowedOrigins = [
   'capacitor://localhost',
@@ -72,7 +73,10 @@ export async function updateSession(request: NextRequest) {
   // with the Supabase client, your users may be randomly logged out.
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
-  const userRole = user?.user_metadata?.role;
+  // Authoritative-at-the-edge role: `app_metadata.role` is set only by the
+  // service role and cannot be self-edited by the client (unlike
+  // `user_metadata.role`). Node route guards additionally re-check `users.role`.
+  const userRole = trustedRoleFromClaims(user);
 
   // const protectedCustomerRoutesList = [
   //   "/customers",
@@ -112,7 +116,7 @@ export async function updateSession(request: NextRequest) {
   const isCleanerApiRoute =
     pathname === '/api/cleaner' || pathname.startsWith('/api/cleaner/');
 
-  const isAdmin = userRole === 'super_admin' || userRole === 'admin';
+  const isAdmin = isAdminRole(userRole);
   const isCleaner = userRole === 'cleaner';
 
 

@@ -2,10 +2,11 @@ import { StepsProps } from "@/lib/validations/bookng-modal";
 import { DayPicker } from 'react-day-picker';
 import 'react-day-picker/dist/style.css';
 import { addDays, format } from 'date-fns';
-import { CalendarIcon, ShieldCheck } from 'lucide-react';
+import { CalendarIcon, Info, ShieldCheck } from 'lucide-react';
 import { StepFeedback } from "./StepFeedback";
 import { FounderCard } from "../../FounderCard";
 import { SubscriptionCard } from "./SubscriptionCard";
+import { SUBSCRIPTION_DISCOUNT_TIERS } from "@/lib/pricing/subscription-discount";
 
 interface Step5Props extends StepsProps {
   /** Called when user books a call */
@@ -14,15 +15,16 @@ interface Step5Props extends StepsProps {
   onContinueSetup?: () => void;
 }
 
-const LAUNCH_DATE = new Date('2025-10-22');
-const sevenDaysFromNow = addDays(new Date(), 7);
-
-const firstAvailableDay = sevenDaysFromNow < LAUNCH_DATE 
-  ? LAUNCH_DATE 
-  : sevenDaysFromNow;
+/** Mandatory 7-day setup buffer before the first clean (re-enforced server-side). */
+export const FIRST_CLEAN_BUFFER_DAYS = 7;
 
 /** 1 month minimum (first month), up to 6 months. */
 const SUBSCRIPTION_LENGTH_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
+
+/** Shortest qualifying term first, so the copy reads as a ladder. */
+const DISCOUNT_TIERS_ASCENDING = [...SUBSCRIPTION_DISCOUNT_TIERS].sort(
+  (a, b) => a.minMonths - b.minMonths
+);
 
 export const Step5Subscription = ({ 
   formData, 
@@ -44,12 +46,17 @@ export const Step5Subscription = ({
   const hasSelectedDate = !!formData.firstCleanDate;
   const selectedMonths = formData.subscriptionMonths ?? 1;
 
+  // First selectable day = today + 7-day buffer. Computed at render (no stale
+  // hardcoded launch date); the same rule is re-enforced server-side.
+  const firstAvailableDay = addDays(new Date(), FIRST_CLEAN_BUFFER_DAYS);
+
   return (
     <div className="space-y-8">
       <div>
         <h3 className="text-lg font-medium text-gray-900">Subscription Length</h3>
         <p className="mt-2 text-sm text-gray-600">
-          Choose how long you want to subscribe. The first month is the minimum.
+          Choose how long you&apos;d like to subscribe for. One month is the
+          minimum, and longer terms cost less per clean.
         </p>
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {SUBSCRIPTION_LENGTH_OPTIONS.map((months) => (
@@ -61,10 +68,52 @@ export const Step5Subscription = ({
             />
           ))}
         </div>
-        <p className="mt-3 text-sm text-gray-500">
-          You pay for your first clean now. Later cleans are charged as they happen
-          during your {selectedMonths}-month term.
+        <p className="mt-3 text-sm text-gray-600">
+          {DISCOUNT_TIERS_ASCENDING.map((tier, index) => (
+            <span key={tier.minMonths}>
+              {index > 0 && " "}
+              Subscribe for{" "}
+              <span className="font-medium">
+                {tier.minMonths} months{index === 0 ? " or more" : ""}
+              </span>{" "}
+              and save{" "}
+              <span className="font-medium">
+                {Math.round(tier.rate * 100)}%
+              </span>{" "}
+              on every clean.
+            </span>
+          ))}
         </p>
+
+        {/* Commitment + cancellation transparency, per the functionality spec:
+            customers must be told before signing up that a term can be
+            cancelled at renewal but not mid-term, and that cleans inside an
+            active term are not skippable or refundable without admin approval. */}
+        <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+          <div className="flex items-start gap-3">
+            <Info className="mt-0.5 h-5 w-5 flex-shrink-0 text-gray-500" />
+            <div>
+              <p className="text-sm font-medium text-gray-800">
+                What your {selectedMonths}-month subscription means
+              </p>
+              <ul className="mt-2 space-y-1.5 text-sm text-gray-600">
+                <li>
+                  You pay for your first clean today. Every clean after that is
+                  charged individually, as each turnover happens.
+                </li>
+                <li>
+                  You can cancel when your term comes up for renewal. A
+                  subscription can&apos;t be cancelled part-way through its term.
+                </li>
+                <li>
+                  Cleans booked inside an active term can&apos;t be skipped or
+                  refunded unless we approve it — if your plans change, just get
+                  in touch and we&apos;ll help.
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div>
@@ -84,7 +133,7 @@ export const Step5Subscription = ({
         </div>
 
         <p className="mt-4 text-sm text-gray-600">
-          To ensure cleaner availability, there is a mandatory 7-day buffer before your first turnover can be scheduled. October 21st is our first available date. We&apos;ll contact you with a welcome call.
+          To ensure cleaner availability, there is a mandatory {FIRST_CLEAN_BUFFER_DAYS}-day buffer before your first turnover can be scheduled. Our first available date is {format(firstAvailableDay, 'PPP')}. We&apos;ll contact you with a welcome call.
         </p>
         
         <div className="mt-4 flex flex-col gap-8 items-start">

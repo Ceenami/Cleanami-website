@@ -15,6 +15,13 @@ import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer-account.service";
+import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
+import { PricingService } from "@/lib/services/pricing.service";
+import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import { applyFirstCleanDiscount } from "@/lib/pricing/first-clean-discount";
+import { recordPromoRedemptionByCode } from "@/lib/services/promo-code.service";
+
+const pricingService = new PricingService();
 
 export type CompleteOnboardingResult =
   | {
@@ -164,6 +171,74 @@ export async function completeOnboardingForPayment(
       };
     }
 
+    // Verify the PaymentIntent actually belongs to THIS booking and was charged
+    // the correct amount — not merely that some PI "succeeded" (2.5 / PAY-6).
+    // Without this, a third party's succeeded PI id could be replayed to mint a
+    // subscription bound to attacker-chosen form data.
+    if (paymentIntent.currency !== "usd") {
+      return {
+        success: false,
+        error: "Payment currency mismatch. Please contact support.",
+      };
+    }
+
+    const piEmail =
+      typeof paymentIntent.metadata?.customer_email === "string"
+        ? paymentIntent.metadata.customer_email
+        : null;
+    if (
+      !piEmail ||
+      piEmail.toLowerCase() !== validatedData.email.toLowerCase()
+    ) {
+      return {
+        success: false,
+        error:
+          "This payment does not match the submitted booking. Please contact support.",
+      };
+    }
+
+    const expectedPrice = await pricingService.calculatePrice(
+      normalizeSignupFormDataForPricing(validatedData)
+    );
+    const expectedAmountInCents = Math.round(expectedPrice.totalPerClean * 100);
+
+    // The charge is the calculated price minus the two first-clean-only
+    // discounts, both of which were resolved server-side when the intent was
+    // created and stamped on its metadata (create-payment-intent.service.ts).
+    // Re-deriving them from the metadata rather than from live config is
+    // deliberate: an admin changing the first-clean discount, or a promo code
+    // expiring, between checkout and completion must not invalidate a booking
+    // the customer has already paid for. Metadata is written with the secret
+    // key, so it is ours, not the client's. Intents created before these keys
+    // existed read as zero and behave exactly as they did before.
+    const metadataCents = (key: string): number => {
+      const raw = paymentIntent.metadata?.[key];
+      const parsed = raw === undefined ? 0 : Number(raw);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+    };
+
+    const firstCleanDiscountPercent = Math.min(
+      100,
+      metadataCents("first_clean_discount_percent")
+    );
+    const expectedAfterFirstClean = applyFirstCleanDiscount(
+      expectedAmountInCents,
+      firstCleanDiscountPercent
+    );
+    const promoDiscountCents = Math.min(
+      metadataCents("promo_discount_cents"),
+      expectedAfterFirstClean
+    );
+    const expectedChargeCents = expectedAfterFirstClean - promoDiscountCents;
+
+    if (paymentIntent.amount !== expectedChargeCents) {
+      return {
+        success: false,
+        error:
+          "The payment amount does not match the expected price for this booking. Please contact support.",
+      };
+    }
+
     const {
       name,
       email,
@@ -287,6 +362,25 @@ export async function completeOnboardingForPayment(
       return { customer, property, subscription };
     });
 
+    // Burn the promo code now that the booking is real. Deliberately after the
+    // subscription exists rather than at checkout, so an abandoned payment form
+    // never consumes a redemption. Idempotent on the PaymentIntent id, and
+    // best-effort: the customer has already been charged the discounted amount,
+    // so a bookkeeping failure must not fail the onboarding.
+    const redeemedPromoCode = paymentIntent.metadata?.promo_code;
+    if (redeemedPromoCode) {
+      await recordPromoRedemptionByCode({
+        code: redeemedPromoCode,
+        customerEmail: email,
+        customerId: result.customer.id,
+        subscriptionId: result.subscription.id,
+        paymentIntentId,
+        originalAmountCents: expectedAmountInCents,
+        discountAmountCents: promoDiscountCents,
+        finalAmountCents: paymentIntent.amount,
+      });
+    }
+
     const fileUploadResults: Array<{
       fileName: string;
       success: boolean;
@@ -370,6 +464,19 @@ export async function completeOnboardingForPayment(
 
     if (!accountResult.success) {
       return { success: false, error: accountResult.error };
+    }
+
+    // Booking confirmation email (best-effort; never blocks onboarding).
+    try {
+      await sendBookingConfirmationEmail({
+        to: email,
+        name,
+        propertyAddress: result.property.address,
+        firstCleanDate: firstCleanDate.toDateString(),
+        amount: `$${(paymentIntent.amount / 100).toFixed(2)}`,
+      });
+    } catch (emailError) {
+      console.error("[complete-onboarding] confirmation email failed:", emailError);
     }
 
     return {

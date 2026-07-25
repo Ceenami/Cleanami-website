@@ -141,8 +141,14 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
 
   const pricingFormSnapshot = useMemo(() => JSON.stringify(formData), [formData]);
 
-  // Fetch price when form data changes
+  // Fetch price when form data changes.
+  //
+  // The displayed price must never disappear or go backwards: a failed request
+  // leaves the previous price on screen, and a slow response that is overtaken
+  // by a newer one is discarded rather than clobbering the fresher value.
   useEffect(() => {
+    let superseded = false;
+
     const fetchPrice = async () => {
       try {
         const res = await fetch("/api/pricing", {
@@ -150,12 +156,15 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(serializeSignupFormDataForServer(formData)),
         });
+        if (superseded) return;
         if (res.ok) {
           const details = (await res.json()) as PriceDetails | null;
-          setPriceDetails(details);
+          if (!superseded && details) {
+            setPriceDetails(details);
+          }
         }
       } catch {
-        // price fetch errors are non-fatal
+        // Price fetch errors are non-fatal — keep showing the last good price.
       }
     };
 
@@ -164,6 +173,7 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     }, 500);
 
     return () => {
+      superseded = true;
       clearTimeout(timerId);
     };
   }, [pricingFormSnapshot, formData]);
@@ -187,6 +197,30 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
         checklistFile: ["Please either upload a checklist or select the default option."],
       });
       return false;
+    }
+
+    if (step === 4) {
+      // Addons. A laundry service without a load count would price laundry at
+      // $0 and save the property with a null load count, so require it here —
+      // before the card is touched. `signupFormSchema` cannot enforce this for
+      // us: its only server-side parse runs in complete-onboarding, which is
+      // AFTER the charge, so a rejection there strands a paid customer.
+      const needsLoads =
+        formData.laundryService === "in_unit" ||
+        formData.laundryService === "off_site";
+      const loads = Number(formData.laundryLoads);
+
+      if (needsLoads && !(Number.isInteger(loads) && loads >= 1)) {
+        setErrors({
+          laundryLoads: [
+            "Enter how many loads per turnover (at least 1), or choose no laundry service.",
+          ],
+        });
+        return false;
+      }
+
+      setErrors({});
+      return true;
     }
 
     const fieldsToValidate = stepFields[step];
@@ -387,6 +421,7 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
             <Step7Payment
               priceDetails={priceDetails}
               formData={formData}
+              setFormData={setFormData}
               onPaymentSuccess={handlePaymentSuccess}
               paymentFinalizing={isSaving}
               {...founderCardProps}

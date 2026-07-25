@@ -6,7 +6,11 @@ import * as webcal from "node-ical";
 import { VEvent } from "node-ical";
 import { fromZonedTime } from "date-fns-tz";
 import { differenceInDays, startOfDay } from "date-fns";
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
+import {
+  calculateJobStaffing,
+  type HotTubTimeAdditions,
+} from "@/lib/pricing/staffing-logic";
+import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
 
 type NewJob = typeof jobs.$inferInsert;
 type DrizzleDb = NodePgDatabase<typeof schema>;
@@ -41,6 +45,26 @@ const createFloridaDate = (date: Date, timeStr: string): Date => {
 
   return utcDate;
 };
+
+/**
+ * The cleaning job's start anchor = the guest checkout time. For date-only
+ * events this normalizes to the property's default checkout time in ET.
+ * Must match the `jobStartTime` used when jobs are created (see
+ * `_processAndSaveEventsInBatches`) so composite UIDs line up.
+ */
+export const getEventJobStartTime = (event: VEvent): Date =>
+  isDateOnly(event)
+    ? createFloridaDate(event.end, DEFAULT_CHECKOUT_TIME)
+    : event.end;
+
+/**
+ * Composite calendar UID stored on each job: `${event.uid}_${jobStartISO}`.
+ * Cancellation detection MUST compute the current calendar's keys with this
+ * same function, or it will compare composite-vs-raw and wrongly flag every
+ * job as cancelled (BUG-A).
+ */
+export const getEventCompositeUid = (event: VEvent): string =>
+  `${event.uid}_${getEventJobStartTime(event).toISOString()}`;
 
 type SyncInput = {
   subscriptionId?: string;
@@ -245,7 +269,8 @@ export class ICalService {
   private _calculateJobDetails(
     property: PropertyDetails,
     jobDate: Date,
-    subscriptionStartDate: Date
+    subscriptionStartDate: Date,
+    hotTubTimeAdditions?: HotTubTimeAdditions | null
   ): CalculatedJobDetails {
     const isDeepClean = property.hotTubServiceLevel
       ? this._isHotTubDeepCleanDue(
@@ -262,6 +287,7 @@ export class ICalService {
       laundryType: property.laundryType,
       hotTubServiceLevel: property.hotTubServiceLevel,
       hotTubDeepClean: isDeepClean,
+      hotTubTimeAdditions,
     });
   }
 
@@ -289,6 +315,9 @@ export class ICalService {
       eventStartDate.setHours(0, 0, 0, 0);
       return eventStartDate.getTime() >= bufferDate.getTime();
     });
+
+    // Loaded once for the whole batch rather than per generated job.
+    const hotTubTimeAdditions = await loadHotTubTimeAdditions();
 
     const allJobsToInsert: NewJob[] = filteredEvents.map((event, index) => {
       const isEndDateOnly = isDateOnly(event);
@@ -328,7 +357,8 @@ export class ICalService {
       const jobDetails = this._calculateJobDetails(
         property,
         jobStartTime,
-        context.subscriptionStartDate
+        context.subscriptionStartDate,
+        hotTubTimeAdditions
       );
 
       // "Deduplicate jobs using (UID + end_date)"
@@ -356,6 +386,7 @@ export class ICalService {
           requiresManualStaffing: jobDetails.requiresManualStaffing,
           bedroomBathroomTotal: jobDetails.bedroomBathroomTotal,
           baseCleaningHours: jobDetails.baseCleaningHours,
+          inUnitLaundryHours: jobDetails.inUnitLaundryHours,
           offSiteLaundryHours: jobDetails.offSiteLaundryHours,
           hotTubHours: jobDetails.hotTubHours,
         },

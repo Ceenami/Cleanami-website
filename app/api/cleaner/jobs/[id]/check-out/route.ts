@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/db";
 import { evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
 import {
@@ -8,10 +9,23 @@ import {
 } from "@/lib/cleaner-auth";
 import { validateEvidenceComplete } from "@/lib/cleaner/evidence";
 import { getCleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
+import {
+  evaluateGeofence,
+  recordGpsLog,
+  type DeviceLocation,
+} from "@/lib/services/gps/geofence";
 import { and, eq } from "drizzle-orm";
 
+const locationSchema = z
+  .object({
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    accuracy: z.number().nonnegative().nullable().optional(),
+  })
+  .nullable();
+
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { cleanerId, error } = await getCleanerAuth();
@@ -79,6 +93,20 @@ export async function POST(
 
     const now = new Date();
 
+    // Optional device location at check-out (record & flag, never block).
+    let device: DeviceLocation | null = null;
+    try {
+      const rawBody = await request.json();
+      const parsed = locationSchema.safeParse(
+        rawBody?.location ?? rawBody ?? null
+      );
+      if (parsed.success && parsed.data) device = parsed.data;
+    } catch {
+      device = null;
+    }
+
+    const geofence = await evaluateGeofence(property.id, device);
+
     await db.transaction(async (tx) => {
       await tx
         .update(jobs)
@@ -95,9 +123,31 @@ export async function POST(
           gpsCheckOutTimestamp: now,
           status: "complete",
           updatedAt: now,
+          checkOutLatitude: device ? device.latitude.toString() : null,
+          checkOutLongitude: device ? device.longitude.toString() : null,
+          checkOutAccuracyMeters:
+            device?.accuracy != null ? device.accuracy.toString() : null,
+          checkOutDistanceMiles:
+            geofence.distanceMiles != null
+              ? geofence.distanceMiles.toString()
+              : null,
+          checkOutWithinGeofence: geofence.withinGeofence,
         })
         .where(eq(evidencePackets.jobId, jobId));
     });
+
+    if (device) {
+      await recordGpsLog({
+        jobId,
+        cleanerId,
+        device,
+        activityType: "departure",
+        metadata: {
+          distanceMiles: geofence.distanceMiles,
+          withinGeofence: geofence.withinGeofence,
+        },
+      });
+    }
 
     const updatedJob = await getCleanerJobDetail(cleanerId, jobId);
     return NextResponse.json({ success: true, job: updatedJob });

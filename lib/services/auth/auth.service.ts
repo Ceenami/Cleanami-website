@@ -39,6 +39,9 @@ async function syncUserMetadata(
   try {
     const supabaseAdmin = createAdminClient();
     await supabaseAdmin.auth.admin.updateUserById(userId, {
+      // `app_metadata` is the trusted, non-user-editable role claim read by the
+      // Edge middleware; `user_metadata` is retained for display only.
+      app_metadata: { role },
       user_metadata: {
         role,
         full_name: displayName,

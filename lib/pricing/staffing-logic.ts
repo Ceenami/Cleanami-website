@@ -8,6 +8,25 @@ export const CLEANER_HOURLY_RATE = 17;
 export type PropertySize = "small" | "medium" | "large" | "custom";
 export type LaundryType = "in_unit" | "off_site" | "none";
 
+/**
+ * Hot-tub time additions, configured per service type in `hot_tub_pricing_rules`
+ * and editable by the client through the admin pricing upload.
+ */
+export type HotTubTimeAdditions = {
+  basicHours: number;
+  deepCleanHours: number;
+};
+
+/**
+ * Fallback used only when the rules cannot be loaded. These are the spec
+ * values (Basic +0.333 hrs, Full Drain & Clean +1.0 hr) and match the seeded
+ * `hot_tub_pricing_rules` rows — prefer the configured values.
+ */
+export const DEFAULT_HOT_TUB_TIME_ADDITIONS: HotTubTimeAdditions = {
+  basicHours: 0.333,
+  deepCleanHours: 1.0,
+};
+
 export type StaffingPropertyInput = {
   bedCount: number;
   bathCount: number | string;
@@ -16,12 +35,20 @@ export type StaffingPropertyInput = {
   hotTubServiceLevel?: boolean;
   /** When true, add deep-drain hot tub hours instead of basic service hours. */
   hotTubDeepClean?: boolean;
+  /**
+   * Configured hot-tub time additions (from `hot_tub_pricing_rules`). Omit to
+   * fall back to `DEFAULT_HOT_TUB_TIME_ADDITIONS`.
+   */
+  hotTubTimeAdditions?: HotTubTimeAdditions | null;
 };
 
 export type JobStaffingResult = {
   propertySize: PropertySize;
   bedroomBathroomTotal: number;
   baseCleaningHours: number;
+  /** Time to run the expected laundry loads (loads × 0.25h); any laundry type. */
+  inUnitLaundryHours: number;
+  /** Extra off-site handling time, on top of the laundry-load time above. */
   offSiteLaundryHours: number;
   hotTubHours: number;
   /** Full expected cleaning time paid to each assigned cleaner (not split by team). */
@@ -55,13 +82,16 @@ export function classifyPropertySize(
 
   const eligible: PropertySize[] = [];
 
+  // v12 bed/bath-total bands: Medium = 5–7, Large = 8–9, Custom = 10+. The
+  // upper bounds are half-open (`< 8`, `< 10`) so a fractional bath total such
+  // as 7.5 still lands in a band instead of falling through the gap.
   if (bbTotal >= 10 || bedCount >= 6 || baths >= 5 || sq >= 3000) {
     eligible.push("custom");
   }
-  if ((bbTotal >= 7 && bbTotal <= 9) || (sq >= 2000 && sq <= 2999)) {
+  if ((bbTotal >= 8 && bbTotal < 10) || (sq >= 2000 && sq <= 2999)) {
     eligible.push("large");
   }
-  if ((bbTotal >= 5 && bbTotal <= 6) || (sq >= 1251 && sq <= 1999)) {
+  if ((bbTotal >= 5 && bbTotal < 8) || (sq >= 1251 && sq <= 1999)) {
     eligible.push("medium");
   }
   if (bbTotal < 5 && sq <= 1250) {
@@ -105,11 +135,18 @@ function offSiteLaundryHours(propertySize: PropertySize): number {
   }
 }
 
+/**
+ * Expected laundry loads by size (§4). v12 assigns loads to both in-unit and
+ * off-site laundry — they drive the laundry *time* add either way (and, for
+ * off-site only, the $5/load Laundry Lead bonus, which is gated on role
+ * downstream, not on this count). "none" and custom get no loads.
+ */
 function expectedLaundryLoads(
   propertySize: PropertySize,
   laundryType: string
 ): number {
-  if (laundryType !== "off_site" || propertySize === "custom") return 0;
+  const hasLaundry = laundryType === "off_site" || laundryType === "in_unit";
+  if (!hasLaundry || propertySize === "custom") return 0;
   switch (propertySize) {
     case "small":
       return 2;
@@ -122,8 +159,12 @@ function expectedLaundryLoads(
   }
 }
 
-function hotTubServiceHours(deepClean: boolean): number {
-  return deepClean ? 1.0 : 0.3;
+function hotTubServiceHours(
+  deepClean: boolean,
+  additions?: HotTubTimeAdditions | null
+): number {
+  const configured = additions ?? DEFAULT_HOT_TUB_TIME_ADDITIONS;
+  return deepClean ? configured.deepCleanHours : configured.basicHours;
 }
 
 /** §4 team size by property size and laundry type. */
@@ -180,6 +221,13 @@ export function calculateJobStaffing(
     input.sqFt
   );
 
+  // §4 laundry-load time (loads × 0.25h). v12's Total Time includes this for
+  // in-unit laundry, and for off-site it is *added to* the off-site handling
+  // time below — not replaced by it. Leaving it out under-counted every
+  // laundry job's hours (and therefore each cleaner's pay).
+  const expectedLoads = expectedLaundryLoads(propertySize, input.laundryType);
+  const inUnitLaundryHours = roundHours(expectedLoads * 0.25);
+
   const isOffSite = input.laundryType === "off_site";
   const offSiteHours = isOffSite
     ? offSiteLaundryHours(propertySize)
@@ -188,11 +236,11 @@ export function calculateJobStaffing(
   const isDeepClean = Boolean(input.hotTubDeepClean);
   const hotTubHours =
     input.hotTubServiceLevel && propertySize !== "custom"
-      ? hotTubServiceHours(isDeepClean)
+      ? hotTubServiceHours(isDeepClean, input.hotTubTimeAdditions)
       : 0;
 
   const expectedHoursPerCleaner = roundHours(
-    baseCleaningHours + offSiteHours + hotTubHours
+    baseCleaningHours + inUnitLaundryHours + offSiteHours + hotTubHours
   );
 
   const { teamSize, requiresManualStaffing } = getTeamSize(
@@ -204,15 +252,13 @@ export function calculateJobStaffing(
     propertySize,
     bedroomBathroomTotal,
     baseCleaningHours,
+    inUnitLaundryHours,
     offSiteLaundryHours: offSiteHours,
     hotTubHours,
     expectedHoursPerCleaner,
     teamSize,
     requiresManualStaffing,
-    expectedLaundryLoads: expectedLaundryLoads(
-      propertySize,
-      input.laundryType
-    ),
+    expectedLaundryLoads: expectedLoads,
     isDeepClean,
   };
 }

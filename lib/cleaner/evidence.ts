@@ -10,6 +10,7 @@ export function getRoomPhotoRequirements(property: {
   bedCount: number;
   bathCount: string | number;
   hasHotTub: boolean;
+  laundryType?: string | null;
 }): RoomPhotoRequirement[] {
   const requirements: RoomPhotoRequirement[] = [];
   const bathCount = Math.ceil(parseFloat(String(property.bathCount)));
@@ -36,11 +37,36 @@ export function getRoomPhotoRequirements(property: {
     minPhotos: 1,
   });
 
+  // Spec §14.1: 1 photo per room — bedroom, kitchen, living area, hallway. Bed
+  // rooms are counted above; a property always has one kitchen and one hallway
+  // for evidence purposes (the schema does not track their counts).
+  requirements.push({
+    roomKey: "kitchen",
+    label: "Kitchen",
+    minPhotos: 1,
+  });
+
+  requirements.push({
+    roomKey: "hallway",
+    label: "Hallway",
+    minPhotos: 1,
+  });
+
   if (property.hasHotTub) {
     requirements.push({
       roomKey: "hot-tub",
       label: "Hot tub",
       minPhotos: 2,
+    });
+  }
+
+  // Off-site laundry needs proof it was actually done (spec §14.1): a single
+  // receipt or machine-in-use photo. In-unit / no laundry needs nothing extra.
+  if (property.laundryType === "off_site") {
+    requirements.push({
+      roomKey: "laundry",
+      label: "Laundry (receipt or machine-in-use)",
+      minPhotos: 1,
     });
   }
 
@@ -82,7 +108,7 @@ export function validateEvidenceComplete(
     checklistLog: unknown;
     photoUrls: string[] | null;
   },
-  property: Pick<Property, "bedCount" | "bathCount" | "hasHotTub">
+  property: Pick<Property, "bedCount" | "bathCount" | "hasHotTub" | "laundryType">
 ): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
 

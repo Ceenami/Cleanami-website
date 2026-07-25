@@ -1,10 +1,10 @@
 import "server-only";
 
 import { db } from "@/db";
-import { customers, users } from "@/db/schemas";
+import { customers, jobs, properties, subscriptions, users } from "@/db/schemas";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe/get-stripe";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 export type CustomerContactPatch = {
   name?: string;
@@ -85,6 +85,7 @@ async function syncAuthAndAppUser(input: {
     const { error } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
       email: input.email,
       email_confirm: true,
+      app_metadata: { role: "user" },
       user_metadata: {
         role: "user",
         full_name: input.name,
@@ -193,4 +194,120 @@ export async function updateCustomerContact(
     email: updated.email,
     phone: updated.phone,
   };
+}
+
+export type DeleteCustomerResult = {
+  customerId: string;
+  name: string;
+  email: string;
+  deletedPropertyCount: number;
+};
+
+/**
+ * Permanently delete a customer (task 1.7).
+ *
+ * Deliberately **refusal-based**, mirroring `deleteProperty` in
+ * `lib/queries/properties.ts`: a customer with cleaning history or a live
+ * subscription is never silently cascaded away, because that history is the
+ * payout, dispute and reserve-ledger trail. The admin is told what to resolve
+ * first instead. Only a customer with no jobs and no active subscription can be
+ * removed — the genuine "created in error / duplicate / never onboarded" case.
+ *
+ * What the FK graph does on a permitted delete: `properties`, `subscriptions`
+ * and `ratings` cascade; `promo_redemptions.customer_id` is set null so the
+ * redemption record (and its burn count) survives.
+ *
+ * The Stripe customer is intentionally left in place — deleting it would
+ * destroy invoice/charge history that Stripe keeps for reporting and disputes.
+ */
+export async function deleteCustomer(
+  customerId: string
+): Promise<DeleteCustomerResult> {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.id, customerId),
+    columns: { id: true, name: true, email: true },
+  });
+
+  if (!customer) {
+    throw new Error("Customer not found");
+  }
+
+  const ownedProperties = await db.query.properties.findMany({
+    where: eq(properties.customerId, customerId),
+    columns: { id: true },
+  });
+  const propertyIds = ownedProperties.map((property) => property.id);
+
+  if (propertyIds.length > 0) {
+    const linkedJob = await db.query.jobs.findFirst({
+      where: inArray(jobs.propertyId, propertyIds),
+      columns: { id: true },
+    });
+
+    if (linkedJob) {
+      // `jobs.property_id` has no ON DELETE rule, so this would fail as a raw
+      // FK violation anyway. Fail with an actionable message instead.
+      throw new Error(
+        "This customer has cleaning history and cannot be deleted. Their record is part of the job, payout and dispute trail."
+      );
+    }
+  }
+
+  const activeSubscription = await db.query.subscriptions.findFirst({
+    where: and(
+      eq(subscriptions.customerId, customerId),
+      eq(subscriptions.status, "active")
+    ),
+    columns: { id: true },
+  });
+
+  if (activeSubscription) {
+    throw new Error(
+      "This customer has an active subscription. Cancel the subscription first, then delete the customer."
+    );
+  }
+
+  await db.delete(customers).where(eq(customers.id, customerId));
+
+  // Remove the portal login last: if it fails, the customer row is already
+  // gone and the orphaned login can no longer resolve to any data.
+  await deletePortalLogin(customer.email);
+
+  return {
+    customerId,
+    name: customer.name,
+    email: customer.email,
+    deletedPropertyCount: propertyIds.length,
+  };
+}
+
+/**
+ * Best-effort removal of the customer's Supabase auth user and `users` row.
+ * The link is by email, the same way `syncAuthAndAppUser` resolves it.
+ * Failures are logged, not thrown — the customer record is already deleted and
+ * a leftover login is an admin cleanup task, not a reason to report failure.
+ */
+async function deletePortalLogin(email: string): Promise<void> {
+  const normalized = email.toLowerCase();
+
+  try {
+    await db.delete(users).where(eq(users.email, normalized));
+  } catch (err) {
+    console.error("[deleteCustomer] could not remove users row", err);
+  }
+
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return;
+
+  try {
+    const authUserId = await findAuthUserIdByEmail(normalized);
+    if (!authUserId) return;
+
+    const supabaseAdmin = createAdminClient();
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(authUserId);
+    if (error) {
+      console.error("[deleteCustomer] could not remove auth user", error);
+    }
+  } catch (err) {
+    console.error("[deleteCustomer] auth cleanup failed", err);
+  }
 }

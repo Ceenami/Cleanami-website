@@ -7,13 +7,16 @@ import {
   jobs,
   jobsToCleaners,
   notifications,
+  propertyCleaners,
   reliabilityEvents,
   swapRequests,
 } from "@/db/schemas";
+import type { PropertyCleanerTier } from "@/db/schemas";
 import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
 import { getAllEligibleCleanersForJob, getAvailableCleanersForJob } from "@/lib/queries/cleaners-proximity";
-import { and, eq, inArray, ne, or } from "drizzle-orm";
+import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
+import { and, eq, inArray, or } from "drizzle-orm";
 
 const URGENT_NEARBY_NOTIFY_LIMIT = 5;
 const CALL_OUT_PENALTY = 15;
@@ -63,31 +66,10 @@ async function recordCallOut(cleanerId: string, jobId: string) {
   });
 }
 
-async function hasScheduleConflict(
-  cleanerId: string,
-  checkInTime: Date,
-  excludeJobId?: string
-): Promise<boolean> {
-  const rows = await db
-    .select({ jobId: jobs.id })
-    .from(jobsToCleaners)
-    .innerJoin(jobs, eq(jobsToCleaners.jobId, jobs.id))
-    .where(
-      and(
-        eq(jobsToCleaners.cleanerId, cleanerId),
-        eq(jobs.checkInTime, checkInTime),
-        ne(jobs.status, "canceled"),
-        excludeJobId ? ne(jobs.id, excludeJobId) : undefined
-      )
-    )
-    .limit(1);
-
-  return rows.length > 0;
-}
-
 async function getOnCallOpenPoolCleanerIds(
   checkInTime: Date,
-  excludeCleanerIds: Set<string>
+  excludeCleanerIds: Set<string>,
+  expectedHours?: string | number | null
 ): Promise<string[]> {
   const date = jobDateString(checkInTime);
   const rows = await db.query.availability.findMany({
@@ -111,7 +93,14 @@ async function getOnCallOpenPoolCleanerIds(
       columns: { eligibleForAssignments: true },
     });
     if (!isCleanerAssignmentEligible(cleaner)) continue;
-    if (await hasScheduleConflict(row.cleanerId, checkInTime)) continue;
+    if (
+      await hasScheduleConflict({
+        cleanerId: row.cleanerId,
+        checkInTime,
+        expectedHours,
+      })
+    )
+      continue;
 
     ids.push(row.cleanerId);
   }
@@ -119,11 +108,57 @@ async function getOnCallOpenPoolCleanerIds(
   return ids;
 }
 
-/** Nearby first, then on-call/open pool, then all other eligible cleaners. */
+const ROSTER_TIER_RANK: Record<PropertyCleanerTier, number> = {
+  main_primary: 0,
+  secondary_primary: 1,
+  preferred_backup: 2,
+  on_call: 3,
+};
+
+/**
+ * Task 1.13 — the property's own roster (main/secondary primary, preferred
+ * backup, on-call), tier-then-sortOrder ordered and eligibility-filtered. These
+ * are the cleaners designated for THIS property, so a replacement is offered to
+ * them first ("reassignment to a cleaner's primary property").
+ */
+async function getPropertyRosterCleanerIds(jobId: string): Promise<string[]> {
+  const job = await db.query.jobs.findFirst({
+    where: eq(jobs.id, jobId),
+    columns: { propertyId: true },
+  });
+  if (!job?.propertyId) return [];
+
+  const roster = await db
+    .select({
+      cleanerId: propertyCleaners.cleanerId,
+      tier: propertyCleaners.tier,
+      sortOrder: propertyCleaners.sortOrder,
+      eligibleForAssignments: cleaners.eligibleForAssignments,
+    })
+    .from(propertyCleaners)
+    .innerJoin(cleaners, eq(propertyCleaners.cleanerId, cleaners.id))
+    .where(eq(propertyCleaners.propertyId, job.propertyId));
+
+  return roster
+    .filter((r) => isCleanerAssignmentEligible(r))
+    .sort((a, b) => {
+      const ta = ROSTER_TIER_RANK[a.tier as PropertyCleanerTier];
+      const tb = ROSTER_TIER_RANK[b.tier as PropertyCleanerTier];
+      if (ta !== tb) return ta - tb;
+      return a.sortOrder - b.sortOrder;
+    })
+    .map((r) => r.cleanerId);
+}
+
+/**
+ * Property roster first (spec §1.13), then nearby, then on-call/open pool, then
+ * all other eligible cleaners.
+ */
 async function buildUrgentNotificationCleanerIds(
   jobId: string,
   checkInTime: Date,
-  excludeCleanerIds: Set<string>
+  excludeCleanerIds: Set<string>,
+  expectedHours?: string | number | null
 ): Promise<string[]> {
   const notified = new Set<string>();
   const ordered: string[] = [];
@@ -134,19 +169,35 @@ async function buildUrgentNotificationCleanerIds(
     ordered.push(cleanerId);
   };
 
+  const conflicts = (cleanerId: string) =>
+    hasScheduleConflict({
+      cleanerId,
+      checkInTime,
+      expectedHours,
+      excludeJobId: jobId,
+    });
+
+  // C4: the property's designated roster is offered the replacement first.
+  for (const cleanerId of await getPropertyRosterCleanerIds(jobId)) {
+    if (await conflicts(cleanerId)) continue;
+    add(cleanerId);
+  }
+
   const { cleaners: nearby } = await getAvailableCleanersForJob(jobId, {
     includeOnJob: false,
   });
+
   for (const candidate of nearby.slice(0, URGENT_NEARBY_NOTIFY_LIMIT)) {
-    if (await hasScheduleConflict(candidate.id, checkInTime, jobId)) continue;
+    if (await conflicts(candidate.id)) continue;
     add(candidate.id);
   }
 
   for (const cleanerId of await getOnCallOpenPoolCleanerIds(
     checkInTime,
-    excludeCleanerIds
+    excludeCleanerIds,
+    expectedHours
   )) {
-    if (await hasScheduleConflict(cleanerId, checkInTime, jobId)) continue;
+    if (await conflicts(cleanerId)) continue;
     add(cleanerId);
   }
 
@@ -154,7 +205,7 @@ async function buildUrgentNotificationCleanerIds(
     includeOnJob: false,
   });
   for (const candidate of allEligible) {
-    if (await hasScheduleConflict(candidate.id, checkInTime, jobId)) continue;
+    if (await conflicts(candidate.id)) continue;
     add(candidate.id);
   }
 
@@ -282,7 +333,14 @@ export async function canCleanerAcceptUrgentJob(
     return { eligible: false, reason: "This job has already been filled." };
   }
 
-  if (await hasScheduleConflict(cleanerId, job.checkInTime, jobId)) {
+  if (
+    await hasScheduleConflict({
+      cleanerId,
+      checkInTime: job.checkInTime,
+      expectedHours: job.expectedHours,
+      excludeJobId: jobId,
+    })
+  ) {
     return { eligible: false, reason: "You already have a job at this time." };
   }
 
@@ -405,7 +463,8 @@ export async function triggerUrgentReplacement(
   const toNotify = await buildUrgentNotificationCleanerIds(
     jobId,
     job.checkInTime!,
-    excludeIds
+    excludeIds,
+    job.expectedHours
   );
 
   for (const cleanerId of toNotify) {

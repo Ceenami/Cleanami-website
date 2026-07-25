@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft, ClipboardCheck, Loader } from "lucide-react";
 import { PayBreakdown } from "@/components/cleaner/PayBreakdown";
+import { RestockRequestCard } from "@/components/cleaner/RestockRequestCard";
 import type { CleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
 import { cn } from "@/lib/utils";
 
@@ -47,12 +48,37 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
       .finally(() => setLoading(false));
   }, [loadJob]);
 
+  // Best-effort device location. Returns null if unavailable or denied — the
+  // server records & flags but never blocks on a missing location.
+  async function getDeviceLocation(): Promise<{
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+  } | null> {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) =>
+          resolve({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy ?? null,
+          }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  }
+
   async function handleCheckIn() {
     setActionLoading(true);
     setActionError(null);
     try {
+      const location = await getDeviceLocation();
       const response = await fetch(`/api/cleaner/jobs/${jobId}/check-in`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ location }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Check-in failed");
@@ -68,8 +94,11 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
     setActionLoading(true);
     setActionError(null);
     try {
+      const location = await getDeviceLocation();
       const response = await fetch(`/api/cleaner/jobs/${jobId}/check-out`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ location }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -198,6 +227,8 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
           </ul>
         </div>
       )}
+
+      <RestockRequestCard jobId={jobId} />
 
       <div className="space-y-2">
         {canCheckIn && (

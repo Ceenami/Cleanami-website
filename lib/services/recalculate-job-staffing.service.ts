@@ -3,6 +3,7 @@ import "server-only";
 import { db } from "@/db";
 import { jobs } from "@/db/schemas";
 import { buildJobStaffingUpdate } from "@/lib/pricing/apply-job-staffing";
+import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
 import { and, eq, gte, inArray, isNotNull, ne } from "drizzle-orm";
 
 export type RecalculateScope = "future_open" | "all_non_canceled";
@@ -52,6 +53,9 @@ export async function recalculateJobStaffing(options?: {
     ? rows.filter((row) => options.jobIds!.includes(row.id))
     : rows;
 
+  // Loaded once for the whole batch rather than per job.
+  const hotTubTimeAdditions = await loadHotTubTimeAdditions();
+
   let updated = 0;
 
   for (const row of targetRows) {
@@ -74,6 +78,7 @@ export async function recalculateJobStaffing(options?: {
       checkInTime,
       subscriptionStart: new Date(subscriptionStart),
       existingSnapshot: row.addonsSnapshot as Record<string, unknown> | null,
+      hotTubTimeAdditions,
     });
 
     await db

@@ -15,6 +15,8 @@ export const customers = pgTable(
     stripeCustomerId: text("stripe_customer_id").unique(),
     skipPayment: boolean("skip_payment").default(false).notNull(),
     portalAccessEnabled: boolean("portal_access_enabled").default(false).notNull(),
+    // Set by the data-retention job when PII is anonymized (financial rows kept).
+    anonymizedAt: timestamp("anonymized_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

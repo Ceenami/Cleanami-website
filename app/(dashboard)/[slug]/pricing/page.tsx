@@ -7,6 +7,9 @@ import {
 } from "@/db/schemas";
 import { format } from "date-fns";
 import { PricingUploadModal } from "@/components/dashbboard/admin/ui/PricingUploadModal";
+import { FirstCleanDiscountControl } from "@/components/dashbboard/admin/ui/FirstCleanDiscountControl";
+import { PRICING_BUCKET, createSignedUrls } from "@/lib/storage/signed-url";
+import { getFirstCleanDiscountPercent } from "@/lib/pricing/first-clean-discount";
 
 export default async function AdminPricingPage() {
   const [
@@ -22,6 +25,14 @@ export default async function AdminPricingPage() {
     db.query.hotTubPricingRules.findMany(),
     db.query.pricingUploads.findMany({ orderBy: desc(pricingUploads.createdAt), limit: 10 }),
   ]);
+
+  const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
+
+  // pricing-files is a private bucket; sign the stored paths for the file links.
+  const uploadSignedUrls = await createSignedUrls(
+    PRICING_BUCKET,
+    uploadHistory.map((upload) => upload.fileUrl)
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-12">
@@ -47,7 +58,9 @@ export default async function AdminPricingPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {uploadHistory.map((upload) => (
+              {uploadHistory.map((upload, i) => {
+                const fileHref = uploadSignedUrls[i];
+                return (
                 <tr key={upload.id}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{format(upload.createdAt, "MMM d, yyyy h:mm a")}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{upload.fileName}</td>
@@ -61,13 +74,23 @@ export default async function AdminPricingPage() {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-teal-600 hover:text-teal-800">
-                    <a href={upload.fileUrl} target="_blank" rel="noopener noreferrer">View File</a>
+                    {fileHref ? (
+                      <a href={fileHref} target="_blank" rel="noopener noreferrer">View File</a>
+                    ) : (
+                      <span className="text-gray-400">Unavailable</span>
+                    )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">First-Clean Discount</h2>
+        <FirstCleanDiscountControl initialPercent={firstCleanDiscountPercent} />
       </div>
 
       <div>

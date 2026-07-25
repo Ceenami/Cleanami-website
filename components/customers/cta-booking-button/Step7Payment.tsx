@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import { toast } from 'sonner';
 import { PriceDetails, SignupFormData } from '@/lib/validations/bookng-modal';
 import { serializeSignupFormDataForServer } from '@/lib/validations/bookng-modal/serialize-signup-form';
 import { CheckoutForm } from './CheckoutForm';
+import { PromoCodeField } from './PromoCodeField';
 import { FounderCard } from '../../FounderCard';
 import { ShieldCheck, Lock } from 'lucide-react';
 import { isServiceUnavailableMessage } from '@/lib/env/messages';
@@ -15,20 +16,23 @@ const stripePromise = getStripe();
 interface Props {
   priceDetails: PriceDetails | null;
   formData: SignupFormData;
+  setFormData: React.Dispatch<React.SetStateAction<SignupFormData>>;
   onPaymentSuccess: (paymentIntentId: string) => void;
   onBookCall?: () => void;
   onContinueSetup?: () => void;
   paymentFinalizing?: boolean;
 }
 
-export const Step7Payment = ({ 
-  priceDetails, 
-  formData, 
+export const Step7Payment = ({
+  priceDetails,
+  formData,
+  setFormData,
   onPaymentSuccess,
   onBookCall,
   paymentFinalizing = false,
 }: Props) => {
   const [clientSecret, setClientSecret] = useState('');
+  const [amountInCents, setAmountInCents] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
@@ -55,6 +59,7 @@ export const Step7Payment = ({
     setIsInitializing(true);
     setError(null);
     setClientSecret('');
+    setAmountInCents(null);
 
     try {
       const response = await fetch('/api/payment/create-intent', {
@@ -84,6 +89,7 @@ export const Step7Payment = ({
 
       if (result.clientSecret) {
         setClientSecret(result.clientSecret);
+        setAmountInCents(result.amountInCents ?? null);
       } else {
         setError('Could not initialize payment. Please refresh and try again.');
       }
@@ -97,8 +103,16 @@ export const Step7Payment = ({
     }
   }, [priceDetails, serializedFormData]);
 
+  // Which payload the live clientSecret was created for. The guard used to be
+  // "already have a clientSecret -> never re-initialize", which silently kept a
+  // stale PaymentIntent when the booking changed underneath it — applying a
+  // promo code would show the discount but charge the pre-promo amount.
+  // Keyed on the payload instead: initialize once per distinct booking, and
+  // rebuild whenever the amount that will be charged could have moved.
+  const initializedKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (paymentFinalizing || clientSecret) {
+    if (paymentFinalizing) {
       return;
     }
 
@@ -106,6 +120,11 @@ export const Step7Payment = ({
       return;
     }
 
+    if (initializedKeyRef.current === paymentRequestKey) {
+      return;
+    }
+
+    initializedKeyRef.current = paymentRequestKey;
     void initializePayment();
   }, [
     paymentRequestKey,
@@ -113,8 +132,14 @@ export const Step7Payment = ({
     onBookCall,
     initializePayment,
     paymentFinalizing,
-    clientSecret,
   ]);
+
+  const applyPromoCode = useCallback(
+    (code: string) => {
+      setFormData((prev) => ({ ...prev, promoCode: code || undefined }));
+    },
+    [setFormData]
+  );
 
   const appearance = { theme: 'stripe' as const, variables: { colorPrimary: '#14b8a6' } };
   const options: StripeElementsOptions = { clientSecret, appearance };
@@ -148,6 +173,23 @@ export const Step7Payment = ({
 
       {(showPaymentForm || !onBookCall) && (
         <>
+          <PromoCodeField
+            formData={formData}
+            onApply={applyPromoCode}
+            disabled={isInitializing || paymentFinalizing}
+          />
+
+          {amountInCents !== null && !error && (
+            <div className="flex items-baseline justify-between rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">
+              <span className="text-sm font-medium text-gray-700">
+                Charged today (first clean)
+              </span>
+              <span className="text-lg font-semibold text-gray-900">
+                ${(amountInCents / 100).toFixed(2)}
+              </span>
+            </div>
+          )}
+
           {error && (
             <div className="space-y-3">
               <div className="p-3 bg-red-50 text-red-700 border border-red-200 rounded-md text-sm">
