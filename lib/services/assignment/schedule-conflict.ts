@@ -58,7 +58,16 @@ export async function hasScheduleConflict(input: {
         // existing.start < this.end
         lt(jobs.checkInTime, end),
         // existing.start + existing.duration > this.start
-        sql`${jobs.checkInTime} + (COALESCE(${jobs.expectedHours}::double precision, ${DEFAULT_EXPECTED_JOB_HOURS}::double precision) * interval '1 hour') > ${start}::timestamptz`,
+        //
+        // `start` is serialised with .toISOString() rather than passed as a
+        // Date. Inside a raw `sql` template drizzle applies no column type
+        // mapper, so postgres-js receives the JS Date verbatim and throws
+        // ERR_INVALID_ARG_TYPE ("must be of type string or Buffer"). That threw
+        // for every candidate, so assignJob() threw on every job and
+        // runAssignmentEngine() swallowed it into summary.errors — the engine
+        // could never assign anything. The `lt()` above is unaffected because
+        // drizzle maps typed column comparisons itself.
+        sql`${jobs.checkInTime} + (COALESCE(${jobs.expectedHours}::double precision, ${DEFAULT_EXPECTED_JOB_HOURS}::double precision) * interval '1 hour') > ${start.toISOString()}::timestamptz`,
         excludeJobId ? ne(jobs.id, excludeJobId) : undefined
       )
     )
