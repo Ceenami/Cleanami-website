@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       clientSecret: result.clientSecret,
       amountInCents: result.amountInCents,
+      promoDiscountCents: result.promoDiscountCents ?? 0,
     });
   } catch (error) {
     console.error("[POST /api/payment/create-intent]", error);

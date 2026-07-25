@@ -397,6 +397,7 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
             <Step7Payment
               priceDetails={priceDetails}
               formData={formData}
+              setFormData={setFormData}
               onPaymentSuccess={handlePaymentSuccess}
               paymentFinalizing={isSaving}
               {...founderCardProps}

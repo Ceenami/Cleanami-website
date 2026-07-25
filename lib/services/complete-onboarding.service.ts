@@ -18,6 +18,8 @@ import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer
 import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
 import { PricingService } from "@/lib/services/pricing.service";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import { applyFirstCleanDiscount } from "@/lib/pricing/first-clean-discount";
+import { recordPromoRedemptionByCode } from "@/lib/services/promo-code.service";
 
 const pricingService = new PricingService();
 
@@ -199,7 +201,37 @@ export async function completeOnboardingForPayment(
       normalizeSignupFormDataForPricing(validatedData)
     );
     const expectedAmountInCents = Math.round(expectedPrice.totalPerClean * 100);
-    if (paymentIntent.amount !== expectedAmountInCents) {
+
+    // The charge is the calculated price minus the two first-clean-only
+    // discounts, both of which were resolved server-side when the intent was
+    // created and stamped on its metadata (create-payment-intent.service.ts).
+    // Re-deriving them from the metadata rather than from live config is
+    // deliberate: an admin changing the first-clean discount, or a promo code
+    // expiring, between checkout and completion must not invalidate a booking
+    // the customer has already paid for. Metadata is written with the secret
+    // key, so it is ours, not the client's. Intents created before these keys
+    // existed read as zero and behave exactly as they did before.
+    const metadataCents = (key: string): number => {
+      const raw = paymentIntent.metadata?.[key];
+      const parsed = raw === undefined ? 0 : Number(raw);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+    };
+
+    const firstCleanDiscountPercent = Math.min(
+      100,
+      metadataCents("first_clean_discount_percent")
+    );
+    const expectedAfterFirstClean = applyFirstCleanDiscount(
+      expectedAmountInCents,
+      firstCleanDiscountPercent
+    );
+    const promoDiscountCents = Math.min(
+      metadataCents("promo_discount_cents"),
+      expectedAfterFirstClean
+    );
+    const expectedChargeCents = expectedAfterFirstClean - promoDiscountCents;
+
+    if (paymentIntent.amount !== expectedChargeCents) {
       return {
         success: false,
         error:
@@ -329,6 +361,25 @@ export async function completeOnboardingForPayment(
 
       return { customer, property, subscription };
     });
+
+    // Burn the promo code now that the booking is real. Deliberately after the
+    // subscription exists rather than at checkout, so an abandoned payment form
+    // never consumes a redemption. Idempotent on the PaymentIntent id, and
+    // best-effort: the customer has already been charged the discounted amount,
+    // so a bookkeeping failure must not fail the onboarding.
+    const redeemedPromoCode = paymentIntent.metadata?.promo_code;
+    if (redeemedPromoCode) {
+      await recordPromoRedemptionByCode({
+        code: redeemedPromoCode,
+        customerEmail: email,
+        customerId: result.customer.id,
+        subscriptionId: result.subscription.id,
+        paymentIntentId,
+        originalAmountCents: expectedAmountInCents,
+        discountAmountCents: promoDiscountCents,
+        finalAmountCents: paymentIntent.amount,
+      });
+    }
 
     const fileUploadResults: Array<{
       fileName: string;
