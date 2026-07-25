@@ -114,13 +114,12 @@ export async function handleFileUpload(
       throw new Error(`Storage Error: ${uploadError.message}`);
     }
 
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("pricing-files").getPublicUrl(filePath);
-
+    // `pricing-files` is private (migration 0013), so a public URL would never
+    // resolve. Persist the object path instead and let the pricing page mint a
+    // short-lived signed URL at read time (`lib/storage/signed-url.ts`).
     await db
       .update(pricingUploads)
-      .set({ fileUrl: publicUrl })
+      .set({ fileUrl: filePath })
       .where(eq(pricingUploads.id, uploadRecord.id));
 
     const fileContent = await file.text();
