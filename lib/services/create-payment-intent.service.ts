@@ -1,12 +1,13 @@
 import "server-only";
 
 import { PricingService } from "@/lib/services/pricing.service";
-import { SignupFormData } from "@/lib/validations/bookng-modal";
+import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import {
   applyFirstCleanDiscount,
   getFirstCleanDiscountPercent,
 } from "@/lib/pricing/first-clean-discount";
+import { resolvePromoCodeForAmount } from "@/lib/services/promo-code.service";
 import { customers } from "@/db/schemas";
 import { getDbOrNull } from "@/db";
 import { eq } from "drizzle-orm";
@@ -69,11 +70,70 @@ async function resolveStripeCustomer(
   });
 }
 
+/**
+ * What the prepaid first clean costs before any promo code: the calculated
+ * per-clean price (term discount already inside it) less the admin's global
+ * first-clean discount.
+ *
+ * Exported so the promo-preview route quotes off exactly the same number the
+ * PaymentIntent will be created from, instead of re-deriving "what the first
+ * clean costs" a second way and drifting.
+ */
+export async function quoteFirstCleanChargeCents(
+  formData: SignupFormData
+): Promise<
+  | {
+      ok: true;
+      priceDetails: PriceDetails;
+      priceBeforeDiscountsCents: number;
+      chargeBeforePromoCents: number;
+      firstCleanDiscountPercent: number;
+    }
+  | { ok: false; error: string }
+> {
+  const normalized = normalizeSignupFormDataForPricing(formData);
+  const priceDetails = await pricingService.calculatePrice(normalized);
+
+  if (priceDetails.isCustomQuote) {
+    return {
+      ok: false,
+      error:
+        "Properties over 3,000 sq ft require a custom quote. Please book a setup call or contact CleanNami.",
+    };
+  }
+
+  const priceBeforeDiscountsCents = Math.round(priceDetails.totalPerClean * 100);
+
+  if (priceBeforeDiscountsCents <= 0) {
+    return {
+      ok: false,
+      error:
+        "We could not calculate a price for this property. Please check your property details and try again.",
+    };
+  }
+
+  // Admin-configurable first-clean discount (task 1.9): applies to the prepaid
+  // first clean only (this is the signup charge). 0% by default.
+  const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
+
+  return {
+    ok: true,
+    priceDetails,
+    priceBeforeDiscountsCents,
+    chargeBeforePromoCents: applyFirstCleanDiscount(
+      priceBeforeDiscountsCents,
+      firstCleanDiscountPercent
+    ),
+    firstCleanDiscountPercent,
+  };
+}
+
 export async function createPaymentIntentForSignup(
   formData: SignupFormData
 ): Promise<{
   clientSecret?: string;
   amountInCents?: number;
+  promoDiscountCents?: number;
   error?: string;
 }> {
   const stripe = getStripe();
@@ -87,32 +147,49 @@ export async function createPaymentIntentForSignup(
   }
 
   const normalizedFormData = normalizeSignupFormDataForPricing(formData);
-  const serverPriceDetails =
-    await pricingService.calculatePrice(normalizedFormData);
 
-  if (serverPriceDetails.isCustomQuote) {
-    return {
-      error:
-        "Properties over 3,000 sq ft require a custom quote. Please book a setup call or contact CleanNami.",
-    };
+  const quote = await quoteFirstCleanChargeCents(normalizedFormData);
+  if (!quote.ok) {
+    return { error: quote.error };
   }
 
-  const serverAmountInCents = Math.round(serverPriceDetails.totalPerClean * 100);
+  const {
+    priceDetails: serverPriceDetails,
+    priceBeforeDiscountsCents: serverAmountInCents,
+    chargeBeforePromoCents: afterFirstCleanDiscountCents,
+    firstCleanDiscountPercent,
+  } = quote;
 
-  if (serverAmountInCents <= 0) {
-    return {
-      error:
-        "We could not calculate a price for this property. Please check your property details and try again.",
-    };
+  // Promo code (task 1.8), applied last — on what is left after the term
+  // discount and the first-clean discount. The client-sent code is only a
+  // lookup key; validity, value and limits all come from the DB row.
+  const submittedPromoCode =
+    typeof normalizedFormData.promoCode === "string"
+      ? normalizedFormData.promoCode.trim()
+      : "";
+
+  let promoDiscountCents = 0;
+  let appliedPromoCode = "";
+
+  if (submittedPromoCode) {
+    const { evaluation } = await resolvePromoCodeForAmount(
+      submittedPromoCode,
+      afterFirstCleanDiscountCents
+    );
+
+    if (!evaluation.valid) {
+      // Fail loudly rather than quietly charging full price: a customer who
+      // typed a code and got charged without it has a refund conversation.
+      return {
+        error: `${evaluation.message} Remove or correct the code to continue.`,
+      };
+    }
+
+    promoDiscountCents = evaluation.discountCents;
+    appliedPromoCode = evaluation.code;
   }
 
-  // Admin-configurable first-clean discount (task 1.9): applies to the prepaid
-  // first clean only (this is the signup charge). 0% by default.
-  const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
-  const chargeAmountCents = applyFirstCleanDiscount(
-    serverAmountInCents,
-    firstCleanDiscountPercent
-  );
+  const chargeAmountCents = afterFirstCleanDiscountCents - promoDiscountCents;
 
   // Re-enforce the 7-day first-clean buffer server-side (the client date picker
   // is not trusted). Compare calendar days in US Eastern (ops timezone).
@@ -207,6 +284,15 @@ export async function createPaymentIntentForSignup(
       serverPriceDetails.discountRate > 0
         ? `${Math.round(serverPriceDetails.discountRate * 100)}% (-$${serverPriceDetails.discountAmount.toFixed(2)})`
         : "none",
+    // Machine-readable breakdown of the two first-clean-only discounts. These
+    // are written by us with the secret key, so they are trustworthy input to
+    // the amount re-check in complete-onboarding.service.ts. Without them that
+    // check compares the charged amount against the undiscounted price and
+    // rejects every discounted booking after the customer has already paid.
+    price_before_discounts_cents: String(serverAmountInCents),
+    first_clean_discount_percent: String(firstCleanDiscountPercent),
+    promo_code: appliedPromoCode,
+    promo_discount_cents: String(promoDiscountCents),
   };
 
   const paymentIntent = await stripe.paymentIntents.create({
@@ -227,5 +313,6 @@ export async function createPaymentIntentForSignup(
   return {
     clientSecret: paymentIntent.client_secret,
     amountInCents: chargeAmountCents,
+    promoDiscountCents,
   };
 }

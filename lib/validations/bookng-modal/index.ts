@@ -34,6 +34,12 @@ export const signupFormSchema = z
     firstCleanDate: z.date({
       message: "Please select a valid start date for your first clean.",
     }),
+    /**
+     * Optional promo code typed at checkout (task 1.8). Never trusted from the
+     * client — the discount is always re-resolved server-side against
+     * `promo_codes` before the PaymentIntent is created.
+     */
+    promoCode: z.string().trim().max(64).optional(),
   })
   .refine((data) => data.email === data.emailConfirm, {
     message: "Emails don't match",

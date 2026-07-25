@@ -1,4 +1,4 @@
-import { BadgeDollarSignIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, Shield, UserIcon, UsersIcon } from "lucide-react";
+import { BadgeDollarSignIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, Shield, TicketPercentIcon, UserIcon, UsersIcon } from "lucide-react";
 
 export const Logo = "https://ymccorozcd.ufs.sh/f/CFfiFeS2XelzZy5o0ZubBmJY75j80sif9WEVdIAGnpCtTSqr"
 export const APP_NAME =
@@ -59,6 +59,11 @@ export const PRIVATE_ADMIN_NAV_ROUTES = [
     icon: <BadgeDollarSignIcon />,
     label: "Pricing",
     route: "/admin/pricing",
+  },
+  {
+    icon: <TicketPercentIcon />,
+    label: "promo codes",
+    route: "/admin/promo-codes",
   },
   {
     icon: <LocateFixed />,
