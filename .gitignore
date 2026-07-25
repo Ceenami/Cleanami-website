@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# local test/helper scripts & scratch — NEVER push anything test-related to the client repo
+/_testing/
+scripts/_tmp*
+
 # next.js
 /.next/
 /out/
