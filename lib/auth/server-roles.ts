@@ -58,6 +58,26 @@ export async function getSessionRole(): Promise<string | undefined> {
 }
 
 /**
+ * The current session's application `users.id` — the value foreign keys point
+ * at, which is NOT the Supabase auth uid (that is `users.supabase_user_id`).
+ * Returns null when there is no session or no matching app user.
+ */
+export async function getAppUserIdForSupabaseUser(): Promise<string | null> {
+  const { supabaseUserId } = await getSessionIdentity();
+  if (!supabaseUserId) return null;
+
+  const database = getDbOrNull();
+  if (!database) return null;
+
+  const row = await database.query.users.findFirst({
+    where: eq(users.supabaseUserId, supabaseUserId),
+    columns: { id: true },
+  });
+
+  return row?.id ?? null;
+}
+
+/**
  * Mirrors the authoritative DB role into Supabase `app_metadata` (service-role
  * only) so the Edge middleware can read a trusted, non-user-editable claim
  * without a DB round-trip. Safe no-op when the service key is absent.

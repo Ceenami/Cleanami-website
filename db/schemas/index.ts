@@ -17,6 +17,7 @@ export * from './reserveTransactions.schema';
 export * from './stripeDisputes.schema';
 export * from './platformConfig.schema';
 export * from './promoCodes.schema';
+export * from './restockRequests.schema';
 export * from './swapRequests.schema';
 export * from './onboardingDocuments.schema';
 export * from './capabilityFlags.schema';

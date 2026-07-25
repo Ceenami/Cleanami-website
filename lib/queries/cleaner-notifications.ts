@@ -118,6 +118,43 @@ export async function notifyAdminsOfDispute(
   );
 }
 
+/**
+ * Alert admins that a cleaner has asked for supplies (task 1.16).
+ *
+ * Reuses the `urgent_job` notification type the way `notifyAdminsOfDispute`
+ * does — the enum has no `restock` member, and adding one means an
+ * `ALTER TYPE ... ADD VALUE` migration for a label. `metadata.source`
+ * distinguishes it.
+ */
+export async function notifyAdminsOfRestockRequest(input: {
+  cleanerName: string;
+  propertyAddress: string;
+  item: string;
+  quantity: number;
+  urgency: string;
+  jobId: string | null;
+}) {
+  const admins = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(or(eq(users.role, "admin"), eq(users.role, "super_admin")));
+
+  if (admins.length === 0) return;
+
+  const urgencyPrefix = input.urgency === "urgent" ? "URGENT: " : "";
+
+  await db.insert(notifications).values(
+    admins.map((admin) => ({
+      userId: admin.id,
+      type: "urgent_job" as const,
+      title: `${urgencyPrefix}Restock request`,
+      message: `${input.cleanerName} requested ${input.quantity} × ${input.item} for ${input.propertyAddress}.`,
+      jobId: input.jobId,
+      metadata: { source: "restock_request", urgency: input.urgency },
+    }))
+  );
+}
+
 export async function notifyAdminsOfJobAlert(input: {
   title: string;
   message: string;
