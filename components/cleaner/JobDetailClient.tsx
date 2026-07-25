@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft, ClipboardCheck, Loader } from "lucide-react";
 import { PayBreakdown } from "@/components/cleaner/PayBreakdown";
+import { RestockRequestCard } from "@/components/cleaner/RestockRequestCard";
 import type { CleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
 import { cn } from "@/lib/utils";
 
@@ -226,6 +227,8 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
           </ul>
         </div>
       )}
+
+      <RestockRequestCard jobId={jobId} />
 
       <div className="space-y-2">
         {canCheckIn && (
