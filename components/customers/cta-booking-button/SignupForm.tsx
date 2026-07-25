@@ -199,6 +199,30 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
       return false;
     }
 
+    if (step === 4) {
+      // Addons. A laundry service without a load count would price laundry at
+      // $0 and save the property with a null load count, so require it here —
+      // before the card is touched. `signupFormSchema` cannot enforce this for
+      // us: its only server-side parse runs in complete-onboarding, which is
+      // AFTER the charge, so a rejection there strands a paid customer.
+      const needsLoads =
+        formData.laundryService === "in_unit" ||
+        formData.laundryService === "off_site";
+      const loads = Number(formData.laundryLoads);
+
+      if (needsLoads && !(Number.isInteger(loads) && loads >= 1)) {
+        setErrors({
+          laundryLoads: [
+            "Enter how many loads per turnover (at least 1), or choose no laundry service.",
+          ],
+        });
+        return false;
+      }
+
+      setErrors({});
+      return true;
+    }
+
     const fieldsToValidate = stepFields[step];
     if (!fieldsToValidate) {
       setErrors({});
