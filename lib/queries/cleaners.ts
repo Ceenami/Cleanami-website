@@ -42,6 +42,7 @@ export async function getCleaners({
       onCallStatus: cleaners.onCallStatus,
       reliabilityScore: cleaners.reliabilityScore,
       hasHotTubCert: cleaners.hasHotTubCert,
+      hasLaundryLeadCert: cleaners.hasLaundryLeadCert,
       accountStatus: cleaners.accountStatus,
       onboardingCompleted: cleaners.onboardingCompleted,
       onboardingStarted: cleaners.onboardingStarted,
