@@ -37,16 +37,33 @@ export function deserializeSignupFormDataFromServer(
   });
 }
 
-/** Coerce JSON/session values so server pricing matches the booking form. */
+/**
+ * Coerce JSON/session values so server pricing matches the booking form.
+ *
+ * `laundryLoads` is deliberately NOT floored to 0: `signupFormSchema` declares
+ * it `.min(1).optional()`, so an invented 0 is a *validation failure* while an
+ * absent value is legal. Because `complete-onboarding.service.ts` re-parses
+ * this payload with that schema AFTER the card has been confirmed, coercing to
+ * 0 turned "customer cleared the loads box" (`Step4Addons` renders
+ * `value={formData.laundryLoads || ""}`, so an empty box round-trips as
+ * undefined) into a 400 on an already-charged booking. Keep only a valid
+ * positive load count; anything else stays undefined. Pricing already treats
+ * undefined as zero loads (`pricing.service.ts` `_calculateLaundryCost`).
+ */
 export function normalizeSignupFormDataForPricing(
   data: SignupFormData
 ): SignupFormData {
+  const laundryLoads = Number(data.laundryLoads);
+
   return {
     ...data,
     bedrooms: Number(data.bedrooms) || 0,
     bathrooms: Number(data.bathrooms) || 0,
     sqft: Number(data.sqft) || 0,
-    laundryLoads: Number(data.laundryLoads) || 0,
+    laundryLoads:
+      Number.isInteger(laundryLoads) && laundryLoads >= 1
+        ? laundryLoads
+        : undefined,
     subscriptionMonths: Number(data.subscriptionMonths) || 1,
     hasHotTub: Boolean(data.hasHotTub),
     hotTubService: Boolean(data.hotTubService),

@@ -3,7 +3,7 @@ import { RadioCard } from "./RadioCard";
 import { StepsProps } from "@/lib/validations/bookng-modal";
 import { CheckboxCard } from "./CheckboxCard";
 
-export const Step4Addons = ({ formData, setFormData }: StepsProps) => {
+export const Step4Addons = ({ formData, setFormData, errors }: StepsProps) => {
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) => {
@@ -71,12 +71,19 @@ export const Step4Addons = ({ formData, setFormData }: StepsProps) => {
               type="number"
               name="laundryLoads"
               id="laundryLoads"
-              min="0"
+              min="1"
+              step="1"
               value={formData.laundryLoads || ""}
               onChange={handleChange}
+              aria-invalid={Boolean(errors?.laundryLoads)}
               className="mt-1 block w-full max-w-xs text-gray-800 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-teal-500 focus:border-teal-500"
               placeholder="e.g., 3"
             />
+            {errors?.laundryLoads && (
+              <p className="mt-1 text-sm text-red-600">
+                {errors.laundryLoads[0]}
+              </p>
+            )}
           </div>
         )}
       </div>
