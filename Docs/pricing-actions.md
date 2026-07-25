@@ -82,7 +82,7 @@ The function executes a robust, multi-stage workflow:
 4.  **File Storage (Supabase)**:
 
       * The file is uploaded to the **`pricing-files`** bucket in Supabase Storage with a unique, timestamped path (`pricing_csvs/...`).
-      * The **`fileUrl`** in the `pricingUploads` audit record is updated with the public URL of the uploaded file.
+      * The **`fileUrl`** in the `pricingUploads` audit record is updated with the storage **object path** of the uploaded file. The bucket is private (migration 0013), so links are minted as short-lived signed URLs at read time rather than stored as public URLs.
 
 5.  **CSV Parsing**:
 
