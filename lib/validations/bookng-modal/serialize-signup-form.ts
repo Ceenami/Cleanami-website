@@ -25,6 +25,33 @@ export function serializeSignupFormDataForServer(
   };
 }
 
+/**
+ * Revives a saved booking form that came back over JSON.
+ *
+ * `GET /api/onboarding/session` returns `firstCleanDate` as a `Date`, but
+ * `NextResponse.json` flattens it to an ISO **string** on the wire. Merging that
+ * string straight into form state left `z.date()` rejecting a resumed booking at
+ * the subscription step ("Please select a valid start date") with a date visibly
+ * selected, and handed date-fns `format()` a string it treats as Invalid Date.
+ * Server actions (`loadSession`) are unaffected — RSC preserves `Date` — so only
+ * the JSON route needs this.
+ */
+export function reviveSignupFormDataFromJson(
+  data: Partial<SerializableSignupFormData> | undefined | null
+): Partial<SignupFormData> {
+  if (!data) return {};
+
+  const { firstCleanDate, ...rest } = data;
+  const revived = firstCleanDate ? new Date(firstCleanDate) : undefined;
+
+  return {
+    ...(rest as Partial<SignupFormData>),
+    ...(revived && !Number.isNaN(revived.getTime())
+      ? { firstCleanDate: revived }
+      : {}),
+  };
+}
+
 export function deserializeSignupFormDataFromServer(
   data: SerializableSignupFormData
 ): SignupFormData {

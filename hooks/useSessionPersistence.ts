@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { SignupFormData, PriceDetails } from "@/lib/validations/bookng-modal";
-import { serializeSignupFormDataForServer } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import {
+  reviveSignupFormDataFromJson,
+  serializeSignupFormDataForServer,
+  type SerializableSignupFormData,
+} from "@/lib/validations/bookng-modal/serialize-signup-form";
 
 interface SessionData {
   success: boolean;
@@ -51,7 +55,16 @@ async function apiSession(
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
-    return (await res.json()) as SessionData;
+    const json = (await res.json()) as Omit<SessionData, "formData"> & {
+      formData?: Partial<SerializableSignupFormData>;
+    };
+
+    // JSON has no Date type — rebuild `firstCleanDate` before it reaches form
+    // state, or a resumed booking cannot get past the subscription step.
+    return {
+      ...json,
+      formData: reviveSignupFormDataFromJson(json.formData),
+    };
   } catch {
     return { success: false };
   }

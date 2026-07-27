@@ -12,18 +12,62 @@ export { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount
 const LARGE_PROPERTY_SURCHARGE = 50;
 const LARGE_PROPERTY_SQFT_THRESHOLD = 1800;
 
+type PricingRules = Awaited<ReturnType<typeof loadPricingRules>>;
+
+/**
+ * The booking form reprices on every edit, and four round trips per keystroke
+ * is what made the price visibly lag behind the form. The rule tables are a few
+ * dozen rows that only change from the admin pricing screen, so a short cache
+ * removes the latency without letting an admin edit go unnoticed for long.
+ * Kept module-level (per server instance) and deliberately short-lived.
+ */
+const RULES_CACHE_TTL_MS = 60_000;
+let rulesCache: { rules: PricingRules; expiresAt: number } | null = null;
+let rulesInFlight: Promise<PricingRules> | null = null;
+
+async function loadPricingRules() {
+  const [basePrices, sqftSurcharges, laundryRules, hotTubRules] =
+    await Promise.all([
+      db.query.basePricingRules.findMany(),
+      db.query.sqftSurchargeRules.findMany(),
+      db.query.laundryPricingRules.findMany(),
+      db.query.hotTubPricingRules.findMany(),
+    ]);
+
+  return { basePrices, sqftSurcharges, laundryRules, hotTubRules };
+}
+
+async function getPricingRules(): Promise<PricingRules> {
+  if (rulesCache && rulesCache.expiresAt > Date.now()) {
+    return rulesCache.rules;
+  }
+
+  // Concurrent repricings share one query instead of stampeding the DB.
+  rulesInFlight ??= loadPricingRules()
+    .then((rules) => {
+      // Never cache an empty read — that is the "pricing unavailable" signal,
+      // and pinning it for a minute would hide a recovered database.
+      if (rules.basePrices.length > 0) {
+        rulesCache = { rules, expiresAt: Date.now() + RULES_CACHE_TTL_MS };
+      }
+      return rules;
+    })
+    .finally(() => {
+      rulesInFlight = null;
+    });
+
+  return rulesInFlight;
+}
+
+/** Drops the cache so an admin pricing change is reflected immediately. */
+export function invalidatePricingRulesCache(): void {
+  rulesCache = null;
+}
+
 export class PricingService {
   public async calculatePrice(formData: SignupFormData): Promise<PriceDetails> {
     const normalized = normalizeSignupFormDataForPricing(formData);
-    const [basePrices, sqftSurcharges, laundryRules, hotTubRules] =
-      await Promise.all([
-        db.query.basePricingRules.findMany(),
-        db.query.sqftSurchargeRules.findMany(),
-        db.query.laundryPricingRules.findMany(),
-        db.query.hotTubPricingRules.findMany(),
-      ]);
-
-    const rules = { basePrices, sqftSurcharges, laundryRules, hotTubRules };
+    const rules = await getPricingRules();
     const {
       bedrooms = 0,
       bathrooms = 0,

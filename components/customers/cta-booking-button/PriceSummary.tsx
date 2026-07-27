@@ -1,12 +1,21 @@
 import { PriceDetails } from "@/lib/validations/bookng-modal";
-import { Tag, HelpCircle, AlertTriangle } from "lucide-react";
+import { Tag, HelpCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { PriceRow } from "./Pricerow";
 
 interface Props {
   priceDetails: PriceDetails | null;
+  /**
+   * The answers have changed and the recalculated price has not arrived yet.
+   * Saying so beats showing a stale number as if it were final — a customer
+   * could otherwise read the old price and continue before it caught up.
+   */
+  isRecalculating?: boolean;
 }
 
-export const PriceSummary = ({ priceDetails }: Props) => {
+export const PriceSummary = ({
+  priceDetails,
+  isRecalculating = false,
+}: Props) => {
   // Only a genuinely absent quote shows the placeholder. `basePrice === 0` must
   // NOT be used as that signal: the form starts at 2 bed / 1 bath, so a price is
   // always computable, and a 0 means we failed to price the property. Treating
@@ -55,10 +64,23 @@ export const PriceSummary = ({ priceDetails }: Props) => {
 
   return (
     <div className="bg-gray-50 rounded-lg p-6 h-full">
-      <h3 className="font-semibold text-lg text-gray-800 mb-4">
-        Price per Clean
-      </h3>
-      <div className="space-y-1 text-sm">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h3 className="font-semibold text-lg text-gray-800">Price per Clean</h3>
+        {isRecalculating && (
+          <span
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500"
+            role="status"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Updating…
+          </span>
+        )}
+      </div>
+      <div
+        className={`space-y-1 text-sm transition-opacity ${
+          isRecalculating ? "opacity-50" : "opacity-100"
+        }`}
+      >
         <PriceRow
           label="Base Price"
           value={`$${priceDetails.basePrice.toFixed(2)}`}

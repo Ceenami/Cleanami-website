@@ -28,8 +28,18 @@ export const signupFormSchema = z
       .enum(["4_weeks", "6_weeks", "2_months", "3_months", "4_months"])
       .optional(),
     subscriptionMonths: z.number().min(1).max(6),
-    defaultCheckInTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/, "Invalid time format"),
-    defaultCheckOutTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/, "Invalid time format"),
+    defaultCheckInTime: z
+      .string()
+      .regex(
+        /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/,
+        "Enter the time guests check in"
+      ),
+    defaultCheckOutTime: z
+      .string()
+      .regex(
+        /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/,
+        "Enter the time guests check out"
+      ),
     iCalUrl: z.string().url("Please enter a valid URL"),
     firstCleanDate: z.date({
       message: "Please select a valid start date for your first clean.",

@@ -21,6 +21,13 @@ interface Props {
   onBookCall?: () => void;
   onContinueSetup?: () => void;
   paymentFinalizing?: boolean;
+  /**
+   * Whether the customer has committed to paying, so the Stripe form is shown.
+   * Owned by `SignupForm` because the footer renders the primary
+   * "Activate Your Subscription" button that flips it, next to Back.
+   */
+  showPaymentForm: boolean;
+  onShowPaymentForm: () => void;
 }
 
 export const Step7Payment = ({
@@ -30,12 +37,13 @@ export const Step7Payment = ({
   onPaymentSuccess,
   onBookCall,
   paymentFinalizing = false,
+  showPaymentForm,
+  onShowPaymentForm,
 }: Props) => {
   const [clientSecret, setClientSecret] = useState('');
   const [amountInCents, setAmountInCents] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
-  const [showPaymentForm, setShowPaymentForm] = useState(false);
 
   const serializedFormData = useMemo(
     () => serializeSignupFormDataForServer(formData),
@@ -144,10 +152,6 @@ export const Step7Payment = ({
   const appearance = { theme: 'stripe' as const, variables: { colorPrimary: '#14b8a6' } };
   const options: StripeElementsOptions = { clientSecret, appearance };
 
-  const handleContinueToPayment = () => {
-    setShowPaymentForm(true);
-  };
-
   return (
     <div className="space-y-6">
       <div>
@@ -167,7 +171,9 @@ export const Step7Payment = ({
       {!showPaymentForm && onBookCall && (
         <FounderCard
           onBookCall={onBookCall}
-          onContinue={handleContinueToPayment}
+          onContinue={onShowPaymentForm}
+          continueLabel="Activate Your Subscription"
+          continueIsPrimary
         />
       )}
 

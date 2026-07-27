@@ -3,6 +3,7 @@ import { StepFeedback } from "./StepFeedback";
 import { AddressAutocomplete } from "./AddressAutoComplete";
 import { CheckCircle, XCircle } from "lucide-react";
 import { FounderCard } from "../../FounderCard";
+import { toTimeInputValue, toTimeOfDay } from "@/lib/time-of-day";
 
 interface Step2Props extends StepsProps {
   /** Whether to show the Founder Card (show after price is calculated) */
@@ -23,8 +24,21 @@ export const Step2PropertyInfo = ({
 }: Step2Props) => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: Number(value) }));
+    // Digits only: a stray character used to make `Number(value)` NaN, which
+    // priced the property at $0 without ever saying why.
+    const digits = value.replace(/[^0-9]/g, "");
+    setFormData((prev) => ({ ...prev, [name]: Number(digits) }));
   };
+
+  const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: toTimeOfDay(value) }));
+  };
+
+  /** 0 renders as an empty box so the field can be cleared and retyped; it
+   *  still fails `z.number().positive()`, so an empty field cannot be skipped. */
+  const numberValue = (value: number | undefined) =>
+    value ? String(value) : "";
 
   const ServiceAreaFeedback = () => {
     if (formData.isAddressInServiceArea === true) {
@@ -73,10 +87,11 @@ export const Step2PropertyInfo = ({
           </label>
           <input
             type="text"
+            inputMode="numeric"
             name="sqft"
             id="sqft"
             placeholder="1500"
-            defaultValue={formData.sqft?.toString()}
+            value={numberValue(formData.sqft)}
             onChange={handleChange}
             className={`block w-full px-3 py-2 border text-gray-800 border-gray-300 rounded-md shadow-sm focus:outline-none ${
               errors.sqft ? "border-red-500" : "border-gray-300"
@@ -92,10 +107,11 @@ export const Step2PropertyInfo = ({
           </label>
           <input
             type="text"
+            inputMode="numeric"
             name="bedrooms"
             id="bedrooms"
             min="1"
-            defaultValue={formData.bedrooms?.toString()}
+            value={numberValue(formData.bedrooms)}
             onChange={handleChange}
             className={`block w-full px-3 py-2 border text-gray-800 border-gray-300 rounded-md shadow-sm focus:outline-none ${
               errors.bedrooms ? "border-red-500" : "border-gray-300"
@@ -112,10 +128,11 @@ export const Step2PropertyInfo = ({
           </label>
           <input
             type="text"
+            inputMode="numeric"
             name="bathrooms"
             id="bathrooms"
             min="1"
-            defaultValue={formData.bathrooms?.toString()}
+            value={numberValue(formData.bathrooms)}
             onChange={handleChange}
             className={`block w-full px-3 py-2 border text-gray-800 border-gray-300 rounded-md shadow-sm focus:outline-none ${
               errors.bathrooms ? "border-red-500" : "border-gray-300"
@@ -135,13 +152,9 @@ export const Step2PropertyInfo = ({
             type="time"
             name="defaultCheckInTime"
             id="defaultCheckInTime"
-            defaultValue={formData.defaultCheckInTime || "16:00"}
-            onChange={(e) =>
-              setFormData((prev) => ({
-                ...prev,
-                defaultCheckInTime: e.target.value + ":00",
-              }))
-            }
+            step={60}
+            value={toTimeInputValue(formData.defaultCheckInTime)}
+            onChange={handleTimeChange}
             className={`block w-full px-3 py-2 border text-gray-800 border-gray-300 rounded-md shadow-sm focus:outline-none ${
               errors.defaultCheckInTime ? "border-red-500" : "border-gray-300"
             } focus:ring-teal-500 focus:border-teal-500 sm:text-sm`}
@@ -160,13 +173,9 @@ export const Step2PropertyInfo = ({
             type="time"
             name="defaultCheckOutTime"
             id="defaultCheckOutTime"
-            defaultValue={formData.defaultCheckOutTime || "09:00"}
-            onChange={(e) =>
-              setFormData((prev) => ({
-                ...prev,
-                defaultCheckOutTime: e.target.value + ":00",
-              }))
-            }
+            step={60}
+            value={toTimeInputValue(formData.defaultCheckOutTime)}
+            onChange={handleTimeChange}
             className={`block w-full px-3 py-2 border text-gray-800 border-gray-300 rounded-md shadow-sm focus:outline-none ${
               errors.defaultCheckOutTime ? "border-red-500" : "border-gray-300"
             } focus:ring-teal-500 focus:border-teal-500 sm:text-sm`}
@@ -177,7 +186,14 @@ export const Step2PropertyInfo = ({
 
       <StepFeedback
         errors={errors}
-        fields={["bathrooms", "bedrooms", "sqft", "address"]}
+        fields={[
+          "bathrooms",
+          "bedrooms",
+          "sqft",
+          "address",
+          "defaultCheckInTime",
+          "defaultCheckOutTime",
+        ]}
         message="Fields are required to proceed."
       />
 

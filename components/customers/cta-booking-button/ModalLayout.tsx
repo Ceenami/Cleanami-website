@@ -10,6 +10,7 @@ interface Props {
   title: string;
   showPriceSummary: boolean;
   priceDetails: PriceDetails | null;
+  isPriceRecalculating?: boolean;
 }
 
 export const ModalLayout = ({
@@ -19,6 +20,7 @@ export const ModalLayout = ({
   title,
   showPriceSummary,
   priceDetails,
+  isPriceRecalculating = false,
 }: Props) => {
   if (!isOpen) return null;
 
@@ -49,7 +51,10 @@ export const ModalLayout = ({
             <div className="p-6 md:p-8">{children}</div>
             {showPriceSummary && (
               <div className="p-6 md:p-8 bg-white border-l border-gray-100 hidden md:block">
-                <PriceSummary priceDetails={priceDetails} />
+                <PriceSummary
+                  priceDetails={priceDetails}
+                  isRecalculating={isPriceRecalculating}
+                />
               </div>
             )}
           </div>
