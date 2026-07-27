@@ -30,6 +30,9 @@ interface AssignmentResponse {
   error?: string;
 }
 
+/** Tailwind's `md` breakpoint — below this the sidebar overlays the page. */
+const MD_BREAKPOINT = 768;
+
 export const Sidebar = () => {
   const { data: user } = useCurrentUser();
 
@@ -38,6 +41,24 @@ export const Sidebar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const toggleSidebar = () => {
     setIsOpen(!isOpen);
+  };
+
+  // On phones the sidebar covers the page, so leaving it open after a tab is
+  // tapped hides the page that just loaded — which reads as "the tabs don't
+  // work". Close it whenever the route changes at overlay widths.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth < MD_BREAKPOINT) {
+      setIsOpen(false);
+    }
+  }, [pathname]);
+
+  // Closing on tap (rather than waiting for the route change) makes the tap
+  // feel answered immediately, even while the next page is still rendering.
+  const closeOnMobile = () => {
+    if (typeof window !== "undefined" && window.innerWidth < MD_BREAKPOINT) {
+      setIsOpen(false);
+    }
   };
 
   const visibleNavItems = user?.user_metadata.role === 'admin' || user?.user_metadata.role === 'super_admin' ? PRIVATE_ADMIN_NAV_ROUTES : PRIVATE_USER_NAV_ROUTES;
@@ -151,8 +172,11 @@ const triggerAssignmentEngine = async () => {
     <>
       <aside
         className={`fixed inset-y-0 md:top-20 md:absolute left-0 w-64 bg-white shadow-lg flex flex-col transition-transform duration-300 ease-in-out z-50 md:h-full ${sidebarPositionClass}`}
+        // A closed sidebar is only moved off-screen, so without this its links
+        // stay in the tab order and reachable by screen readers.
+        inert={!isOpen}
       >
-        <div className="h-20 flex items-center justify-between border-b border-gray-200 px-4">
+        <div className="h-20 flex shrink-0 items-center justify-between border-b border-gray-200 px-4">
           <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">
             <span className="text-teal-500">Clean</span>Nami
             {isAdmin && (
@@ -175,15 +199,19 @@ const triggerAssignmentEngine = async () => {
           </button>
         </div>
 
-        <nav className="flex-1 px-0 py-0 h-full space-y-2 bg-teal-50 ">
+        {/* `min-h-0` + `overflow-y-auto` so the full nav (plus the admin panels
+            below it) stays reachable on short screens — it used to overflow the
+            viewport with no way to scroll to the last items. */}
+        <nav className="flex-1 min-h-0 overflow-y-auto px-0 py-0 space-y-2 bg-teal-50">
           <div className="p-0 bg-gray-50 rounded-lg text-sm text-gray-600">
             {visibleNavItems.map((item) => (
               <Link
                 key={item.label}
                 href={item.route as Route}
+                onClick={closeOnMobile}
                 className={`flex items-center w-full px-4 py-2.5 text-sm font-medium text-gray-600 rounded-lg transition-colors duration-200 text-left ${
                   pathname?.startsWith(item.route)
-                    ? "text-teal-700"
+                    ? "bg-teal-100 text-teal-700"
                     : "hover:bg-gray-100 hover:text-gray-900"
                 }`}
               >
