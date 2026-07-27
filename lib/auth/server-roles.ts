@@ -2,7 +2,11 @@ import "server-only";
 
 import { getDbOrNull } from "@/db";
 import { users } from "@/db/schemas";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import {
+  createAdminClient,
+  createClient,
+  getBearerToken,
+} from "@/lib/supabase/server";
 import { eq } from "drizzle-orm";
 
 /**
@@ -39,10 +43,15 @@ export type SessionIdentity = {
   email?: string;
 };
 
-/** Resolves the signed-in user's id + email from the session cookie. */
+/**
+ * Resolves the signed-in user's id + email from the session cookie, or from an
+ * `Authorization: Bearer` token when the caller is the native app (which has no
+ * cookies). `getClaims` verifies the signature either way.
+ */
 export async function getSessionIdentity(): Promise<SessionIdentity> {
   const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
+  const bearerToken = await getBearerToken();
+  const { data } = await supabase.auth.getClaims(bearerToken ?? undefined);
   const claims = data?.claims as Record<string, unknown> | undefined;
   return {
     supabaseUserId: typeof claims?.sub === "string" ? claims.sub : undefined,
