@@ -2,7 +2,6 @@
 
 import Form from "next/form";
 import { useActionState } from "react";
-import { useFormStatus } from "react-dom";
 import { signInUser } from "@/lib/actions/auth.actions"
 import { LockIcon, MailIcon } from "lucide-react";
 import { AuthUserForm } from "@/lib/types/auth";
@@ -19,9 +18,10 @@ const CredentialsSignInForm = () => {
     },
   }
 
-  const [ data, action] = useActionState(signInUser, initialState)
-
-  const { pending } = useFormStatus();
+  // `pending` comes from `useActionState`, not `useFormStatus` — the latter
+  // only reports for a form rendered by a *parent* component, so used here it
+  // was always false and the button never showed that the click had landed.
+  const [data, action, pending] = useActionState(signInUser, initialState)
 
   return (
     <Form action={action} className="space-y-6">
