@@ -2,9 +2,15 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
 import { isAdminRole, trustedRoleFromClaims } from "@/lib/auth/roles";
+import { bearerTokenFromHeader } from "@/lib/auth/bearer-token";
 
 const allowedOrigins = [
+  // iOS Capacitor default.
   'capacitor://localhost',
+  // Android with `androidScheme: 'https'` (see the app's capacitor.config.ts).
+  // Without this the native app's requests are blocked by CORS even when they
+  // authenticate correctly.
+  'https://localhost',
   'http://localhost',
   'http://localhost:8080',
 ];
@@ -71,7 +77,15 @@ export async function updateSession(request: NextRequest) {
 
   // IMPORTANT: If you remove getClaims() and you use server-side rendering
   // with the Supabase client, your users may be randomly logged out.
-  const { data } = await supabase.auth.getClaims();
+  // The native cleaner app sends a Bearer token and no cookies, so a bare
+  // `getClaims()` resolves nothing and every /api/cleaner/* call would be
+  // rejected below before reaching its route handler. `getClaims(token)`
+  // verifies the signature, so this widens who can authenticate, not what an
+  // unauthenticated caller may do.
+  const bearerToken = bearerTokenFromHeader(
+    request.headers.get("authorization")
+  );
+  const { data } = await supabase.auth.getClaims(bearerToken ?? undefined);
   const user = data?.claims;
   // Authoritative-at-the-edge role: `app_metadata.role` is set only by the
   // service role and cannot be self-edited by the client (unlike

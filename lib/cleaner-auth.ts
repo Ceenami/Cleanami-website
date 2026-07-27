@@ -2,7 +2,7 @@ import "server-only";
 
 import { getDbOrNull } from "@/db";
 import { cleaners, jobsToCleaners, users } from "@/db/schemas";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getBearerToken } from "@/lib/supabase/server";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { and, eq } from "drizzle-orm";
 
@@ -23,7 +23,13 @@ const INVITATION_REQUIRED_MESSAGE =
  */
 export async function getCleanerAuth(): Promise<CleanerAuthResult> {
   const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
+
+  // With no argument `getClaims()` resolves the session from cookies, which the
+  // native app never has. Passing the Bearer token explicitly covers both:
+  // `getClaims` verifies the signature (JWK for asymmetric keys, otherwise a
+  // `getUser` round trip), so a forged token still fails.
+  const bearerToken = await getBearerToken();
+  const { data } = await supabase.auth.getClaims(bearerToken ?? undefined);
   const claims = data?.claims;
 
   if (!claims?.sub) {
