@@ -2,8 +2,14 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { signInFormSchema, signUpFormSchema } from "@/lib/validations/auth";
+import {
+  forgotPasswordFormSchema,
+  resetPasswordFormSchema,
+  signInFormSchema,
+  signUpFormSchema,
+} from "@/lib/validations/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getAppBaseUrl } from "@/lib/app-url";
 import { db } from "@/db";
 import { users } from "@/db/schemas";
 import { formatError } from "@/lib/utils";
@@ -23,6 +29,102 @@ export async function signOut() {
   await supabase.auth.signOut({ scope: "global" });
   revalidatePath("/", "layout");
   return redirect("/sign-in");
+}
+
+/**
+ * Sends a password-reset email.
+ *
+ * Always reports success, whatever Supabase says: telling an anonymous caller
+ * whether an address has an account is an account-enumeration leak, and the
+ * user-visible outcome ("check your inbox") is the same either way.
+ */
+export async function requestPasswordReset(
+  prevState: AuthUserForm | undefined,
+  formData: FormData
+): Promise<AuthUserForm> {
+  const email = String(formData.get("email") ?? "");
+  const validation = forgotPasswordFormSchema.safeParse({ email });
+
+  if (!validation.success) {
+    return {
+      success: false,
+      data: { email },
+      error: { message: formatError(validation.error) },
+    };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(
+    validation.data.email.toLowerCase(),
+    {
+      // `/auth/confirm` verifies the recovery token, establishes the session,
+      // then forwards to the form that sets the new password.
+      redirectTo: `${getAppBaseUrl()}/auth/confirm?type=recovery&next=${encodeURIComponent(
+        "/reset-password"
+      )}`,
+    }
+  );
+
+  if (error) {
+    console.warn("[requestPasswordReset]", error.message);
+  }
+
+  return {
+    success: true,
+    data: { email: validation.data.email },
+    error: { message: "" },
+  };
+}
+
+/** Sets a new password for the session established by the recovery link. */
+export async function resetPassword(
+  prevState: AuthUserForm | undefined,
+  formData: FormData
+): Promise<AuthUserForm> {
+  const validation = resetPasswordFormSchema.safeParse({
+    password: formData.get("password"),
+    confirmPassword: formData.get("confirm-password"),
+  });
+
+  if (!validation.success) {
+    return {
+      success: false,
+      data: { email: "" },
+      error: { message: formatError(validation.error) },
+    };
+  }
+
+  const supabase = await createClient();
+  const { data: claimsData } = await supabase.auth.getClaims();
+
+  if (!claimsData?.claims?.sub) {
+    return {
+      success: false,
+      data: { email: "" },
+      error: {
+        message:
+          "This reset link has expired. Request a new one from the sign-in page.",
+      },
+    };
+  }
+
+  const { error } = await supabase.auth.updateUser({
+    password: validation.data.password,
+  });
+
+  if (error) {
+    return {
+      success: false,
+      data: { email: "" },
+      error: { message: error.message },
+    };
+  }
+
+  // Every other device holding the old session is signed out, so a leaked
+  // password cannot keep an existing session alive.
+  await supabase.auth.signOut({ scope: "others" });
+
+  return redirect("/sign-in?reset=1");
 }
 
 export async function signUpUser(

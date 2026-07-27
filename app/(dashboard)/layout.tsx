@@ -10,7 +10,7 @@ export default function Layout({
     <div className="relative min-h-screen">
       <Header />
       <Sidebar />
-      <main id="slide-content" className="min-h-screen flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-8 transition-all duration-300">
+      <main id="slide-content" className="min-h-screen flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-4 md:p-8 transition-all duration-300">
         {children}
       </main>
     </div>

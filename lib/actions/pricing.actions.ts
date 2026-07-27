@@ -13,6 +13,7 @@ import {
 import { eq } from "drizzle-orm";
 import Papa from "papaparse";
 import { revalidateTag } from "next/cache";
+import { invalidatePricingRulesCache } from "@/lib/services/pricing.service";
 
 export type PricingFileType =
   | "base_prices"
@@ -233,6 +234,10 @@ export async function handleFileUpload(
 
     // --- FINAL STEP: Invalidate the cache ---
     revalidateTag("pricing_rules");
+    // `PricingService` keeps its own short-lived in-process copy of the rule
+    // tables (the booking form reprices on every edit); drop it too so the new
+    // prices take effect on the next quote rather than up to a minute later.
+    invalidatePricingRulesCache();
 
     return { success: true, message: "Pricing updated successfully!" };
   } catch (error: any) {

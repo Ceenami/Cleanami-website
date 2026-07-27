@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { isServiceUnavailableMessage } from "@/lib/env/messages";
 import { serializeSignupFormDataForServer } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
 // Session persistence
 import { useSessionPersistence } from "@/hooks/useSessionPersistence";
@@ -101,6 +102,13 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
   // Call booking state
   const [showCallBookedConfirmation, setShowCallBookedConfirmation] = useState(false);
 
+  // Whether the payment step has revealed the Stripe card form. Lives here so
+  // the footer can offer "Activate Your Subscription" next to Back — the last
+  // step previously had no obvious forward action at all, only the Founder
+  // Card's "Continue setup on your own".
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const revealPaymentForm = () => setShowPaymentForm(true);
+
   // Load initialData if provided (from resume link verification)
   useEffect(() => {
     if (initialData) {
@@ -139,7 +147,13 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     saveProgress(formData, currentStep, priceDetails);
   }, [formData, currentStep, priceDetails, saveProgress, hasExistingSession, isLoadingSession]);
 
-  const pricingFormSnapshot = useMemo(() => JSON.stringify(formData), [formData]);
+  const pricingFormSnapshot = useMemo(
+    () => JSON.stringify(serializeSignupFormDataForServer(formData)),
+    [formData]
+  );
+
+  /** The snapshot `priceDetails` was actually calculated for. */
+  const [pricedSnapshot, setPricedSnapshot] = useState<string | null>(null);
 
   // Fetch price when form data changes.
   //
@@ -148,19 +162,21 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
   // by a newer one is discarded rather than clobbering the fresher value.
   useEffect(() => {
     let superseded = false;
+    const snapshot = pricingFormSnapshot;
 
     const fetchPrice = async () => {
       try {
         const res = await fetch("/api/pricing", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(serializeSignupFormDataForServer(formData)),
+          body: snapshot,
         });
         if (superseded) return;
         if (res.ok) {
           const details = (await res.json()) as PriceDetails | null;
           if (!superseded && details) {
             setPriceDetails(details);
+            setPricedSnapshot(snapshot);
           }
         }
       } catch {
@@ -170,13 +186,45 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
 
     const timerId = setTimeout(() => {
       void fetchPrice();
-    }, 500);
+    }, 250);
 
     return () => {
       superseded = true;
       clearTimeout(timerId);
     };
-  }, [pricingFormSnapshot, formData]);
+  }, [pricingFormSnapshot]);
+
+  // What the summary actually shows.
+  //
+  // The subscription-term discount is a pure function of the term length
+  // (`getSubscriptionDiscountRate`, the same module the server prices with), so
+  // re-deriving it here makes picking a longer term update the total instantly
+  // instead of a round trip later — the lag that let a customer hit Continue
+  // while the calculator still showed the old number. Everything the server
+  // owns (base price, surcharges, add-ons) is left exactly as returned.
+  const displayedPriceDetails = useMemo<PriceDetails | null>(() => {
+    if (!priceDetails) return null;
+
+    const discountRate = getSubscriptionDiscountRate(
+      Number(formData.subscriptionMonths) || 1
+    );
+    if (discountRate === priceDetails.discountRate) return priceDetails;
+
+    const discountAmount =
+      Math.round(priceDetails.subtotalPerClean * discountRate * 100) / 100;
+
+    return {
+      ...priceDetails,
+      discountRate,
+      discountAmount,
+      totalPerClean: priceDetails.subtotalPerClean - discountAmount,
+    };
+  }, [priceDetails, formData.subscriptionMonths]);
+
+  // True while the numbers on screen do not yet reflect the current answers, so
+  // the summary can say so instead of silently showing a stale price.
+  const isPriceStale =
+    pricedSnapshot !== null && pricedSnapshot !== pricingFormSnapshot;
 
   // Step change handler (saves immediately)
   const handleStepChange = async (newStep: number) => {
@@ -289,7 +337,7 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
   const handlePaymentSuccess = async (paymentIntentId: string) => {
     setPaymentData({
       paymentIntentId,
-      amount: priceDetails?.totalPerClean || 0,
+      amount: displayedPriceDetails?.totalPerClean || 0,
       currency: "CHF",
     });
     setIsSaving(true);
@@ -419,11 +467,13 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
         return (
           <div>
             <Step7Payment
-              priceDetails={priceDetails}
+              priceDetails={displayedPriceDetails}
               formData={formData}
               setFormData={setFormData}
               onPaymentSuccess={handlePaymentSuccess}
               paymentFinalizing={isSaving}
+              showPaymentForm={showPaymentForm}
+              onShowPaymentForm={revealPaymentForm}
               {...founderCardProps}
             />
             {isSaving && (
@@ -488,7 +538,10 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
 
         {showPriceSummary && (
           <div className="md:hidden mb-6">
-            <PriceSummary priceDetails={priceDetails} />
+            <PriceSummary
+              priceDetails={displayedPriceDetails}
+              isRecalculating={isPriceStale}
+            />
           </div>
         )}
 
@@ -518,6 +571,19 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
                   Next
                 </button>
               )}
+
+              {/* Payment step: a named primary action, so it is never unclear
+                  what finishes the booking. Once the card form is on screen its
+                  own "Confirm & Pay" button takes over. */}
+              {currentStep === 7 && !showPaymentForm && (
+                <button
+                  type="button"
+                  onClick={revealPaymentForm}
+                  className="py-2 px-4 rounded-md text-sm font-semibold text-white bg-brand hover:bg-brand/60"
+                >
+                  Activate Your Subscription
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -538,7 +604,8 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
             : stepTitles[currentStep - 1]
         }
         showPriceSummary={showPriceSummary && !isLoadingSession && !hasExistingSession}
-        priceDetails={priceDetails}
+        priceDetails={displayedPriceDetails}
+        isPriceRecalculating={isPriceStale}
       >
         {renderContent()}
       </ModalLayout>

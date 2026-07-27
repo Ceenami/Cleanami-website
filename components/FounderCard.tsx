@@ -9,6 +9,14 @@ interface FounderCardProps {
   introText?: string;
   showMicrotext?: boolean;
   isLoading?: boolean;
+  /**
+   * Label for the "carry on without a call" action. Defaults to the neutral
+   * mid-flow wording; the payment step overrides it so the last screen names
+   * what the button actually does.
+   */
+  continueLabel?: string;
+  /** Style the continue action as the primary call to action. */
+  continueIsPrimary?: boolean;
 }
 
 const FOUNDER_IMAGE_PATH = "/images/ceenami-headshot.jpg"; 
@@ -20,6 +28,8 @@ export function FounderCard({
   introText,
   showMicrotext = true,
   isLoading = false,
+  continueLabel = "Continue setup on your own",
+  continueIsPrimary = false,
 }: FounderCardProps) {
   const handleBookCall = () => {
     if (typeof window !== 'undefined' && typeof window.gtag === 'function') {
@@ -69,7 +79,11 @@ export function FounderCard({
           <button
             onClick={handleBookCall}
             disabled={isLoading}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand text-white font-medium rounded-lg hover:bg-brand/80 transition-colors disabled:opacity-50"
+            className={`w-full flex items-center justify-center gap-2 py-3 px-4 font-medium rounded-lg transition-colors disabled:opacity-50 ${
+              continueIsPrimary
+                ? "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+                : "bg-brand text-white hover:bg-brand/80"
+            }`}
           >
             <Calendar className="w-4 h-4" />
             Book a 5-Minute Setup Call
@@ -78,9 +92,13 @@ export function FounderCard({
           <button
             onClick={onContinue}
             disabled={isLoading}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white text-gray-700 font-medium rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors disabled:opacity-50"
+            className={`w-full flex items-center justify-center gap-2 py-3 px-4 font-medium rounded-lg transition-colors disabled:opacity-50 ${
+              continueIsPrimary
+                ? "bg-brand text-white hover:bg-brand/80"
+                : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+            }`}
           >
-            Continue setup on your own
+            {continueLabel}
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
