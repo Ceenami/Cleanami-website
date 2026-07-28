@@ -2,10 +2,12 @@ import "server-only";
 
 import { db } from "@/db";
 import { promoCodes, promoRedemptions } from "@/db/schemas";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { isUniqueViolation } from "@/lib/db/errors";
 import {
   evaluatePromoCode,
   normalizePromoCode,
+  REJECTION_MESSAGES,
   type PromoEvaluation,
   type PromoCodeRules,
 } from "@/lib/pricing/promo-code";
@@ -18,16 +20,90 @@ export type ResolvedPromo = {
   capped: boolean;
 };
 
+type PromoCodeRow = {
+  id: string;
+  code: string;
+  discountType: PromoCodeRules["discountType"];
+  discountValue: number;
+  active: boolean;
+  maxRedemptions: number | null;
+  redemptionCount: number;
+  startsAt: Date | null;
+  expiresAt: Date | null;
+};
+
+/**
+ * Has this customer ever redeemed this code before? Keyed on email (not
+ * customer id) because at checkout-preview time, before an account exists,
+ * there is no customer id yet — email is the only identity we always have.
+ * Mirrors the case-insensitive comparison the pre-existing
+ * `promo_redemptions_email_idx` was built for.
+ */
+export async function hasCustomerRedeemedPromoCode(
+  promoCodeId: string,
+  email: string
+): Promise<boolean> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return false;
+
+  const existing = await db.query.promoRedemptions.findFirst({
+    where: and(
+      eq(promoRedemptions.promoCodeId, promoCodeId),
+      sql`lower(${promoRedemptions.customerEmail}) = ${normalizedEmail}`
+    ),
+    columns: { id: true },
+  });
+
+  return !!existing;
+}
+
+async function evaluateRow(
+  row: PromoCodeRow | undefined,
+  amountCents: number,
+  customerEmail: string
+): Promise<PromoEvaluation> {
+  if (!row) return evaluatePromoCode(amountCents, null);
+
+  // Checked before the rest of the rules so a customer re-trying a code they
+  // already burned gets a clear answer rather than a generic rejection.
+  if (await hasCustomerRedeemedPromoCode(row.id, customerEmail)) {
+    return {
+      valid: false,
+      reason: "already_used",
+      message: REJECTION_MESSAGES.already_used,
+    };
+  }
+
+  const rules: PromoCodeRules = {
+    code: row.code,
+    discountType: row.discountType,
+    discountValue: row.discountValue,
+    active: row.active,
+    maxRedemptions: row.maxRedemptions,
+    redemptionCount: row.redemptionCount,
+    startsAt: row.startsAt,
+    expiresAt: row.expiresAt,
+  };
+
+  return evaluatePromoCode(amountCents, rules);
+}
+
 /**
  * Look a code up and decide whether it applies to `amountCents`.
  *
  * Returns the evaluation plus the row id when valid, so the caller can record
  * the redemption later without a second lookup. Never throws for an unknown
  * code — an unknown code is an ordinary "not valid" answer.
+ *
+ * `customerEmail` may be empty at the very start of the booking-checkout
+ * preview (before the customer has typed it in) — the already-used check is
+ * simply skipped in that case; the authoritative re-check before charging
+ * always has an email by then.
  */
 export async function resolvePromoCodeForAmount(
   rawCode: string,
-  amountCents: number
+  amountCents: number,
+  customerEmail: string
 ): Promise<{ evaluation: PromoEvaluation; promoCodeId: string | null }> {
   const code = normalizePromoCode(rawCode);
   if (!code) {
@@ -41,21 +117,28 @@ export async function resolvePromoCodeForAmount(
     where: eq(promoCodes.code, code),
   });
 
-  const rules: PromoCodeRules | null = row
-    ? {
-        code: row.code,
-        discountType: row.discountType,
-        discountValue: row.discountValue,
-        active: row.active,
-        maxRedemptions: row.maxRedemptions,
-        redemptionCount: row.redemptionCount,
-        startsAt: row.startsAt,
-        expiresAt: row.expiresAt,
-      }
-    : null;
+  return {
+    evaluation: await evaluateRow(row, amountCents, customerEmail),
+    promoCodeId: row?.id ?? null,
+  };
+}
+
+/**
+ * Same as `resolvePromoCodeForAmount`, but looked up by the code's row id
+ * rather than its text — used where only a stored `promo_code_id` is on hand
+ * (a job's applied code), not the raw code string.
+ */
+export async function resolvePromoCodeById(
+  promoCodeId: string,
+  amountCents: number,
+  customerEmail: string
+): Promise<{ evaluation: PromoEvaluation; promoCodeId: string | null }> {
+  const row = await db.query.promoCodes.findFirst({
+    where: eq(promoCodes.id, promoCodeId),
+  });
 
   return {
-    evaluation: evaluatePromoCode(amountCents, rules),
+    evaluation: await evaluateRow(row, amountCents, customerEmail),
     promoCodeId: row?.id ?? null,
   };
 }
@@ -75,6 +158,8 @@ export async function recordPromoRedemption(input: {
   customerEmail: string;
   customerId?: string | null;
   subscriptionId?: string | null;
+  /** The recurring clean this redemption discounted; omitted for a first-clean redemption. */
+  jobId?: string | null;
   paymentIntentId: string;
   originalAmountCents: number;
   discountAmountCents: number;
@@ -89,6 +174,7 @@ export async function recordPromoRedemption(input: {
         customerEmail: input.customerEmail,
         customerId: input.customerId ?? null,
         subscriptionId: input.subscriptionId ?? null,
+        jobId: input.jobId ?? null,
         paymentIntentId: input.paymentIntentId,
         originalAmountCents: input.originalAmountCents,
         discountAmountCents: input.discountAmountCents,
@@ -110,6 +196,17 @@ export async function recordPromoRedemption(input: {
 
     return { recorded: true };
   } catch (error) {
+    // Postgres unique_violation on promo_redemptions_code_customer_once_idx:
+    // a concurrent redemption of the same code by the same customer beat
+    // this one to the write (the once-per-customer-ever backstop firing).
+    // Charge already happened by this point either way — log distinctly from
+    // a generic DB error so this specific race is visible if it ever occurs.
+    if (isUniqueViolation(error)) {
+      console.warn(
+        `[promo] ${input.code} already redeemed by ${input.customerEmail} (concurrent redemption); PI ${input.paymentIntentId} not recorded`
+      );
+      return { recorded: false };
+    }
     console.error(
       `[promo] failed to record redemption of ${input.code} for ${input.paymentIntentId}`,
       error
@@ -128,6 +225,7 @@ export async function recordPromoRedemptionByCode(input: {
   customerEmail: string;
   customerId?: string | null;
   subscriptionId?: string | null;
+  jobId?: string | null;
   paymentIntentId: string;
   originalAmountCents: number;
   discountAmountCents: number;

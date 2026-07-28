@@ -22,6 +22,7 @@ import { badges } from "./badges.schema";
 import { userPreferences } from "./userPreferences.schema";
 import { disputes } from "./disputes.schema";
 import { propertyCleaners } from "./propertyCleaners.schema";
+import { promoCodes } from "./promoCodes.schema";
 
 // --- No changes needed for customer, property, checklist, or subscription relations ---
 export const customerRelations = relations(customers, ({ many }) => ({
@@ -95,6 +96,10 @@ export const jobRelations = relations(jobs, ({ one, many }) => ({
   reliabilityChecks: many(reliabilityChecks),
   reliabilityEvents: many(reliabilityEvents),
   jobStats: many(jobStats),
+  promoCode: one(promoCodes, {
+    fields: [jobs.promoCodeId],
+    references: [promoCodes.id],
+  }),
 }));
 
 export const cleanerRelations = relations(cleaners, ({ one, many }) => ({

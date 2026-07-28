@@ -33,7 +33,8 @@ export type PromoRejectionReason =
   | "not_started"
   | "expired"
   | "exhausted"
-  | "amount_too_low";
+  | "amount_too_low"
+  | "already_used";
 
 export type PromoEvaluation =
   | {
@@ -51,7 +52,7 @@ export function normalizePromoCode(input: string): string {
   return input.trim().toUpperCase();
 }
 
-const REJECTION_MESSAGES: Record<PromoRejectionReason, string> = {
+export const REJECTION_MESSAGES: Record<PromoRejectionReason, string> = {
   not_found: "That promo code is not valid.",
   inactive: "That promo code is no longer active.",
   not_started: "That promo code is not active yet.",
@@ -59,6 +60,7 @@ const REJECTION_MESSAGES: Record<PromoRejectionReason, string> = {
   exhausted: "That promo code has reached its redemption limit.",
   amount_too_low:
     "This booking is already below the minimum chargeable amount, so a promo code cannot be applied.",
+  already_used: "You've already used this promo code.",
 };
 
 function reject(reason: PromoRejectionReason): PromoEvaluation {

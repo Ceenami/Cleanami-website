@@ -15,6 +15,7 @@ import {
 } from "@/lib/cancellation/rules";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { customerSkipsBilling } from "@/lib/billing/customer-billing";
+import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
 import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
@@ -134,6 +135,7 @@ async function chargeCustomerForLateCancel(
     hotTubServiceLevel: boolean;
     hotTubDrain: boolean;
     hotTubDrainCadence: string | null;
+    priceOverrideCents?: number | null;
   },
   stripeCustomerId: string | null,
   skipPayment: boolean,
@@ -163,20 +165,14 @@ async function chargeCustomerForLateCancel(
     return false;
   }
 
-  const priceDetails = await pricingService.calculatePrice({
-    bedrooms: property.bedCount,
-    bathrooms: Number(property.bathCount),
-    sqft: property.sqFt || 0,
-    laundryService: property.laundryType,
-    laundryLoads: property.laundryLoads,
-    hasHotTub: property.hasHotTub,
-    hotTubService: property.hotTubServiceLevel,
-    hotTubDrain: property.hotTubDrain,
-    hotTubDrainCadence: property.hotTubDrainCadence,
-    // Apply the same subscription-term discount the customer agreed to, so a
-    // late-cancel charge is not more than a normal clean would have cost.
-    subscriptionMonths,
-  } as never);
+  const priceDetails = await pricingService.calculatePrice(
+    buildRecurringPricingInput(
+      property,
+      // Apply the same subscription-term discount the customer agreed to, so
+      // a late-cancel charge is not more than a normal clean would have cost.
+      subscriptionMonths
+    ) as never
+  );
 
   const amountInCents = Math.round(priceDetails.totalPerClean * 100);
   const paymentIntent = await stripe.paymentIntents.create({
@@ -268,6 +264,7 @@ async function finalizeJobCancellation(
       hotTubServiceLevel: boolean;
       hotTubDrain: boolean;
       hotTubDrainCadence: string | null;
+      priceOverrideCents?: number | null;
       address?: string;
       customer: {
         stripeCustomerId: string | null;

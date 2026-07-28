@@ -46,7 +46,8 @@ export async function POST(request: NextRequest) {
 
     const { evaluation } = await resolvePromoCodeForAmount(
       parsed.data.code,
-      quote.chargeBeforePromoCents
+      quote.chargeBeforePromoCents,
+      formData.email ?? ""
     );
 
     if (!evaluation.valid) {

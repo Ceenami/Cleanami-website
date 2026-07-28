@@ -174,7 +174,8 @@ export async function createPaymentIntentForSignup(
   if (submittedPromoCode) {
     const { evaluation } = await resolvePromoCodeForAmount(
       submittedPromoCode,
-      afterFirstCleanDiscountCents
+      afterFirstCleanDiscountCents,
+      normalizedFormData.email ?? ""
     );
 
     if (!evaluation.valid) {

@@ -1,7 +1,7 @@
 // lib/queries/jobs.ts
 import 'server-only';
 import { db } from '@/db';
-import { jobs, properties, subscriptions, jobsToCleaners, cleaners, evidencePackets, payouts } from '@/db/schemas';
+import { jobs, properties, subscriptions, jobsToCleaners, cleaners, evidencePackets, payouts, promoCodes } from '@/db/schemas';
 import { eq, sql, and, gte, lte, asc, desc } from 'drizzle-orm';
 import { EVIDENCE_BUCKET, createSignedUrls } from '@/lib/storage/signed-url';
 import {
@@ -58,6 +58,12 @@ export async function getJobsWithDetails({
       checkOutTime: jobs.checkOutTime,
       // isUrgentBonus: jobsToCleaners.urgentBonus,
       calendarEventUid: jobs.calendarEventUid,
+      // Needed so the customer portal knows whether this clean is still open
+      // for a promo-code change (only before pre-authorize has run/failed).
+      paymentIntentId: jobs.paymentIntentId,
+      paymentStatus: jobs.paymentStatus,
+      promoCodeId: jobs.promoCodeId,
+      appliedPromoCode: promoCodes.code,
       createdAt: jobs.createdAt,
       updatedAt: jobs.updatedAt,
 
@@ -123,6 +129,7 @@ export async function getJobsWithDetails({
     .from(jobs)
     .leftJoin(properties, eq(jobs.propertyId, properties.id))
     .leftJoin(subscriptions, eq(jobs.subscriptionId, subscriptions.id))
+    .leftJoin(promoCodes, eq(jobs.promoCodeId, promoCodes.id))
     .where(
       and(
         ...whereConditions,
