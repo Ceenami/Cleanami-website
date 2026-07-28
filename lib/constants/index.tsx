@@ -1,4 +1,4 @@
-import { BadgeDollarSignIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, PackageIcon, Shield, TicketPercentIcon, UserIcon, UsersIcon } from "lucide-react";
+import { BadgeDollarSignIcon, CalendarPlusIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, PackageIcon, Shield, TicketPercentIcon, UserIcon, UsersIcon } from "lucide-react";
 
 export const Logo = "https://ymccorozcd.ufs.sh/f/CFfiFeS2XelzZy5o0ZubBmJY75j80sif9WEVdIAGnpCtTSqr"
 export const APP_NAME =
@@ -107,6 +107,11 @@ export const PRIVATE_USER_NAV_ROUTES = [
     icon: <House className="h-6 w-6" />,
     label: "properties",
     route: "/customer/properties",
+  },
+  {
+    icon: <CalendarPlusIcon />,
+    label: "book a clean",
+    route: "/customer/book",
   },
   {
     icon: <CreditCardIcon />,

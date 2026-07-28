@@ -16,16 +16,30 @@ export default async function Page({
   const propertyDetails = await getPropertyDetails(id);
 
   // Sign the private-bucket checklist paths for the admin download links.
+  // Link-based checklist rows (a pasted Google Sheet URL) have no storage
+  // path to sign — only uploaded files go through createSignedUrls.
+  const uploadedChecklistFiles = propertyDetails.checklistFiles.filter(
+    (f) => f.storagePath
+  );
   const checklistSignedUrls = await createSignedUrls(
     CHECKLISTS_BUCKET,
-    propertyDetails.checklistFiles.map((f) => f.storagePath)
+    uploadedChecklistFiles.map((f) => f.storagePath!)
   );
-  const checklistFiles = propertyDetails.checklistFiles.map((f, i) => ({
-    id: f.id,
-    fileName: f.fileName,
-    url: checklistSignedUrls[i] ?? "",
-    createdAt: f.createdAt,
-  }));
+  let signedUrlIndex = 0;
+  const checklistFiles = propertyDetails.checklistFiles.map((f) => {
+    if (f.storagePath) {
+      const url = checklistSignedUrls[signedUrlIndex] ?? "";
+      signedUrlIndex += 1;
+      return { id: f.id, fileName: f.fileName, url, isLink: false, createdAt: f.createdAt };
+    }
+    return {
+      id: f.id,
+      fileName: f.fileName,
+      url: f.sourceUrl ?? "",
+      isLink: true,
+      createdAt: f.createdAt,
+    };
+  });
 
   return (
     <div className="space-y-6">

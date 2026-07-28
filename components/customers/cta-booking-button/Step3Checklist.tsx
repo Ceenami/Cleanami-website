@@ -1,7 +1,8 @@
 import { StepsProps } from "@/lib/validations/bookng-modal";
-import { FileCheck, Upload, X, ClipboardCheck } from "lucide-react";
+import { FileCheck, Upload, X, ClipboardCheck, Link as LinkIcon } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { FounderCard } from "../../FounderCard";
+import { CHECKLIST_ACCEPT_ATTR } from "@/lib/constants/checklist-files";
 
 interface Step3Props extends StepsProps {
   /** Called when user books a call */
@@ -20,7 +21,10 @@ export const Step3Checklist = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const useDefault = formData.useDefaultChecklist ?? false;
-  const hasSelection = useDefault || (formData.checklistFile && formData.checklistFile.length > 0);
+  const hasSelection =
+    useDefault ||
+    (formData.checklistFile && formData.checklistFile.length > 0) ||
+    !!formData.checklistSheetUrl;
 
   const handleFiles = useCallback(
     (files: FileList | null) => {
@@ -75,7 +79,12 @@ export const Step3Checklist = ({
       ...prev,
       useDefaultChecklist: isChecked,
       checklistFile: isChecked ? [] : prev.checklistFile,
+      checklistSheetUrl: isChecked ? "" : prev.checklistSheetUrl,
     }));
+  };
+
+  const onSheetUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData((prev) => ({ ...prev, checklistSheetUrl: e.target.value }));
   };
 
   return (
@@ -205,14 +214,42 @@ export const Step3Checklist = ({
                   type="file"
                   className="sr-only"
                   onChange={onFileChange}
-                  accept=".pdf,.doc,.docx,.txt"
+                  accept={CHECKLIST_ACCEPT_ATTR}
                   multiple
                   disabled={useDefault}
                 />
               </label>
               <p className="pl-1">or drag and drop</p>
             </div>
-            <p className="text-xs text-gray-500">PDF, DOCX, TXT up to 10MB</p>
+            <p className="text-xs text-gray-500">PDF, Word, Excel, JPG or PNG up to 10MB</p>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center" aria-hidden="true">
+            <div className="w-full border-t border-gray-300" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-white px-3 text-sm font-medium text-gray-500">OR</span>
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="checklist-sheet-url" className="block text-sm font-medium text-gray-700">
+            Paste a Google Sheet link
+          </label>
+          <div className="relative mt-1">
+            <LinkIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              id="checklist-sheet-url"
+              type="url"
+              value={formData.checklistSheetUrl ?? ""}
+              onChange={onSheetUrlChange}
+              disabled={useDefault}
+              placeholder="https://docs.google.com/spreadsheets/..."
+              className="block w-full rounded-md border border-gray-300 py-2 pl-9 pr-3 text-sm text-gray-800 focus:border-teal-500 focus:outline-none focus:ring-teal-500"
+            />
           </div>
         </div>
       </div>

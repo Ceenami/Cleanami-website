@@ -9,7 +9,10 @@ export const checklistFiles = pgTable("checklist_files", {
     .notNull()
     .references(() => properties.id, { onDelete: "cascade" }),
   fileName: text("file_name").notNull(),
-  storagePath: text("storage_path").notNull().unique(),
+  /** Set for an uploaded file; null when this row is a pasted link (`sourceUrl`). */
+  storagePath: text("storage_path").unique(),
+  /** Set for a pasted link (e.g. a Google Sheet); null when this row is an uploaded file. */
+  sourceUrl: text("source_url"),
   fileSize: integer("file_size"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

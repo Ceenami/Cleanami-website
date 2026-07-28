@@ -40,17 +40,27 @@ function formatDateTime(date: Date | null): string | null {
 }
 
 async function signChecklistFiles(
-  files: { id: string; fileName: string; storagePath: string }[]
+  files: {
+    id: string;
+    fileName: string;
+    storagePath: string | null;
+    sourceUrl: string | null;
+  }[]
 ): Promise<{ id: string; fileName: string; url: string }[]> {
+  const uploaded = files.filter((f) => f.storagePath);
   const urls = await createSignedUrls(
     CHECKLISTS_BUCKET,
-    files.map((file) => file.storagePath)
+    uploaded.map((file) => file.storagePath!)
   );
-  return files.map((file, i) => ({
-    id: file.id,
-    fileName: file.fileName,
-    url: urls[i] ?? "",
-  }));
+  let i = 0;
+  return files.map((file) => {
+    if (file.storagePath) {
+      const url = urls[i] ?? "";
+      i += 1;
+      return { id: file.id, fileName: file.fileName, url };
+    }
+    return { id: file.id, fileName: file.fileName, url: file.sourceUrl ?? "" };
+  });
 }
 
 // Room-photo maps hold private-bucket object paths; sign each one for viewing.
