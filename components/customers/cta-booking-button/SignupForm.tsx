@@ -237,12 +237,13 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     if (step === 3) {
       const useDefault = formData.useDefaultChecklist;
       const hasFile = formData.checklistFile && formData.checklistFile.length > 0;
-      if (useDefault || hasFile) {
+      const hasSheetUrl = !!formData.checklistSheetUrl;
+      if (useDefault || hasFile || hasSheetUrl) {
         setErrors({});
         return true;
       }
       setErrors({
-        checklistFile: ["Please either upload a checklist or select the default option."],
+        checklistFile: ["Please upload a checklist, paste a link, or select the default option."],
       });
       return false;
     }

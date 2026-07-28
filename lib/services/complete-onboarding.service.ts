@@ -18,6 +18,10 @@ import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer
 import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
 import { PricingService } from "@/lib/services/pricing.service";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import {
+  CHECKLIST_ALLOWED_MIME_TYPES,
+  CHECKLIST_MAX_FILE_SIZE_BYTES,
+} from "@/lib/constants/checklist-files";
 import { applyFirstCleanDiscount } from "@/lib/pricing/first-clean-discount";
 import { recordPromoRedemptionByCode } from "@/lib/services/promo-code.service";
 
@@ -256,32 +260,23 @@ export async function completeOnboardingForPayment(
       subscriptionMonths,
       checklistFile,
       useDefaultChecklist,
+      checklistSheetUrl,
       iCalUrl,
       firstCleanDate,
     } = validatedData;
 
     if (checklistFile && checklistFile.length > 0) {
       for (const file of checklistFile) {
-        if (file.size > 10 * 1024 * 1024) {
+        if (file.size > CHECKLIST_MAX_FILE_SIZE_BYTES) {
           return {
             success: false,
             error: `File ${file.name} is too large. Maximum size is 10MB.`,
           };
         }
-        const allowedTypes = [
-          "application/pdf",
-          "image/jpeg",
-          "image/png",
-          "image/jpg",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "text/csv",
-          "application/vnd.ms-excel",
-          "application/vnd.oasis.opendocument.spreadsheet",
-        ];
-        if (!allowedTypes.includes(file.type)) {
+        if (!CHECKLIST_ALLOWED_MIME_TYPES.includes(file.type)) {
           return {
             success: false,
-            error: `File ${file.name} has an unsupported format. Please use PDF, JPEG, or PNG files.`,
+            error: `File ${file.name} has an unsupported format. Please use PDF, Word, Excel, JPG or PNG files.`,
           };
         }
       }
@@ -422,6 +417,28 @@ export async function completeOnboardingForPayment(
               fileError instanceof Error ? fileError.message : "Unknown error",
           });
         }
+      }
+    }
+
+    if (checklistSheetUrl) {
+      try {
+        const parsed = new URL(checklistSheetUrl);
+        await db.insert(checklistFiles).values({
+          propertyId: result.property.id,
+          fileName: `Checklist link (${parsed.hostname})`,
+          sourceUrl: parsed.toString(),
+        });
+        fileUploadResults.push({ fileName: checklistSheetUrl, success: true });
+      } catch (linkError) {
+        // Already validated as a URL by the schema — best-effort, never fail
+        // an already-charged booking over the checklist link.
+        console.error("[complete-onboarding] checklist link save failed", linkError);
+        fileUploadResults.push({
+          fileName: checklistSheetUrl,
+          success: false,
+          error:
+            linkError instanceof Error ? linkError.message : "Unknown error",
+        });
       }
     }
 

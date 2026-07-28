@@ -5,16 +5,11 @@ import { checklistFiles } from "@/db/schemas";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { CHECKLISTS_BUCKET } from "@/lib/storage/signed-url";
+import {
+  CHECKLIST_ALLOWED_MIME_TYPES,
+  CHECKLIST_MAX_FILE_SIZE_BYTES,
+} from "@/lib/constants/checklist-files";
 import { eq } from "drizzle-orm";
-
-const ALLOWED_TYPES = [
-  "application/pdf",
-  "image/jpeg",
-  "image/jpg",
-  "image/png",
-  "image/webp",
-];
-const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 
 type ActionResult = { success: boolean; error?: string };
 
@@ -36,10 +31,13 @@ export async function uploadPropertyChecklist(
   if (!(file instanceof File) || file.size === 0) {
     return { success: false, error: "A file is required" };
   }
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    return { success: false, error: "Only PDF, JPEG, PNG or WebP files are allowed" };
+  if (!CHECKLIST_ALLOWED_MIME_TYPES.includes(file.type)) {
+    return {
+      success: false,
+      error: "Only PDF, Word, Excel, JPG, PNG or WebP files are allowed",
+    };
   }
-  if (file.size > MAX_SIZE) {
+  if (file.size > CHECKLIST_MAX_FILE_SIZE_BYTES) {
     return { success: false, error: "File must be under 10MB" };
   }
 
@@ -65,6 +63,38 @@ export async function uploadPropertyChecklist(
   return { success: true };
 }
 
+/**
+ * Phase 7 — admin attaches a checklist as a pasted link (e.g. a Google Sheet)
+ * instead of an uploaded file. Stored in the same versioned list as uploads;
+ * `storagePath` stays null so the cleaner app and admin UI render it as an
+ * external link rather than a signed download.
+ */
+export async function addPropertyChecklistLink(
+  propertyId: string,
+  url: string
+): Promise<ActionResult> {
+  const { isAdmin } = await getAdminAuth();
+  if (!isAdmin) return { success: false, error: "Unauthorized" };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { success: false, error: "Enter a valid URL" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { success: false, error: "Enter a valid URL" };
+  }
+
+  await db.insert(checklistFiles).values({
+    propertyId,
+    fileName: `Checklist link (${parsed.hostname})`,
+    sourceUrl: parsed.toString(),
+  });
+
+  return { success: true };
+}
+
 /** Task 1.15 — admin removes a checklist version (storage object + row). */
 export async function deletePropertyChecklist(
   fileId: string
@@ -78,13 +108,15 @@ export async function deletePropertyChecklist(
   });
   if (!row) return { success: false, error: "Checklist file not found" };
 
-  const supabase = createAdminClient();
-  const { error: removeError } = await supabase.storage
-    .from(CHECKLISTS_BUCKET)
-    .remove([row.storagePath]);
-  if (removeError) {
-    // Log but continue — the DB row is the source of truth the app reads from.
-    console.error("[deletePropertyChecklist] storage remove failed", removeError);
+  if (row.storagePath) {
+    const supabase = createAdminClient();
+    const { error: removeError } = await supabase.storage
+      .from(CHECKLISTS_BUCKET)
+      .remove([row.storagePath]);
+    if (removeError) {
+      // Log but continue — the DB row is the source of truth the app reads from.
+      console.error("[deletePropertyChecklist] storage remove failed", removeError);
+    }
   }
 
   await db.delete(checklistFiles).where(eq(checklistFiles.id, fileId));

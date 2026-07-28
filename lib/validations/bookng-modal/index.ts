@@ -19,6 +19,8 @@ export const signupFormSchema = z
       .array(z.instanceof(File))
       .optional(),
     useDefaultChecklist: z.boolean().optional(),
+    /** Alternative to an uploaded file — a pasted link (e.g. a Google Sheet). */
+    checklistSheetUrl: z.string().trim().url().optional().or(z.literal("")),
     laundryService: z.enum(["in_unit", "off_site", "none"]),
     laundryLoads: z.coerce.number().int().min(1).optional(),
     hasHotTub: z.boolean().default(false),
@@ -58,9 +60,10 @@ export const signupFormSchema = z
   .refine(
     (data) =>
       data.useDefaultChecklist === true ||
-      (data.checklistFile !== undefined && data.checklistFile.length > 0),
+      (data.checklistFile !== undefined && data.checklistFile.length > 0) ||
+      (data.checklistSheetUrl !== undefined && data.checklistSheetUrl.length > 0),
     {
-      message: "Upload a checklist or choose the default checklist",
+      message: "Upload a checklist, paste a link, or choose the default checklist",
       path: ["checklistFile"],
     }
   )
