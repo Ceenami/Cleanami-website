@@ -2,6 +2,7 @@ import { pgTable, uuid, timestamp, text, pgEnum, boolean, uniqueIndex, primaryKe
 import { subscriptions } from "./subscriptions.schema";
 import { properties } from "./properties.schema";
 import { cleaners } from "./cleaners.schema";
+import { promoCodes } from "./promoCodes.schema";
 
 export const jobStatusEnum = pgEnum('job_status', [
   'unassigned',
@@ -44,6 +45,13 @@ export const jobs = pgTable('jobs', {
   paymentIntentId: text('payment_intent_id'),
   paymentStatus: paymentStatusEnum('payment_status'), // Use the enum defined above
   paymentFailed: boolean('payment_failed').default(false),
+  /**
+   * A customer-applied promo code for THIS job's still-unauthorized recurring
+   * charge (task: customer-entered promo codes on upcoming cleans). Never
+   * cleared after redemption — it's an audit trail, and the cron's own
+   * `payment_intent_id IS NULL` filter already prevents reprocessing.
+   */
+  promoCodeId: uuid('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

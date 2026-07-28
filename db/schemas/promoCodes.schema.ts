@@ -60,6 +60,14 @@ export const promoRedemptions = pgTable(
     subscriptionId: uuid("subscription_id").references(() => subscriptions.id, {
       onDelete: "set null",
     }),
+    /**
+     * The recurring clean this redemption discounted (null for a first-clean
+     * / booking-checkout redemption). Plain column, not a Drizzle
+     * `.references()`, to avoid a circular import with jobs.schema.ts (which
+     * already references `promoCodes`); the FK constraint itself lives in
+     * migration 0027.
+     */
+    jobId: uuid("job_id"),
     /** UNIQUE — replaying onboarding for the same PI cannot double-count. */
     paymentIntentId: text("payment_intent_id").notNull().unique(),
     originalAmountCents: integer("original_amount_cents").notNull(),

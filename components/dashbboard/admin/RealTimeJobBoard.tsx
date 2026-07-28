@@ -20,6 +20,7 @@ import { KpiCard } from "./ui/KpiCard";
 import { ClientTime } from "./ui/ClientTime";
 import { getStatusBadge } from "../utils";
 import { CustomerJobCancelButton } from "@/components/customer/CustomerJobCancelButton";
+import { CustomerJobPromoCodeField } from "@/components/customer/CustomerJobPromoCodeField";
 
 async function fetchJobs({
   pageParam = 1,
@@ -292,15 +293,29 @@ export const RealTimeJobBoard = () => {
                       <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
                         <div className="flex flex-col items-end gap-2">
                           {showOwnerView && (
-                            <CustomerJobCancelButton
-                              jobId={job.id}
-                              status={job.status}
-                              checkInTime={
-                                job.checkInTime
-                                  ? String(job.checkInTime)
-                                  : null
-                              }
-                            />
+                            <>
+                              <CustomerJobPromoCodeField
+                                jobId={job.id}
+                                status={job.status}
+                                checkInTime={
+                                  job.checkInTime
+                                    ? String(job.checkInTime)
+                                    : null
+                                }
+                                paymentIntentId={job.paymentIntentId ?? null}
+                                paymentStatus={job.paymentStatus ?? null}
+                                appliedPromoCode={job.appliedPromoCode ?? null}
+                              />
+                              <CustomerJobCancelButton
+                                jobId={job.id}
+                                status={job.status}
+                                checkInTime={
+                                  job.checkInTime
+                                    ? String(job.checkInTime)
+                                    : null
+                                }
+                              />
+                            </>
                           )}
                           <Link
                             href={

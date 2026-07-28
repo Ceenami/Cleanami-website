@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { ZodError } from "zod";
+import { isUniqueViolation, pgConstraintName } from "@/lib/db/errors";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -18,16 +19,11 @@ export function formatError(error: unknown) {
     return fieldErrors.join('. ');
   }
 
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: string }).code === "23505"
-  ) {
-    const constraintName =
-      "constraint" in error && typeof error.constraint === "string"
-        ? error.constraint
-        : "";
+  // Note: the Postgres error is usually wrapped by Drizzle, so this must look
+  // through the cause chain rather than at `error.code` directly — see
+  // lib/db/errors.ts.
+  if (isUniqueViolation(error)) {
+    const constraintName = pgConstraintName(error) ?? "";
     if (constraintName.includes("email")) {
       return "Email already exists";
     }

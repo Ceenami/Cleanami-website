@@ -8,6 +8,11 @@ import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { CancellationDetectionService } from "@/lib/services/cancellation-detection/cancellationDetection.service";
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 import { assertCronAuth } from "@/lib/auth/cron-auth";
+import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
+import {
+  resolvePromoCodeById,
+  recordPromoRedemption,
+} from "@/lib/services/promo-code.service";
 
 const pricingService = new PricingService();
 
@@ -60,6 +65,7 @@ export async function POST(req: NextRequest) {
     const jobsToProcess = await db
       .select({
         jobId: jobs.id,
+        subscriptionId: jobs.subscriptionId,
         propertyData: properties,
         stripeCustomerId: customers.stripeCustomerId,
         checkOutTime: jobs.checkOutTime,
@@ -68,6 +74,9 @@ export async function POST(req: NextRequest) {
         // Needed so the subscription-term discount applies to recurring cleans
         // too (not just the first clean).
         subscriptionMonths: subscriptions.durationMonths,
+        // For a customer-applied promo code on this specific clean.
+        customerId: subscriptions.customerId,
+        customerEmail: customers.email,
       })
       .from(jobs)
       .innerJoin(subscriptions, eq(jobs.subscriptionId, subscriptions.id))
@@ -107,21 +116,10 @@ export async function POST(req: NextRequest) {
     const processingPromises = jobsToProcess.map(async (job) => {
       try {
         // Transform property data to match pricing service's expected format
-        const pricingInput = {
-          bedrooms: job.propertyData.bedCount,
-          bathrooms: Number(job.propertyData.bathCount),
-          sqft: job.propertyData.sqFt || 0,
-          laundryService: job.propertyData.laundryType,
-          laundryLoads: job.propertyData.laundryLoads,
-          hasHotTub: job.propertyData.hasHotTub,
-          hotTubService: job.propertyData.hotTubServiceLevel,
-          hotTubDrain: job.propertyData.hotTubDrain,
-          hotTubDrainCadence: job.propertyData.hotTubDrainCadence,
-          subscriptionMonths: job.subscriptionMonths,
-          // Admin per-property price override (task 1.9), applied to recurring
-          // charges too when set.
-          priceOverrideCents: job.propertyData.priceOverrideCents,
-        };
+        const pricingInput = buildRecurringPricingInput(
+          job.propertyData,
+          job.subscriptionMonths
+        );
 
         const priceDetails = await pricingService.calculatePrice(
           pricingInput as any
@@ -158,11 +156,56 @@ export async function POST(req: NextRequest) {
           throw new Error(`Job ${job.jobId} is missing a Stripe Customer ID.`);
         }
 
-        // Stripe minimum charge is 50 cents for USD
+        // Stripe minimum charge is 50 cents for USD. Checked against the full,
+        // undiscounted price — a promo code must never mask a misconfigured
+        // property by pushing a pre-discount amount under this floor.
         if (amountInCents < 50) {
           throw new Error(
             `Calculated amount ($${priceDetails.totalPerClean}) is below Stripe's minimum charge of $0.50. Check property pricing configuration.`
           );
+        }
+
+        // Customer-applied promo code for this specific clean (task:
+        // customer-entered promo codes on upcoming cleans). Re-read fresh
+        // here, right before charging, rather than trusting only the earlier
+        // batch SELECT, to shrink the window between a customer applying/
+        // removing a code and this cron actually processing the job.
+        let chargeAmountCents = amountInCents;
+        let promoToRecord: {
+          promoCodeId: string;
+          code: string;
+          discountAmountCents: number;
+          finalAmountCents: number;
+        } | null = null;
+
+        const freshJob = await db.query.jobs.findFirst({
+          where: eq(jobs.id, job.jobId),
+          columns: { promoCodeId: true },
+        });
+
+        if (freshJob?.promoCodeId) {
+          const { evaluation } = await resolvePromoCodeById(
+            freshJob.promoCodeId,
+            amountInCents,
+            job.customerEmail
+          );
+
+          if (evaluation.valid) {
+            chargeAmountCents = evaluation.finalAmountCents;
+            promoToRecord = {
+              promoCodeId: freshJob.promoCodeId,
+              code: evaluation.code,
+              discountAmountCents: evaluation.discountCents,
+              finalAmountCents: evaluation.finalAmountCents,
+            };
+          } else {
+            // Fail OPEN on the discount, never on the charge: a stale promo
+            // application (deactivated/expired/exhausted since applied) must
+            // not block a real clean from being paid for.
+            console.warn(
+              `[pre-authorize] job ${job.jobId}: applied promo code no longer valid (${evaluation.reason}) — charging full price`
+            );
+          }
         }
 
         const paymentMethods = await stripe.paymentMethods.list({
@@ -179,7 +222,7 @@ export async function POST(req: NextRequest) {
 
         const paymentIntent = await stripe.paymentIntents.create(
           {
-            amount: amountInCents,
+            amount: chargeAmountCents,
             currency: "usd",
             customer: job.stripeCustomerId,
             payment_method: paymentMethodId,
@@ -203,6 +246,21 @@ export async function POST(req: NextRequest) {
             paymentStatus: "authorized",
           })
           .where(eq(jobs.id, job.jobId));
+
+        if (promoToRecord) {
+          await recordPromoRedemption({
+            promoCodeId: promoToRecord.promoCodeId,
+            code: promoToRecord.code,
+            customerEmail: job.customerEmail,
+            customerId: job.customerId,
+            subscriptionId: job.subscriptionId,
+            jobId: job.jobId,
+            paymentIntentId: paymentIntent.id,
+            originalAmountCents: amountInCents,
+            discountAmountCents: promoToRecord.discountAmountCents,
+            finalAmountCents: promoToRecord.finalAmountCents,
+          });
+        }
 
         return { jobId: job.jobId, status: "success" };
       } catch (error: any) {
