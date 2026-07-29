@@ -6,8 +6,13 @@ import {
 } from "@/lib/cleaner-auth";
 import { createCleanerSwapRequest } from "@/lib/queries/cleaner-swap";
 
+/**
+ * Single-job swap request. The web portal posts to `/api/cleaner/swap-requests`
+ * (which takes a selection); this route stays for the native app, and accepts
+ * the same optional `reason`.
+ */
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { cleanerId, error } = await getCleanerAuth();
@@ -28,8 +33,14 @@ export async function POST(
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
 
+  // Callers may send no body at all, so a parse failure is not an error here.
+  const body = (await request.json().catch(() => null)) as {
+    reason?: unknown;
+  } | null;
+  const reason = typeof body?.reason === "string" ? body.reason : null;
+
   try {
-    const result = await createCleanerSwapRequest(cleanerId, jobId);
+    const result = await createCleanerSwapRequest(cleanerId, jobId, reason);
 
     if (!result.success) {
       return NextResponse.json(

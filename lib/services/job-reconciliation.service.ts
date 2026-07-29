@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/db";
 import { evidencePackets, jobs, payouts } from "@/db/schemas";
+import { expireStaleSwapRequests } from "@/lib/queries/cleaner-swap";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { getStartOfTodayEastern } from "@/lib/time/eastern";
 import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
@@ -19,6 +20,7 @@ export type JobReconciliationSummary = {
   awaitingCapture: number;
   canceledUncovered: number;
   alertsSent: number;
+  swapsExpired: number;
 };
 
 type JobRow = {
@@ -86,7 +88,12 @@ export async function reconcileStaleJobs(
     awaitingCapture: 0,
     canceledUncovered: 0,
     alertsSent: 0,
+    swapsExpired: 0,
   };
+
+  // Swaps nobody took before the cut-off, closed while the clean is still
+  // days out rather than left showing as open indefinitely.
+  summary.swapsExpired = await expireStaleSwapRequests(reference);
 
   const staleJobs = await db.query.jobs.findMany({
     where: and(

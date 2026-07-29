@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import {
-  cleanerAuthErrorStatus,
-  getCleanerAuth,
-} from "@/lib/cleaner-auth";
-import { acceptUrgentJob } from "@/lib/services/urgent-replacement.service";
+import { cleanerAuthErrorStatus, getCleanerAuth } from "@/lib/cleaner-auth";
+import { acceptSwapOffer } from "@/lib/queries/cleaner-swap";
 
+/**
+ * Takes over an open swap. Returns 409 when another cleaner got there first,
+ * which the client uses to drop the offer and refresh rather than retry.
+ */
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -17,10 +18,10 @@ export async function POST(
     );
   }
 
-  const { id: jobId } = await params;
+  const { id } = await params;
 
   try {
-    const result = await acceptUrgentJob(cleanerId, jobId);
+    const result = await acceptSwapOffer(cleanerId, id);
 
     if (!result.success) {
       return NextResponse.json({ error: result.message }, { status: 409 });
@@ -28,15 +29,13 @@ export async function POST(
 
     return NextResponse.json({
       success: true,
-      urgentBonus: result.urgentBonus,
-      message: result.urgentBonus
-        ? "You accepted this job. $10 urgent bonus applies."
-        : "You accepted this job.",
+      jobId: result.jobId,
+      message: "You took over this clean. It's now on your schedule.",
     });
   } catch (err) {
-    console.error("[POST /api/cleaner/jobs/[id]/accept-urgent]", err);
+    console.error("[POST /api/cleaner/swap-offers/[id]]", err);
     return NextResponse.json(
-      { error: "Failed to accept urgent job" },
+      { error: "Failed to accept swap" },
       { status: 500 }
     );
   }

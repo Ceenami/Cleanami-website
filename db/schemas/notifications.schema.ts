@@ -10,6 +10,7 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'payment_ready',
   'reliability_check',
   'swap_available',
+  'swap_requested',
   'dispute_update',
   'assignment',
   'availability_reminder'

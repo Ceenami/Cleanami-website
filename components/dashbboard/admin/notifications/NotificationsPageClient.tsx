@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import type { Route } from "next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
@@ -11,6 +13,7 @@ type Notification = {
   isRead: boolean;
   createdAt: string;
   jobId: string | null;
+  url?: string | null;
 };
 
 type NotificationsResponse = {
@@ -79,6 +82,14 @@ export function NotificationsPageClient() {
                 <div className="text-xs text-gray-400">
                   {new Date(n.createdAt).toLocaleString()}
                 </div>
+                {n.url && (
+                  <Link
+                    href={n.url as Route}
+                    className="mt-1 inline-block text-sm font-semibold text-teal-600 hover:underline"
+                  >
+                    View
+                  </Link>
+                )}
               </div>
               {!n.isRead && (
                 <button
