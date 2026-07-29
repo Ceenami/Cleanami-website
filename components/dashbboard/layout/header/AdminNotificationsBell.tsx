@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 import { Bell, Loader2, X } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -13,6 +15,7 @@ type Notification = {
   isRead: boolean;
   createdAt: string;
   jobId: string | null;
+  url?: string | null;
 };
 
 export function AdminNotificationsBell() {
@@ -161,6 +164,15 @@ export function AdminNotificationsBell() {
                       <p className="mt-1 text-xs text-gray-400">
                         {formatTime(n.createdAt)}
                       </p>
+                      {n.url && (
+                        <Link
+                          href={n.url as Route}
+                          onClick={() => setOpen(false)}
+                          className="mt-1 inline-block text-xs font-semibold text-teal-600 hover:underline"
+                        >
+                          View
+                        </Link>
+                      )}
                     </li>
                   ))}
                 </ul>

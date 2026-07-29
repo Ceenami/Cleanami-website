@@ -14,12 +14,30 @@ import {
 import type { PropertyCleanerTier } from "@/db/schemas";
 import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
+import { recalculateJobRoles } from "@/lib/services/assignment/team-roles";
 import { getAllEligibleCleanersForJob, getAvailableCleanersForJob } from "@/lib/queries/cleaners-proximity";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
 import { and, eq, inArray, or } from "drizzle-orm";
 
 const URGENT_NEARBY_NOTIFY_LIMIT = 5;
 const CALL_OUT_PENALTY = 15;
+
+/**
+ * The $10 bonus is for genuinely last-minute cover. It attaches to a
+ * replacement only when the job starts within this window of them accepting —
+ * a seat filled days ahead (for instance one opened by a swap, which can only
+ * be requested more than 24 hours out) is ordinary work at ordinary pay.
+ */
+const URGENT_BONUS_WINDOW_HOURS = 24;
+
+function qualifiesForUrgentBonus(
+  checkInTime: Date | null | undefined,
+  reference = new Date()
+): boolean {
+  if (!checkInTime) return false;
+  const msUntilJob = checkInTime.getTime() - reference.getTime();
+  return msUntilJob <= URGENT_BONUS_WINDOW_HOURS * 60 * 60 * 1000;
+}
 
 export type UrgentReplacementResult =
   | {
@@ -262,7 +280,8 @@ export async function isUrgentJobClaimable(jobId: string): Promise<boolean> {
   return claimable.has(jobId);
 }
 
-export async function dismissUrgentSwapNotifications(jobId: string) {
+/** Clears the outstanding "available to cover" alerts once a job is settled. */
+export async function dismissSwapAvailableNotifications(jobId: string) {
   await db
     .update(notifications)
     .set({ isRead: true })
@@ -403,12 +422,13 @@ export async function triggerUrgentReplacement(
   if (backup) {
     const backupName = backup.cleaner?.fullName ?? "Backup cleaner";
     const address = job.property?.address ?? "the property";
+    const urgentBonus = qualifiesForUrgentBonus(job.checkInTime, now);
 
     await db
       .update(jobsToCleaners)
       .set({
         role: "primary",
-        urgentBonus: true,
+        urgentBonus,
         updatedAt: now,
       })
       .where(
@@ -431,11 +451,15 @@ export async function triggerUrgentReplacement(
       expiresAt,
     });
 
+    await recalculateJobRoles(jobId);
+
     await notifyCleaner(
       backup.cleanerId,
       "urgent_job",
       "You are now primary",
-      `You have been promoted to primary for ${address} with a $10 urgent bonus. ${primaryName} was removed.`,
+      `You have been promoted to primary for ${address}${
+        urgentBonus ? " with a $10 urgent bonus" : ""
+      }. ${primaryName} was removed.`,
       jobId
     );
 
@@ -466,13 +490,16 @@ export async function triggerUrgentReplacement(
     excludeIds,
     job.expectedHours
   );
+  const bonusApplies = qualifiesForUrgentBonus(job.checkInTime, now);
 
   for (const cleanerId of toNotify) {
     await notifyCleaner(
       cleanerId,
       "swap_available",
-      "Urgent job available",
-      `Tap Accept to claim an urgent clean at ${address}. Includes a $10 bonus. First to accept gets the job.`,
+      "Job available to claim",
+      `Tap Accept to claim a clean at ${address}.${
+        bonusApplies ? " Includes a $10 urgent bonus." : ""
+      } First to accept gets the job.`,
       jobId
     );
   }
@@ -541,17 +568,21 @@ export async function getUrgentJobOffers(
 export async function acceptUrgentJob(
   cleanerId: string,
   jobId: string
-): Promise<{ success: true } | { success: false; message: string }> {
+): Promise<
+  { success: true; urgentBonus: boolean } | { success: false; message: string }
+> {
   const eligibility = await canCleanerAcceptUrgentJob(cleanerId, jobId);
   if (!eligibility.eligible) {
     return { success: false, message: eligibility.reason ?? "Not eligible" };
   }
 
+  let urgentBonus = false;
+
   try {
     await db.transaction(async (tx) => {
       const job = await tx.query.jobs.findFirst({
         where: eq(jobs.id, jobId),
-        columns: { id: true, status: true },
+        columns: { id: true, status: true, checkInTime: true },
       });
 
       if (!job || job.status !== "unassigned") {
@@ -581,12 +612,13 @@ export async function acceptUrgentJob(
       }
 
       const now = new Date();
+      urgentBonus = qualifiesForUrgentBonus(job.checkInTime, now);
 
       await tx.insert(jobsToCleaners).values({
         jobId,
         cleanerId,
         role: "primary",
-        urgentBonus: true,
+        urgentBonus,
       });
 
       await tx
@@ -604,7 +636,8 @@ export async function acceptUrgentJob(
         .where(eq(swapRequests.id, openUrgent.id));
     });
 
-    await dismissUrgentSwapNotifications(jobId);
+    await dismissSwapAvailableNotifications(jobId);
+    await recalculateJobRoles(jobId);
 
     const job = await db.query.jobs.findFirst({
       where: eq(jobs.id, jobId),
@@ -615,11 +648,13 @@ export async function acceptUrgentJob(
       cleanerId,
       "urgent_job",
       "Job claimed",
-      `You accepted the urgent job at ${job?.property?.address ?? "the property"}. $10 bonus applies.`,
+      `You accepted the job at ${job?.property?.address ?? "the property"}.${
+        urgentBonus ? " $10 urgent bonus applies." : ""
+      }`,
       jobId
     );
 
-    return { success: true };
+    return { success: true, urgentBonus };
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     if (message === "JOB_FILLED") {

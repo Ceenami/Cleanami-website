@@ -17,6 +17,17 @@ export function getStartOfTodayEastern(reference = new Date()): Date {
   return new Date(Date.UTC(year, month - 1, day, 5, 0, 0, 0));
 }
 
+/**
+ * `YYYY-MM-DD` for the Eastern calendar day an instant falls on.
+ *
+ * Availability is stored per calendar date, so the day has to be derived in the
+ * ops timezone. Slicing an ISO string instead reads the UTC date, which lands on
+ * the following day for any job scheduled after 8pm Eastern.
+ */
+export function toEasternDateString(date: Date): string {
+  return date.toLocaleDateString("en-CA", { timeZone: EASTERN_TZ });
+}
+
 export function getEasternTimeZone() {
   return EASTERN_TZ;
 }

@@ -16,6 +16,15 @@ export type AdminConfirmAction = {
   onConfirm: () => void | Promise<void>;
 };
 
+/** Roles an admin can hand out by hand, in the order the spec ranks them. */
+const ASSIGNABLE_ROLES = [
+  { value: 'primary', label: 'Primary' },
+  { value: 'backup', label: 'Backup' },
+  { value: 'laundry_lead', label: 'Laundry Lead' },
+] as const;
+
+type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]['value'];
+
 export function AdminActionsCard({
   job,
   onAction,
@@ -25,6 +34,8 @@ export function AdminActionsCard({
 }) {
   const queryClient = useQueryClient();
   const [selectedCleanerId, setSelectedCleanerId] = useState('');
+  const [selectedRole, setSelectedRole] = useState<AssignableRole>('primary');
+  const [replaceCleanerId, setReplaceCleanerId] = useState('');
   const [newDeadline, setNewDeadline] = useState(
     job.checkInTime ? new Date(job.checkInTime).toISOString().substring(0, 16) : ''
   );
@@ -44,17 +55,26 @@ export function AdminActionsCard({
     });
 
   const availableCleaners = response?.cleaners || [];
+  const assignedCleaners = job.cleaners ?? [];
 
-  const handleReassign = () => {
+  const roleLabel =
+    ASSIGNABLE_ROLES.find((r) => r.value === selectedRole)?.label ?? 'Primary';
+
+  const handleAssign = () => {
     if (!selectedCleanerId) return;
 
     const selectedCleaner = availableCleaners.find(
       (c) => c.id === selectedCleanerId
     );
+    const replaced = assignedCleaners.find(
+      (c) => c.cleanerId === replaceCleanerId
+    );
 
     onAction({
-      title: 'Reassign Cleaner',
-      message: `Are you sure you want to reassign this job to ${selectedCleaner?.fullName}?`,
+      title: `Assign ${roleLabel}`,
+      message: replaced
+        ? `Swap ${replaced.cleaner.fullName} out and put ${selectedCleaner?.fullName} on this job as ${roleLabel}?`
+        : `Assign ${selectedCleaner?.fullName} to this job as ${roleLabel}? Anyone currently holding that role is replaced; the rest of the team is untouched.`,
       loadingText: 'Assigning cleaner…',
       confirmButtonText: 'Assign',
       confirmButtonClassName: 'bg-teal-600 hover:bg-teal-500',
@@ -62,24 +82,29 @@ export function AdminActionsCard({
         const response = await fetch(`/api/jobs/${job.id}/reassign`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cleanerId: selectedCleanerId, role: 'primary' }),
+          body: JSON.stringify({
+            cleanerId: selectedCleanerId,
+            role: selectedRole,
+            replaceCleanerId: replaceCleanerId || undefined,
+          }),
         });
         const data = (await response.json()) as {
           error?: string;
           urgentBonus?: boolean;
         };
         if (!response.ok) {
-          throw new Error(data.error ?? 'Failed to reassign cleaner');
+          throw new Error(data.error ?? 'Failed to assign cleaner');
         }
         setSelectedCleanerId('');
+        setReplaceCleanerId('');
         await queryClient.invalidateQueries({ queryKey: ['job-details', job.id] });
         await queryClient.invalidateQueries({
           queryKey: ['available-cleaners', job.id],
         });
         toast.success(
           data.urgentBonus
-            ? 'Cleaner reassigned with $10 urgent bonus'
-            : 'Cleaner reassigned'
+            ? `${roleLabel} assigned with $10 urgent bonus`
+            : `${roleLabel} assigned`
         );
       },
     });
@@ -201,7 +226,7 @@ export function AdminActionsCard({
             htmlFor="reassign-cleaner"
             className="block text-sm font-medium text-gray-700 mb-1"
           >
-            Reassign Cleaner (all eligible)
+            Assign Cleaner (all eligible)
           </label>
           {loadingCleaners ? (
             <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -213,13 +238,13 @@ export function AdminActionsCard({
               No eligible cleaners found. Check job assignments and onboarding.
             </div>
           ) : (
-            <div className="flex rounded-md shadow-sm">
+            <div className="space-y-2">
               <select
                 id="reassign-cleaner"
                 value={selectedCleanerId}
                 onChange={(e) => setSelectedCleanerId(e.target.value)}
                 disabled={isDisabled}
-                className="flex-1 focus:ring-teal-500 focus:border-teal-500 block w-full rounded-l-md sm:text-sm border-gray-300 disabled:bg-gray-100"
+                className="focus:ring-teal-500 focus:border-teal-500 block w-full rounded-md sm:text-sm border-gray-300 disabled:bg-gray-100"
               >
                 <option value="">-- Select Cleaner --</option>
                 {availableCleaners.map((cleaner) => (
@@ -235,12 +260,50 @@ export function AdminActionsCard({
                 ))}
               </select>
 
+              <div className="flex gap-2">
+                <select
+                  aria-label="Role"
+                  value={selectedRole}
+                  onChange={(e) =>
+                    setSelectedRole(e.target.value as AssignableRole)
+                  }
+                  disabled={isDisabled}
+                  className="focus:ring-teal-500 focus:border-teal-500 block w-1/2 rounded-md sm:text-sm border-gray-300 disabled:bg-gray-100"
+                >
+                  {ASSIGNABLE_ROLES.map((role) => (
+                    <option key={role.value} value={role.value}>
+                      {role.label}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Naming who comes off makes this a true swap rather than a
+                    blind overwrite of whoever holds the role. */}
+                <select
+                  aria-label="Replace cleaner"
+                  value={replaceCleanerId}
+                  onChange={(e) => setReplaceCleanerId(e.target.value)}
+                  disabled={isDisabled || assignedCleaners.length === 0}
+                  className="focus:ring-teal-500 focus:border-teal-500 block w-1/2 rounded-md sm:text-sm border-gray-300 disabled:bg-gray-100"
+                >
+                  <option value="">Replace: role holder</option>
+                  {assignedCleaners.map((assignment) => (
+                    <option
+                      key={assignment.cleanerId}
+                      value={assignment.cleanerId}
+                    >
+                      Replace: {assignment.cleaner.fullName} ({assignment.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <button
-                onClick={handleReassign}
+                onClick={handleAssign}
                 disabled={isDisabled || !selectedCleanerId}
-                className="-ml-px relative inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-r-md text-gray-700 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full text-center py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Assign
+                Assign as {roleLabel}
               </button>
             </div>
           )}

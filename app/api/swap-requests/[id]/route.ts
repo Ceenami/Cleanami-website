@@ -50,7 +50,9 @@ export async function PATCH(
             ? result.replacementCleanerName
             : undefined,
         notifiedCount:
-          result.outcome === "awaiting_accept" ? result.notifiedCount : undefined,
+          result.outcome === "released_to_pool"
+            ? result.notifiedCount
+            : undefined,
       });
     }
 

@@ -29,39 +29,38 @@ const roleStyles: Record<
 
 type JobCardProps = {
   job: CleanerJobSummary;
+  /** Opens the swap picker with this job pre-selected. */
+  onRequestSwap: (jobId: string) => void;
+  onSwapWithdrawn: () => void;
 };
 
-export function JobCard({ job }: JobCardProps) {
+export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
   const role = roleStyles[job.role];
-  const [swapLoading, setSwapLoading] = useState(false);
-  const [swapMessage, setSwapMessage] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
 
-  async function handleSwapRequest(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    setSwapLoading(true);
-    setSwapMessage(null);
+  async function handleWithdraw() {
+    if (!job.pendingSwapRequestId) return;
+
+    setWithdrawing(true);
     setSwapError(null);
 
     try {
       const response = await fetch(
-        `/api/cleaner/jobs/${job.jobId}/swap-request`,
-        { method: "POST" }
+        `/api/cleaner/swap-requests/${job.pendingSwapRequestId}`,
+        { method: "DELETE" }
       );
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error ?? "Swap request failed");
+        throw new Error(data.error ?? "Could not withdraw the request");
       }
-      const names =
-        data.eligibleCleanerNames?.length > 0
-          ? ` ${data.eligibleCleanerNames.length} cleaner(s) could cover this swap if approved.`
-          : "";
-      setSwapMessage(`${data.message}${names}`);
+      onSwapWithdrawn();
     } catch (err) {
-      setSwapError(err instanceof Error ? err.message : "Swap request failed");
+      setSwapError(
+        err instanceof Error ? err.message : "Could not withdraw the request"
+      );
     } finally {
-      setSwapLoading(false);
+      setWithdrawing(false);
     }
   }
 
@@ -126,22 +125,37 @@ export function JobCard({ job }: JobCardProps) {
         </article>
       </Link>
 
-      {job.canRequestSwap && (
+      {job.pendingSwapRequestId ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="text-xs font-semibold text-amber-900">
+            Swap open — waiting for a cleaner to accept
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800">
+            You stay assigned to this clean until someone takes it over.
+          </p>
+          <button
+            type="button"
+            onClick={handleWithdraw}
+            disabled={withdrawing}
+            className="mt-2 text-xs font-semibold text-amber-900 underline disabled:opacity-50"
+          >
+            {withdrawing ? "Withdrawing…" : "Withdraw request"}
+          </button>
+        </div>
+      ) : job.canRequestSwap ? (
         <button
           type="button"
-          onClick={handleSwapRequest}
-          disabled={swapLoading}
-          className="w-full rounded-lg border border-gray-300 bg-white py-2 text-sm font-medium text-gray-700 hover:border-brand hover:text-brand disabled:opacity-50"
+          onClick={() => onRequestSwap(job.jobId)}
+          className="w-full rounded-lg border border-gray-300 bg-white py-2 text-sm font-medium text-gray-700 hover:border-brand hover:text-brand"
         >
-          {swapLoading ? "Requesting…" : "Request Swap"}
+          Request Swap
         </button>
-      )}
-
-      {swapMessage && (
-        <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
-          {swapMessage}
+      ) : job.swapBlockedReason ? (
+        <p className="text-center text-xs text-gray-500">
+          Swap unavailable — {job.swapBlockedReason.toLowerCase()}
         </p>
-      )}
+      ) : null}
+
       {swapError && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           {swapError}

@@ -1,0 +1,28 @@
+-- Hands swap resolution to the application layer.
+--
+-- Two triggers were carrying out swap work behind the API:
+--
+--   on_new_swap_request_trigger  -> handle_new_swap_request()
+--     Fanned "swap available" notifications to every cleaner that
+--     check_swap_eligibility() returned. That function screens on reliability
+--     alone: it ignores assignment eligibility, submitted availability, hot-tub
+--     capability and proximity, and detects clashes by exact check_in_time
+--     equality, so two cleans ninety minutes apart read as free. Cleaners were
+--     offered jobs they could not legally work, and the alert duplicated the
+--     one the API sends.
+--
+--   on_swap_accepted_trigger     -> handle_swap_accepted()
+--     Moved the assignment itself on any transition to 'accepted'. It raced the
+--     API's own INSERT and lost on the (job_id, cleaner_id) primary key, which
+--     rolled the whole acceptance back, and it hardcoded the 'primary' role, so
+--     a laundry lead's seat, urgent-bonus flag and team-leader flag were all
+--     dropped on the way through.
+--
+-- Both concerns now live in lib/services/swap and lib/queries/cleaner-swap,
+-- where the candidate rules, role recalculation and notification fan-out are
+-- applied consistently and can be tested.
+--
+-- The functions are left in place, unattached: nothing calls them, and keeping
+-- them makes this reversible with a single CREATE TRIGGER.
+DROP TRIGGER IF EXISTS on_new_swap_request_trigger ON public.swap_requests;
+DROP TRIGGER IF EXISTS on_swap_accepted_trigger ON public.swap_requests;

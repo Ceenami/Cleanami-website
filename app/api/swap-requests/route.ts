@@ -4,6 +4,24 @@ import { db } from "@/db";
 import { swapRequests } from "@/db/schemas";
 import { eq } from "drizzle-orm";
 
+/** `?status=` values the queue understands; anything else falls back to open. */
+const STATUS_FILTERS = [
+  "pending",
+  "accepted",
+  "expired",
+  "cancelled",
+  "urgent",
+] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+function isStatusFilter(value: string | null): value is StatusFilter {
+  return STATUS_FILTERS.includes(value as StatusFilter);
+}
+
+/**
+ * Swap queue for the admin console. Defaults to the open requests that need
+ * attention; `?status=all` returns the full history for review and auditing.
+ */
 export async function GET(request: NextRequest) {
   try {
     const { isAdmin, error: authError } = await getAdminAuth(request);
@@ -15,11 +33,20 @@ export async function GET(request: NextRequest) {
     }
 
     const query = request.nextUrl.searchParams.get("query")?.toLowerCase() || "";
+    const statusParam = request.nextUrl.searchParams.get("status");
+    const showAll = statusParam === "all";
+    const status: StatusFilter = isStatusFilter(statusParam)
+      ? statusParam
+      : "pending";
 
     const requests = await db.query.swapRequests.findMany({
-      where: eq(swapRequests.status, "pending"),
+      where: showAll ? undefined : eq(swapRequests.status, status),
       with: {
         job: {
+          columns: {
+            checkInTime: true,
+            checkOutTime: true,
+          },
           with: {
             property: {
               columns: {
@@ -60,6 +87,8 @@ export async function GET(request: NextRequest) {
         status: request.status,
         requestedAt: request.requestedAt,
         expiresAt: request.expiresAt,
+        reason: request.reason,
+        scheduledAt: request.job?.checkInTime ?? null,
         originalCleanerName: request.originalCleaner?.fullName ?? "Unknown",
         replacementCleanerName: request.replacementCleaner?.fullName ?? null,
         propertyAddress: request.job?.property?.address ?? null,

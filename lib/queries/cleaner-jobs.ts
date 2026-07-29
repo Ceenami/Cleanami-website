@@ -1,10 +1,19 @@
 import "server-only";
 
 import { db } from "@/db";
-import { jobs, jobsToCleaners, properties, cleaners } from "@/db/schemas";
+import {
+  jobs,
+  jobsToCleaners,
+  properties,
+  cleaners,
+  swapRequests,
+} from "@/db/schemas";
 import { and, eq, gte, lte, ne, inArray, asc } from "drizzle-orm";
 import { getCleanerJobWindowEnd } from "@/lib/cleaner/planning-window";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+
+/** Mirrors HOURS_BEFORE_JOB in `lib/queries/cleaner-swap.ts`. */
+const SWAP_CUTOFF_HOURS = 24;
 
 export type CleanerJobRole =
   | "primary"
@@ -23,6 +32,10 @@ export type CleanerJobSummary = {
   mustFinishBefore: string | null;
   scheduledAt: string | null;
   canRequestSwap: boolean;
+  /** Why a swap cannot be requested — shown next to the disabled option. */
+  swapBlockedReason: string | null;
+  /** Set while this cleaner has an open swap nobody has accepted yet. */
+  pendingSwapRequestId: string | null;
   expectedPay: number;
   role: CleanerJobRole;
   urgentBonus: boolean;
@@ -126,11 +139,38 @@ export async function getCleanerUpcomingJobs(
     teammatesByJob.set(row.jobId, list);
   }
 
+  // A swap the cleaner has already opened is otherwise invisible to them: the
+  // "submitted" message vanishes on the next page load and the button comes
+  // back looking untouched.
+  const pendingSwaps = await db
+    .select({ id: swapRequests.id, jobId: swapRequests.jobId })
+    .from(swapRequests)
+    .where(
+      and(
+        inArray(swapRequests.jobId, jobIds),
+        eq(swapRequests.originalCleanerId, cleanerId),
+        eq(swapRequests.status, "pending")
+      )
+    );
+
+  const pendingSwapByJob = new Map(pendingSwaps.map((s) => [s.jobId, s.id]));
+
   return assignments.map((assignment) => {
     const checkInTime = assignment.checkInTime;
-    const canRequestSwap = checkInTime
-      ? checkInTime.getTime() - Date.now() > 24 * 60 * 60 * 1000
+    const isOutsideCutoff = checkInTime
+      ? checkInTime.getTime() - Date.now() > SWAP_CUTOFF_HOURS * 60 * 60 * 1000
       : false;
+    const pendingSwapRequestId = pendingSwapByJob.get(assignment.jobId) ?? null;
+    const canRequestSwap = isOutsideCutoff && !pendingSwapRequestId;
+
+    let swapBlockedReason: string | null = null;
+    if (pendingSwapRequestId) {
+      swapBlockedReason = "Swap already open";
+    } else if (!checkInTime) {
+      swapBlockedReason = "No start time scheduled yet";
+    } else if (!isOutsideCutoff) {
+      swapBlockedReason = `Starts in under ${SWAP_CUTOFF_HOURS} hours`;
+    }
 
     return {
       jobId: assignment.jobId,
@@ -139,6 +179,8 @@ export async function getCleanerUpcomingJobs(
       mustFinishBefore: formatDateTime(assignment.checkOutTime),
       scheduledAt: checkInTime?.toISOString() ?? null,
       canRequestSwap,
+      swapBlockedReason,
+      pendingSwapRequestId,
       expectedPay: calculateExpectedPay(
         assignment.expectedHours,
         assignment.role,

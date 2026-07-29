@@ -12,6 +12,8 @@ export type UserNotification = {
   isRead: boolean;
   createdAt: string;
   jobId: string | null;
+  /** In-app destination for the notification, when it has one. */
+  url: string | null;
 };
 
 async function resolveAppUserId(
@@ -87,6 +89,7 @@ export async function getUserNotificationsBySupabaseId(
     isRead: n.isRead,
     createdAt: n.createdAt.toISOString(),
     jobId: n.jobId,
+    url: typeof n.metadata?.url === "string" ? n.metadata.url : null,
   }));
 
   return {
