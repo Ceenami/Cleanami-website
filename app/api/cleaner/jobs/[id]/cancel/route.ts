@@ -6,7 +6,10 @@ import {
   getCleanerAuth,
   requireCleanerJobAssignment,
 } from "@/lib/cleaner-auth";
-import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
+import {
+  getCleanerUserId,
+  notifyAdminsOfJobAlert,
+} from "@/lib/queries/cleaner-notifications";
 import { recomputeReliabilityScore } from "@/lib/services/reliability/reliability.service";
 import { assignJob } from "@/lib/services/assignment/assignment-engine.service";
 import { and, eq } from "drizzle-orm";
@@ -136,8 +139,12 @@ export async function POST(
       await recomputeReliabilityScore(cleanerId);
     }
 
-    let outcome: "backup_promoted" | "reassignment_triggered" | "removed" =
-      "removed";
+    let outcome:
+      | "backup_promoted"
+      | "reassignment_triggered"
+      | "uncovered"
+      | "removed" = "removed";
+    let uncoveredReason: string | null = null;
 
     if (role === "primary") {
       const backup = job.cleaners.find(
@@ -180,7 +187,12 @@ export async function POST(
           .set({ status: "unassigned", updatedAt: now })
           .where(eq(jobs.id, jobId));
 
-        await assignJob({
+        // The engine can legitimately find nobody (starvation, no hot-tub-capable
+        // cleaner, everyone clashing). Reporting "reassignment_triggered"
+        // regardless meant a job could be left with no cleaner at all and
+        // nobody told — the cancelling cleaner walked away believing it was
+        // covered, and no admin was alerted.
+        const assignment = await assignJob({
           id: job.id,
           propertyId: job.propertyId,
           checkInTime: job.checkInTime,
@@ -188,7 +200,19 @@ export async function POST(
           addonsSnapshot: job.addonsSnapshot,
         });
 
-        outcome = "reassignment_triggered";
+        if (assignment.status === "skipped") {
+          outcome = "uncovered";
+          uncoveredReason = assignment.reason;
+
+          await notifyAdminsOfJobAlert({
+            title: "Job left uncovered by a cancellation",
+            message: `${address} on ${job.checkInTime.toISOString()} has no cleaner after a cancellation — automatic reassignment could not fill it (${assignment.reason}).`,
+            jobId,
+            outcome: "cancel_uncovered",
+          });
+        } else {
+          outcome = "reassignment_triggered";
+        }
       }
     }
 
@@ -197,6 +221,7 @@ export async function POST(
       penaltyPoints,
       hoursNotice: Math.max(0, Math.round(hoursNotice)),
       outcome,
+      uncoveredReason,
     });
   } catch (err) {
     console.error("[POST /api/cleaner/jobs/[id]/cancel]", err);
