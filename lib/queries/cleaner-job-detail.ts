@@ -13,7 +13,10 @@ import {
   createSignedUrls,
 } from "@/lib/storage/signed-url";
 import { buildPayBreakdown } from "@/lib/cleaner/pay-breakdown";
-import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
+import {
+  getExpectedChecklistItems,
+  mergeChecklistItems,
+} from "@/lib/cleaner/evidence";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
@@ -214,6 +217,11 @@ export async function getCleanerEvidenceFormData(
   const roomPhotos = existingLog?.roomPhotos ?? {};
   const roomPhotoPreviews = await signRoomPhotos(roomPhotos);
 
+  const expectedChecklistItems = getExpectedChecklistItems(
+    property,
+    property.checklistFiles
+  );
+
   return {
     jobId,
     property: {
@@ -224,9 +232,10 @@ export async function getCleanerEvidenceFormData(
       useDefaultChecklist: property.useDefaultChecklist,
     },
     checklistFiles,
-    checklistItems: existingLog?.items?.length
-      ? existingLog.items
-      : DEFAULT_CHECKLIST_ITEMS,
+    checklistItems: mergeChecklistItems(
+      expectedChecklistItems,
+      existingLog?.items ?? []
+    ),
     roomPhotos,
     roomPhotoPreviews,
     cleanerNotes: evidence?.cleanerNotes ?? "",

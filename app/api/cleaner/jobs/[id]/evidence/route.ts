@@ -8,6 +8,8 @@ import {
 } from "@/lib/cleaner-auth";
 import {
   flattenRoomPhotos,
+  getExpectedChecklistItems,
+  getMissingChecklistItems,
   getMissingPhotoRequirements,
   getRoomPhotoRequirements,
   type ChecklistLogPayload,
@@ -16,6 +18,11 @@ import {
   ensureEvidencePacket,
   getCleanerEvidenceFormData,
 } from "@/lib/queries/cleaner-job-detail";
+import {
+  EVIDENCE_BUCKET,
+  findMissingObjects,
+  toStoragePath,
+} from "@/lib/storage/signed-url";
 import { and, eq } from "drizzle-orm";
 
 type PatchBody = {
@@ -106,7 +113,7 @@ export async function PATCH(
         eq(jobsToCleaners.cleanerId, cleanerId),
         eq(jobsToCleaners.jobId, jobId)
       ),
-      with: { job: { with: { property: true } } },
+      with: { job: { with: { property: { with: { checklistFiles: true } } } } },
     });
 
     const property = assignment?.job?.property;
@@ -128,7 +135,66 @@ export async function PATCH(
       );
     }
 
+    // Recompute the expected checklist server-side rather than trusting
+    // whatever ids the client submitted — a property with its own uploaded
+    // checklist must have every one of its items confirmed, not just any
+    // single item marked complete (spec §14.2).
+    const expectedChecklistItems = getExpectedChecklistItems(
+      property,
+      property.checklistFiles
+    );
+    const missingChecklistItems = getMissingChecklistItems(
+      expectedChecklistItems,
+      checklistLog.items
+    );
+
+    if (missingChecklistItems.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Checklist incomplete",
+          missing: missingChecklistItems,
+        },
+        { status: 400 }
+      );
+    }
+
     const photoUrls = flattenRoomPhotos(roomPhotos);
+
+    // The photo minimums above only count strings the client sent. Nothing
+    // proved those objects exist, so a tampered client could satisfy every
+    // requirement with invented paths and complete a job — and be paid for it —
+    // without uploading a single photo. Two checks close that:
+    //
+    //  1. Ownership: the upload route always returns
+    //     `<cleanerId>/<jobId>/<roomKey>/<file>`, so anything outside this
+    //     job's own prefix was not issued for this job (or this cleaner).
+    //  2. Existence: the object must actually be in the bucket.
+    const expectedPrefix = `${cleanerId}/${jobId}/`;
+    const foreignPaths = photoUrls.filter(
+      (path) => !toStoragePath(EVIDENCE_BUCKET, path).startsWith(expectedPrefix)
+    );
+
+    if (foreignPaths.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Photo paths must come from this job's uploads",
+          invalid: foreignPaths,
+        },
+        { status: 400 }
+      );
+    }
+
+    const missingObjects = await findMissingObjects(EVIDENCE_BUCKET, photoUrls);
+    if (missingObjects.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Some photos were never uploaded",
+          missing: missingObjects,
+        },
+        { status: 400 }
+      );
+    }
+
     await ensureEvidencePacket(jobId);
 
     await db

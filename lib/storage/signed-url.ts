@@ -51,6 +51,41 @@ export async function createSignedUrl(
 }
 
 /**
+ * Which of `values` do not exist as objects in `bucket`.
+ *
+ * Signing is the existence probe: `createSignedUrls` returns a per-path error
+ * for anything it cannot resolve, so one round-trip answers for the whole set
+ * without a `list` call per directory.
+ *
+ * Used to stop a caller asserting evidence it never uploaded — the API records
+ * client-supplied object paths, and nothing else checks that they are real.
+ */
+export async function findMissingObjects(
+  bucket: string,
+  values: string[]
+): Promise<string[]> {
+  if (values.length === 0) return [];
+
+  const supabase = createAdminClient();
+  const paths = values.map((value) => toStoragePath(bucket, value));
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(paths, 60);
+
+  // Fail closed: if the probe itself broke we cannot prove the objects exist.
+  if (error || !data) {
+    console.error(`[signed-url] existence probe ${bucket}`, error);
+    return values;
+  }
+
+  const missing: string[] = [];
+  data.forEach((entry, i) => {
+    if (!entry.signedUrl) missing.push(values[i]);
+  });
+  return missing;
+}
+
+/**
  * Mint signed URLs for many stored values in one round-trip. The returned array
  * is index-aligned with the input; any entry that fails to sign is null.
  */
