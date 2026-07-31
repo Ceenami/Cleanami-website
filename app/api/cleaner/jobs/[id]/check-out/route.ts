@@ -16,6 +16,13 @@ import {
 } from "@/lib/services/gps/geofence";
 import { and, eq } from "drizzle-orm";
 
+/** Statuses a job can only be in once it has already been checked out of. */
+const ALREADY_CHECKED_OUT_STATUSES = new Set([
+  "awaiting_capture",
+  "completed_pending_evidence",
+  "completed",
+]);
+
 const locationSchema = z
   .object({
     latitude: z.number().min(-90).max(90),
@@ -68,6 +75,30 @@ export async function POST(
 
     if (!job || !property) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    }
+
+    // Idempotency: a repeat check-out (double tap, a retry after a flaky
+    // response) used to succeed and overwrite `checkOutTime` and the packet's
+    // GPS fields, silently rewriting when the cleaner actually left. Report
+    // success without touching the recorded times.
+    //
+    // Only for states that come *after* a check-out — a job that was never
+    // checked into still has to fail, or the app would report a clean complete
+    // for work that never started.
+    if (ALREADY_CHECKED_OUT_STATUSES.has(job.status ?? "")) {
+      const existingJob = await getCleanerJobDetail(cleanerId, jobId);
+      return NextResponse.json({
+        success: true,
+        alreadyCheckedOut: true,
+        job: existingJob,
+      });
+    }
+
+    if (job.status !== "in-progress") {
+      return NextResponse.json(
+        { error: "Check in before completing this job." },
+        { status: 409 }
+      );
     }
 
     if (!evidence) {

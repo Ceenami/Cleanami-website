@@ -198,7 +198,10 @@ export async function POST(
     });
 
     // Audit trail + accountability (record & flag; never blocks check-in).
-    if (device) {
+    // Only on the first check-in: re-entering the workflow screen on a job
+    // already in progress used to write another 'arrival' point, so the arrival
+    // rows were not a reliable count of actual arrivals.
+    if (device && !alreadyCheckedIn) {
       await recordGpsLog({
         jobId,
         cleanerId,

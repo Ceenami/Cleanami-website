@@ -87,6 +87,15 @@ export async function recordGpsLog(input: {
   device: DeviceLocation;
   activityType: "arrival" | "working" | "departure";
   metadata?: Record<string, unknown>;
+  /**
+   * When the fix was actually taken, if that is not "now". The app's background
+   * runner captures points while the device is asleep and can only upload them
+   * once the app next wakes, so the arrival time of the request says nothing
+   * about when the cleaner was at that position. Recorded as `createdAt` so the
+   * trail reads chronologically, and flagged in metadata so a late-arriving row
+   * is distinguishable from a live one.
+   */
+  capturedAt?: Date;
 }): Promise<void> {
   await db.insert(gpsTrackingLogs).values({
     jobId: input.jobId,
@@ -96,6 +105,9 @@ export async function recordGpsLog(input: {
     accuracy:
       input.device.accuracy != null ? input.device.accuracy.toString() : null,
     activityType: input.activityType,
-    metadata: input.metadata ?? {},
+    metadata: input.capturedAt
+      ? { ...(input.metadata ?? {}), backfilled: true }
+      : input.metadata ?? {},
+    ...(input.capturedAt ? { createdAt: input.capturedAt } : {}),
   });
 }
