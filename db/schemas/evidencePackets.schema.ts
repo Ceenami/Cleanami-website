@@ -6,7 +6,11 @@ export const evidencePacketStatusEnum = pgEnum('evidence_packet_status', ['compl
 
 export const evidencePackets = pgTable('evidence_packets', {
   id: uuid('id').primaryKey().defaultRandom(),
-  jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }).unique().notNull(),
+  // CASCADE, not SET NULL: the column is NOT NULL, so SET NULL made the delete
+  // fail outright and any job with an evidence packet became undeletable
+  // (which also bricked the demo seeder). A packet has no meaning without its
+  // job, so deleting the job should take it with it.
+  jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'cascade' }).unique().notNull(),
   photoUrls: text('photo_urls').array(),
   isChecklistComplete: boolean('is_checklist_complete').default(false),
   checklistLog: jsonb('checklist_log'), // Can store a log of items checked
