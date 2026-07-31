@@ -8,6 +8,8 @@ import {
 } from "@/lib/cleaner-auth";
 import {
   flattenRoomPhotos,
+  getExpectedChecklistItems,
+  getMissingChecklistItems,
   getMissingPhotoRequirements,
   getRoomPhotoRequirements,
   type ChecklistLogPayload,
@@ -106,7 +108,7 @@ export async function PATCH(
         eq(jobsToCleaners.cleanerId, cleanerId),
         eq(jobsToCleaners.jobId, jobId)
       ),
-      with: { job: { with: { property: true } } },
+      with: { job: { with: { property: { with: { checklistFiles: true } } } } },
     });
 
     const property = assignment?.job?.property;
@@ -123,6 +125,29 @@ export async function PATCH(
         {
           error: "Photo minimums not met",
           missing: missingPhotos,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Recompute the expected checklist server-side rather than trusting
+    // whatever ids the client submitted — a property with its own uploaded
+    // checklist must have every one of its items confirmed, not just any
+    // single item marked complete (spec §14.2).
+    const expectedChecklistItems = getExpectedChecklistItems(
+      property,
+      property.checklistFiles
+    );
+    const missingChecklistItems = getMissingChecklistItems(
+      expectedChecklistItems,
+      checklistLog.items
+    );
+
+    if (missingChecklistItems.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Checklist incomplete",
+          missing: missingChecklistItems,
         },
         { status: 400 }
       );

@@ -1,6 +1,6 @@
 import "server-only";
 
-const DEFAULT_PROD_URL = "https://cleanami.ceenami.com";
+const DEFAULT_PROD_URL = "https://cleannami.ceenami.com";
 const DEFAULT_DEV_URL = "http://localhost:3000";
 
 function isLocalHost(hostname: string): boolean {

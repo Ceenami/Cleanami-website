@@ -1,4 +1,5 @@
 import type { Property } from "@/db/schemas/properties.schema";
+import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
 
 export type RoomPhotoRequirement = {
   roomKey: string;
@@ -100,6 +101,55 @@ export function getMissingPhotoRequirements(
 
 export function flattenRoomPhotos(roomPhotos: RoomPhotosMap): string[] {
   return Object.values(roomPhotos).flat();
+}
+
+export type ExpectedChecklistItem = { id: string; task: string };
+
+/**
+ * Spec §14.1/§14.2: a property with its own uploaded checklist
+ * (`useDefaultChecklist = false`) must have the cleaner review and check off
+ * that specific checklist, not the generic system default. `checklist_files`
+ * stores documents (PDF/photo), not structured line items, so each uploaded
+ * file becomes one review-and-confirm item. Falls back to the system default
+ * when the property opts into it, or when it opts out but nothing has been
+ * uploaded yet (fail open — an admin oversight shouldn't block a job).
+ */
+export function getExpectedChecklistItems(
+  property: Pick<Property, "useDefaultChecklist">,
+  checklistFiles: { id: string; fileName: string }[]
+): ExpectedChecklistItem[] {
+  if (!property.useDefaultChecklist && checklistFiles.length > 0) {
+    return checklistFiles.map((file) => ({
+      id: file.id,
+      task: `Reviewed & completed: ${file.fileName}`,
+    }));
+  }
+  return DEFAULT_CHECKLIST_ITEMS.map(({ id, task }) => ({ id, task }));
+}
+
+/** Recomputes the expected items and overlays any prior completion state by id. */
+export function mergeChecklistItems(
+  expected: ExpectedChecklistItem[],
+  existing: { id: string; completed: boolean }[]
+): { id: string; task: string; completed: boolean }[] {
+  const completedById = new Map(existing.map((item) => [item.id, item.completed]));
+  return expected.map((item) => ({
+    ...item,
+    completed: completedById.get(item.id) ?? false,
+  }));
+}
+
+/** Every expected item's id must appear, completed, in the submission. */
+export function getMissingChecklistItems(
+  expected: ExpectedChecklistItem[],
+  submitted: { id: string; completed: boolean }[]
+): string[] {
+  const completedIds = new Set(
+    submitted.filter((item) => item.completed).map((item) => item.id)
+  );
+  return expected
+    .filter((item) => !completedIds.has(item.id))
+    .map((item) => item.task);
 }
 
 export function validateEvidenceComplete(

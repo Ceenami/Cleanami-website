@@ -3,7 +3,7 @@ import "server-only";
 import { db } from "@/db";
 import { cleaners, jobs, jobsToCleaners, notifications } from "@/db/schemas";
 import { notifyCleaner } from "@/lib/services/notifications/notify";
-import { and, eq, gt, lte, ne } from "drizzle-orm";
+import { and, eq, gt, lte, ne, sql } from "drizzle-orm";
 
 /** Window ahead of the scheduled start in which the T-60 reminder fires. */
 const JOB_REMINDER_LEAD_MINUTES = 60;
@@ -47,10 +47,16 @@ export async function sendUpcomingJobReminders(
   let skipped = 0;
 
   for (const job of upcoming) {
+    // Scoped to rows this function itself created (`notifyCleaner` stamps
+    // `metadata.source = "notify"`). A legacy DB trigger used to write
+    // untagged `job_reminder` rows immediately on job creation; matching on
+    // type + jobId alone would treat those as "already sent" and permanently
+    // block the real T-60 reminder for that job.
     const alreadySent = await db.query.notifications.findFirst({
       where: and(
         eq(notifications.type, "job_reminder"),
-        eq(notifications.jobId, job.id)
+        eq(notifications.jobId, job.id),
+        sql`${notifications.metadata}->>'source' = 'notify'`
       ),
       columns: { id: true },
     });
