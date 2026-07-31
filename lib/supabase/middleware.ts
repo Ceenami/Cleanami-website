@@ -28,7 +28,11 @@ export async function updateSession(request: NextRequest) {
       status: 204, // No Content
       headers: {
         'Access-Control-Allow-Origin': origin,
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        // PATCH is required by the native app: evidence submission
+        // (`PATCH /api/cleaner/jobs/[id]/evidence`), onboarding saves and
+        // marking notifications read all use it. Omitting it fails the
+        // preflight, which surfaces in the app as "Failed to fetch".
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key', // Add any other headers your client sends
         'Access-Control-Max-Age': '86400', // Cache preflight response for 24 hours
       },
