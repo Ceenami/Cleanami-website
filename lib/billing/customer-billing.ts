@@ -15,6 +15,24 @@ export function customerSkipsBilling(
   return customer?.skipPayment === true;
 }
 
+/**
+ * Sentinel stored in `jobs.payment_intent_id` when the customer's billing is
+ * skipped, so the job still reads as "authorized" and moves through the normal
+ * lifecycle without any money having been held.
+ *
+ * It is NOT a Stripe id. Every branch that decides "do I have a payment intent?"
+ * by truthiness alone will happily hand this string to Stripe, which rejects it
+ * as an unknown intent — so guard with `isSkippedPaymentIntent` first.
+ */
+export const SKIPPED_PAYMENT_INTENT_ID = "skipped_owner_payment";
+
+/** True when the job carries the skip-billing sentinel rather than a real intent. */
+export function isSkippedPaymentIntent(
+  paymentIntentId: string | null | undefined
+): boolean {
+  return paymentIntentId === SKIPPED_PAYMENT_INTENT_ID;
+}
+
 /** Align skip_payment with super_admin auth users sharing the same email. */
 export async function syncSkipPaymentForSuperAdminCustomers(): Promise<void> {
   const supabaseAdmin = createAdminClient();

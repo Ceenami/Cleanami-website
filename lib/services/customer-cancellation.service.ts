@@ -14,7 +14,10 @@ import {
   canCancelSubscription,
 } from "@/lib/cancellation/rules";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
-import { customerSkipsBilling } from "@/lib/billing/customer-billing";
+import {
+  customerSkipsBilling,
+  isSkippedPaymentIntent,
+} from "@/lib/billing/customer-billing";
 import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
 import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
@@ -96,7 +99,7 @@ async function voidCustomerCharge(job: {
   paymentStatus: string | null;
 }) {
   const stripe = getStripe();
-  if (!stripe || !job.paymentIntentId || job.paymentIntentId === "skipped_owner_payment") {
+  if (!stripe || !job.paymentIntentId || isSkippedPaymentIntent(job.paymentIntentId)) {
     return;
   }
 
@@ -152,7 +155,14 @@ async function chargeCustomerForLateCancel(
     return true;
   }
 
-  if (job.paymentStatus === "authorized" && job.paymentIntentId) {
+  // The sentinel is normally unreachable here (the skipPayment guard above
+  // returns first), but it survives on the job after skip_payment is turned off,
+  // and handing it to Stripe would throw mid-cancellation.
+  if (
+    job.paymentStatus === "authorized" &&
+    job.paymentIntentId &&
+    !isSkippedPaymentIntent(job.paymentIntentId)
+  ) {
     await stripe.paymentIntents.capture(job.paymentIntentId);
     await db
       .update(jobs)

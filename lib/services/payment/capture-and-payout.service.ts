@@ -17,6 +17,8 @@ import { computeReserveRate } from "@/lib/services/payment/reserve";
 import { sendJobCompletionEmail } from "@/lib/services/email.service";
 import { evaluateArrival } from "@/lib/services/gps/geofence";
 import { reconcileEvidenceAccountability } from "@/lib/services/gps/reconcile-evidence";
+import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
+import { appendJobNote } from "@/lib/jobs/job-notes";
 
 /**
  * Roles that actually worked the job and are paid. Shadow backups (and unaccepted
@@ -136,18 +138,27 @@ export async function captureAndCreatePayouts(
   await reconcileEvidenceAccountability({ job, evidence });
 
   // ====================================================================
-  // CASE 1: PREPAID JOB — No paymentIntentId
+  // CASE 1: NOTHING TO CAPTURE — prepaid, or billing skipped for this customer
   // ====================================================================
-  if (!job.paymentIntentId) {
+  // The skip-billing sentinel is a truthy string, so testing `job.paymentIntentId`
+  // for truthiness alone sent these jobs down the Stripe branch, where the capture
+  // call failed against a non-existent intent. The job then stuck at
+  // `capture_failed` and — the real damage — no payout row was ever written, so
+  // the cleaner was never paid for work they had fully evidenced.
+  const billingSkipped = isSkippedPaymentIntent(job.paymentIntentId);
+  if (!job.paymentIntentId || billingSkipped) {
     await db
       .update(jobs)
       .set({
         status: "completed",
         paymentStatus: "captured",
         paymentFailed: false,
-        notes: job.notes
-          ? `${job.notes}\n[System] Prepaid during onboarding – marked as captured.`
-          : "[System] Prepaid during onboarding – marked as captured.",
+        notes: appendJobNote(
+          job.notes,
+          billingSkipped
+            ? "[System] Billing skipped for this customer – no charge, marked as captured."
+            : "[System] Prepaid during onboarding – marked as captured."
+        ),
         updatedAt: new Date(),
       })
       .where(eq(jobs.id, jobId));
@@ -157,15 +168,17 @@ export async function captureAndCreatePayouts(
       with: { cleaner: true },
     });
 
+    const captureType = billingSkipped ? "skipped_billing" : "prepaid";
+
     if (assignedCleaners.length === 0) {
-      console.warn(`No cleaners assigned to prepaid job ${jobId}`);
+      console.warn(`No cleaners assigned to non-charging job ${jobId}`);
       return {
         ok: true,
         httpStatus: 200,
         body: {
           success: true,
-          type: "prepaid",
-          message: "Prepaid job marked captured but no cleaners assigned",
+          type: captureType,
+          message: "Job marked captured but no cleaners assigned",
           jobId,
           payoutsCreated: 0,
         },
@@ -219,8 +232,10 @@ export async function captureAndCreatePayouts(
       httpStatus: 200,
       body: {
         success: true,
-        type: "prepaid",
-        message: "Prepaid job marked captured and payouts created",
+        type: captureType,
+        message: billingSkipped
+          ? "Billing skipped for this customer; payouts created"
+          : "Prepaid job marked captured and payouts created",
         jobId,
         payoutsCreated: workingCleaners.length,
       },
@@ -253,7 +268,9 @@ export async function captureAndCreatePayouts(
       .update(jobs)
       .set({
         paymentStatus: "capture_failed",
-        notes: `Capture failed: ${message}`,
+        // Appended, not assigned: this used to overwrite the notes wholesale,
+        // discarding reconciliation history and seed tags on the way past.
+        notes: appendJobNote(job.notes, `[System] Capture failed: ${message}`),
         updatedAt: new Date(),
       })
       .where(eq(jobs.id, jobId));

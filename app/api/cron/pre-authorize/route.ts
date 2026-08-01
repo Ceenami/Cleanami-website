@@ -9,6 +9,8 @@ import { CancellationDetectionService } from "@/lib/services/cancellation-detect
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 import { assertCronAuth } from "@/lib/auth/cron-auth";
 import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
+import { SKIPPED_PAYMENT_INTENT_ID } from "@/lib/billing/customer-billing";
+import { appendJobNote } from "@/lib/jobs/job-notes";
 import {
   resolvePromoCodeById,
   recordPromoRedemption,
@@ -69,6 +71,9 @@ export async function POST(req: NextRequest) {
         propertyData: properties,
         stripeCustomerId: customers.stripeCustomerId,
         checkOutTime: jobs.checkOutTime,
+        // Existing notes, so the skip-payment branch can append rather than
+        // clobber whatever seeding/reconciliation already recorded.
+        notes: jobs.notes,
         // CHANGED: Added skipPayment to the selection
         skipPayment: customers.skipPayment,
         // Needed so the subscription-term discount applies to recurring cleans
@@ -137,13 +142,18 @@ export async function POST(req: NextRequest) {
           );
 
           // We mark it as "authorized" so the system treats it as a valid job,
-          // but we use a specialized ID so you know no money was moved.
+          // but we use a specialized ID so you know no money was moved. Capture
+          // recognises that sentinel and pays the cleaner without calling Stripe
+          // (see isSkippedPaymentIntent) — do not swap it for a truthy stand-in.
           await db
             .update(jobs)
             .set({
-              paymentIntentId: "skipped_owner_payment",
+              paymentIntentId: SKIPPED_PAYMENT_INTENT_ID,
               paymentStatus: "authorized",
-              notes: `Payment skipped (Owner/VIP). Value: $${priceDetails.totalPerClean}`,
+              notes: appendJobNote(
+                job.notes,
+                `[System] Payment skipped (Owner/VIP). Value: $${priceDetails.totalPerClean}`
+              ),
             })
             .where(eq(jobs.id, job.jobId));
 
