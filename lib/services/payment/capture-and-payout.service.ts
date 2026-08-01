@@ -111,9 +111,19 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // Idempotency: never re-capture or re-create payouts for a job already
-  // captured. This guards BOTH the prepaid and Stripe branches below (2.2).
-  if (job.paymentStatus === "captured") {
+  // Idempotency: never re-capture or re-create payouts for a job this function
+  // has already finished. This guards BOTH the prepaid and Stripe branches (2.2).
+  //
+  // `paymentStatus` alone is NOT sufficient evidence of that. The first clean of
+  // a subscription is charged in full at booking, and onboarding writes
+  // `paymentStatus: "captured"` at that moment (complete-onboarding.service.ts
+  // :462) — long before a cleaner ever touches the job. Keying off it alone made
+  // every first clean return here the moment the cleaner finished, leaving the
+  // job at `awaiting_capture` with no payout row ever written. `status` only
+  // becomes `completed` at the end of this function, so pairing the two is what
+  // actually means "already settled". The payout insert is conflict-safe on
+  // (jobId, cleanerId), so a second pass can never double-pay.
+  if (job.status === "completed" && job.paymentStatus === "captured") {
     return {
       ok: true,
       httpStatus: 200,
@@ -146,6 +156,102 @@ export async function captureAndCreatePayouts(
   // `capture_failed` and — the real damage — no payout row was ever written, so
   // the cleaner was never paid for work they had fully evidenced.
   const billingSkipped = isSkippedPaymentIntent(job.paymentIntentId);
+
+  // Which settlement this job needs is decided by the intent's own status at
+  // Stripe, never inferred from local columns. Capture is legal ONLY from
+  // `requires_capture`; calling it in any other state errors out, so we ask
+  // first rather than calling and catching.
+  // https://docs.stripe.com/api/payment_intents/capture
+  //
+  // This is the point the first-clean bug turned on. That intent is created with
+  // automatic capture (create-payment-intent.service.ts:299) and is therefore
+  // already `succeeded` — money collected, nothing left to capture. It cannot
+  // use manual capture instead, because a card authorization expires after ~7
+  // days and the booking schema forces the first clean at least 7 days out. So
+  // it is genuinely prepaid while still carrying a real intent id, and the old
+  // `!job.paymentIntentId` test sent it to CASE 2, where capture failed.
+  let alreadyCharged: Stripe.PaymentIntent | null = null;
+
+  if (job.paymentIntentId && !billingSkipped) {
+    const client = getStripe();
+    if (!client) {
+      return {
+        ok: false,
+        httpStatus: 503,
+        body: { error: SERVICE_UNAVAILABLE.stripe },
+      };
+    }
+
+    let intent: Stripe.PaymentIntent;
+    try {
+      intent = await client.paymentIntents.retrieve(job.paymentIntentId);
+    } catch (lookupError) {
+      const message =
+        lookupError instanceof Error ? lookupError.message : "Unknown error";
+      console.error("[capture-and-payout] intent lookup failed:", lookupError);
+      await db
+        .update(jobs)
+        .set({
+          paymentStatus: "capture_failed",
+          notes: appendJobNote(
+            job.notes,
+            `[System] Could not read payment intent: ${message}`
+          ),
+          updatedAt: new Date(),
+        })
+        .where(eq(jobs.id, jobId));
+      return {
+        ok: false,
+        httpStatus: 502,
+        body: { error: "Could not read payment intent", details: message },
+      };
+    }
+
+    if (intent.status === "succeeded") {
+      // Charged up front. Skip the capture call, keep everything downstream.
+      alreadyCharged = intent;
+    } else if (intent.status === "processing") {
+      // Asynchronous settlement still in flight. Leave the job at
+      // `awaiting_capture` and do NOT mark it failed — the stranded-capture
+      // cron re-runs this function and will find a terminal status next time.
+      return {
+        ok: false,
+        httpStatus: 409,
+        body: {
+          error: "Payment is still processing",
+          details: "Capture will be retried once the intent settles.",
+          jobId,
+          retryable: true,
+        },
+      };
+    } else if (intent.status !== "requires_capture") {
+      // requires_payment_method / requires_confirmation / requires_action /
+      // canceled — the customer never completed payment. Capture would throw a
+      // generic 500; fail loudly with the actual reason instead.
+      await db
+        .update(jobs)
+        .set({
+          paymentStatus: "capture_failed",
+          paymentFailed: true,
+          notes: appendJobNote(
+            job.notes,
+            `[System] Capture not possible: payment intent is "${intent.status}".`
+          ),
+          updatedAt: new Date(),
+        })
+        .where(eq(jobs.id, jobId));
+      return {
+        ok: false,
+        httpStatus: 402,
+        body: {
+          error: "Payment was never completed",
+          details: `Payment intent is "${intent.status}".`,
+          jobId,
+        },
+      };
+    }
+  }
+
   if (!job.paymentIntentId || billingSkipped) {
     await db
       .update(jobs)
@@ -243,8 +349,13 @@ export async function captureAndCreatePayouts(
   }
 
   // ====================================================================
-  // CASE 2: NORMAL STRIPE PAYMENT INTENT FLOW
+  // CASE 2: MONEY WAS COLLECTED — capture it now, or it was taken at booking
   // ====================================================================
+  // Both paths converge here on purpose. A job charged up front still collected
+  // real revenue, so it must record the 2% reserve and create payouts exactly
+  // like a captured one; the only difference is that there is nothing to call
+  // capture on. Routing it to CASE 1 instead would have paid the cleaner but
+  // silently omitted the reserve ledger row for that revenue.
   const stripe = getStripe();
   if (!stripe) {
     return { ok: false, httpStatus: 503, body: { error: SERVICE_UNAVAILABLE } };
@@ -254,11 +365,13 @@ export async function captureAndCreatePayouts(
   try {
     // Deterministic idempotency key: a retried capture for the same job never
     // double-captures the customer (2.2).
-    paymentIntent = await stripe.paymentIntents.capture(
-      job.paymentIntentId,
-      {},
-      { idempotencyKey: `capture_${jobId}` }
-    );
+    paymentIntent =
+      alreadyCharged ??
+      (await stripe.paymentIntents.capture(
+        job.paymentIntentId,
+        {},
+        { idempotencyKey: `capture_${jobId}` }
+      ));
   } catch (stripeError) {
     const message =
       stripeError instanceof Error ? stripeError.message : "Unknown error";
@@ -282,7 +395,10 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  const capturedAmount = paymentIntent.amount;
+  // What was actually collected, not what was requested. Identical to `amount`
+  // for a full capture, but it is the truthful figure for an intent that was
+  // charged at booking, and it keeps the reserve math honest either way.
+  const capturedAmount = paymentIntent.amount_received || paymentIntent.amount;
   // Reserve is normally 2%, auto-escalating to 5% when the 30-day dispute rate
   // exceeds 0.5% (spec §5/§20).
   const reserveRate = await computeReserveRate();
@@ -388,8 +504,10 @@ export async function captureAndCreatePayouts(
     httpStatus: 200,
     body: {
       success: true,
-      type: "stripe",
-      message: "Payment captured and payouts created",
+      type: alreadyCharged ? "prepaid_at_booking" : "stripe",
+      message: alreadyCharged
+        ? "Charged at booking; reserve recorded and payouts created"
+        : "Payment captured and payouts created",
       jobId,
       capturedAmount,
       reserveAmount,
