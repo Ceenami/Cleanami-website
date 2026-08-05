@@ -15,8 +15,10 @@ import {
   evaluateArrival,
   evaluateGeofence,
   recordGpsLog,
+  GEOFENCE_RADIUS_MILES,
   ON_TIME_GRACE_MINUTES,
   type DeviceLocation,
+  type GeofenceResult,
 } from "@/lib/services/gps/geofence";
 import { recordArrivalEvent } from "@/lib/services/reliability/reliability.service";
 import {
@@ -33,6 +35,15 @@ const locationSchema = z
     accuracy: z.number().nonnegative().nullable().optional(),
   })
   .nullable();
+
+/**
+ * Justification for checking in when the geofence gate would otherwise refuse.
+ * A minimum length is enforced so the field cannot be satisfied with "." — an
+ * override is reviewed by an admin and has to say something.
+ */
+const overrideSchema = z.object({
+  reason: z.string().trim().min(10).max(500),
+});
 
 export async function POST(
   request: Request,
@@ -56,13 +67,18 @@ export async function POST(
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
 
-  // Device location is optional (the cleaner may deny permission). If sent, we
-  // record + flag it but never block the check-in.
+  // The body carries the device fix and, when the cleaner is retrying a
+  // refused check-in, their justification. Read once — `request.json()` can
+  // only be consumed a single time.
   let device: DeviceLocation | null = null;
+  let overrideReason: string | null = null;
   try {
     const rawBody = await request.json();
     const parsed = locationSchema.safeParse(rawBody?.location ?? rawBody ?? null);
     if (parsed.success && parsed.data) device = parsed.data;
+
+    const parsedOverride = overrideSchema.safeParse(rawBody?.override);
+    if (parsedOverride.success) overrideReason = parsedOverride.data.reason;
   } catch {
     device = null;
   }
@@ -114,9 +130,61 @@ export async function POST(
       );
     }
 
-    const geofence = propertyId
+    const geofence: GeofenceResult = propertyId
       ? await evaluateGeofence(propertyId, device)
-      : { distanceMiles: null, withinGeofence: null };
+      : {
+          distanceMiles: null,
+          withinGeofence: null,
+          verdict: "unknown",
+          reason: "property_not_geocoded",
+          accuracyMiles: null,
+        };
+
+    // Geofence gate (client requirement: check-in must happen at the property).
+    //
+    // Only two outcomes refuse: the device is CONFIDENTLY outside the fence, or
+    // there is no fix at all so nothing can be verified. A fix too coarse to
+    // decide, and a property we never geocoded, are our problem rather than the
+    // cleaner's — those pass and are flagged for review instead.
+    //
+    // Skipped entirely once the job is in-progress. A repeat check-in (double
+    // tap, retry after a flaky response, reopening the workflow screen) has to
+    // stay idempotent, and by then the cleaner may legitimately have moved.
+    const blockedReason =
+      geofence.verdict === "outside"
+        ? "outside_geofence"
+        : geofence.reason === "no_device_location"
+        ? "location_required"
+        : null;
+
+    // An override is only meaningful against a refusal on a first check-in.
+    // Accepting one on a clean check-in would litter the review queue with
+    // justifications for check-ins that were never in question, and accepting
+    // one on a repeat call would let a later request overwrite the record of
+    // how the cleaner originally got in.
+    const overrideApplied =
+      blockedReason !== null && overrideReason !== null && !alreadyCheckedIn;
+
+    if (blockedReason && !overrideApplied && !alreadyCheckedIn) {
+      return NextResponse.json(
+        blockedReason === "outside_geofence"
+          ? {
+              error: `You appear to be ${geofence.distanceMiles} mi from the property. Check in once you have arrived — or tell us why you're checking in from here.`,
+              code: "outside_geofence",
+              distanceMiles: geofence.distanceMiles,
+              radiusMiles: GEOFENCE_RADIUS_MILES,
+              canOverride: true,
+            }
+          : {
+              error:
+                "Location is required to check in. Turn on location access for CleanNami, then try again — or tell us why you can't.",
+              code: "location_required",
+              canOverride: true,
+            },
+        { status: 409 }
+      );
+    }
+
     const arrival = evaluateArrival(scheduledCheckIn, now);
 
     const otherInProgressIds = await getCleanerInProgressJobIds(
@@ -167,6 +235,14 @@ export async function POST(
         checkInWithinGeofence: geofence.withinGeofence,
         arrivalDelayMinutes: arrival?.delayMinutes ?? null,
         arrivalOnTime: arrival?.onTime ?? null,
+        // Written only on an override, so a plain check-in never clears or
+        // overwrites a reason recorded earlier.
+        ...(overrideApplied
+          ? {
+              checkInOverrideReason: overrideReason,
+              checkInOverrideAt: now,
+            }
+          : {}),
       };
 
       const existingPacket = await tx.query.evidencePackets.findFirst({
@@ -210,6 +286,9 @@ export async function POST(
         metadata: {
           distanceMiles: geofence.distanceMiles,
           withinGeofence: geofence.withinGeofence,
+          geofenceVerdict: geofence.verdict,
+          geofenceReason: geofence.reason,
+          ...(overrideApplied ? { overrideReason } : {}),
         },
       });
     }
@@ -225,17 +304,38 @@ export async function POST(
       });
     }
 
-    // Flag anomalies for admin review (out of geofence, or late arrival).
+    // Flag anomalies for admin review. An override is the important one — it
+    // is the only path by which a check-in the gate refused still went ahead,
+    // so it must never happen quietly.
     const flags: string[] = [];
-    if (geofence.withinGeofence === false && geofence.distanceMiles != null) {
+    if (overrideApplied) {
+      flags.push(
+        geofence.verdict === "outside" && geofence.distanceMiles != null
+          ? `OVERRODE the geofence from ${geofence.distanceMiles} mi away — reason: "${overrideReason}"`
+          : `OVERRODE the location requirement with no device fix — reason: "${overrideReason}"`
+      );
+    } else if (
+      geofence.withinGeofence === false &&
+      geofence.distanceMiles != null
+    ) {
       flags.push(`checked in ${geofence.distanceMiles} mi from the property`);
+    } else if (geofence.reason === "low_accuracy") {
+      flags.push(
+        "location could not be verified — the device fix was too imprecise to place it at the property"
+      );
+    } else if (geofence.reason === "property_not_geocoded") {
+      flags.push(
+        "location could not be verified — this property has no coordinates on file"
+      );
     }
     if (arrival && !arrival.onTime) {
       flags.push(`arrived ${arrival.delayMinutes} min late`);
     }
     if (flags.length > 0 && !alreadyCheckedIn) {
       await notifyAdminsOfJobAlert({
-        title: "Check-in flagged for review",
+        title: overrideApplied
+          ? "Check-in geofence OVERRIDDEN"
+          : "Check-in flagged for review",
         message: flags.join("; "),
         jobId,
         outcome: "check_in_flagged",

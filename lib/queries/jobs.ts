@@ -5,6 +5,12 @@ import { jobs, properties, subscriptions, jobsToCleaners, cleaners, evidencePack
 import { eq, sql, and, gte, lte, asc, desc } from 'drizzle-orm';
 import { EVIDENCE_BUCKET, createSignedUrls } from '@/lib/storage/signed-url';
 import {
+  buildEvidenceRoomGroups,
+  getRoomPhotoRequirements,
+  type ChecklistLogPayload,
+  type EvidenceRoomGroup,
+} from '@/lib/cleaner/evidence';
+import {
   PaginationParams,
   SearchParams,
   buildPaginatedResponse,
@@ -158,6 +164,82 @@ export async function getJobsWithDetails({
 
 export type JobsWithDetails = Awaited<ReturnType<typeof getJobsWithDetails>>;
 
+type EvidencePacketRow = {
+  photoUrls: string[] | null;
+  checklistLog: unknown;
+};
+
+/**
+ * Swap every stored object path on an evidence packet for a signed URL, and
+ * attach the room-grouped view the photo gallery renders from.
+ *
+ * The raw `roomPhotos` paths are stripped from the returned `checklistLog`.
+ * They are useless to a browser (the bucket is private) and they carry the
+ * cleaner's id in the path, so there is nothing to gain by shipping them.
+ */
+async function signEvidencePacket<T extends EvidencePacketRow>(
+  packet: T | null,
+  property: {
+    bedCount: number;
+    bathCount: string | number;
+    hasHotTub: boolean;
+    laundryType?: string | null;
+  } | null
+): Promise<
+  | (Omit<T, 'checklistLog'> & {
+      checklistLog: unknown;
+      roomGroups: EvidenceRoomGroup[];
+    })
+  | null
+> {
+  if (!packet) return null;
+
+  const log = (packet.checklistLog ?? null) as ChecklistLogPayload | null;
+  const roomPhotos = log?.roomPhotos ?? {};
+  const requirements = property ? getRoomPhotoRequirements(property) : [];
+  const groups = buildEvidenceRoomGroups(requirements, roomPhotos);
+
+  // One batch for the flat list plus every room, so a 12-photo packet costs a
+  // single round trip instead of one per room.
+  const flat = packet.photoUrls ?? [];
+  const groupPaths = groups.flatMap((group) => group.photos);
+  const signed = await createSignedUrls(EVIDENCE_BUCKET, [
+    ...flat,
+    ...groupPaths,
+  ]);
+
+  const signedFlat = signed.slice(0, flat.length).map((url) => url ?? '');
+  let cursor = flat.length;
+  const roomGroups: EvidenceRoomGroup[] = groups.map((group) => {
+    const photos = signed
+      .slice(cursor, cursor + group.photos.length)
+      .map((url) => url ?? '');
+    cursor += group.photos.length;
+    // Drop anything that failed to sign — a broken <img> is worse than an
+    // honest "no photo" for that room.
+    return { ...group, photos: photos.filter(Boolean) };
+  });
+
+  // Fallback for a packet that has photos but no room map — anything written
+  // before evidence became room-keyed. Without this the gallery would render
+  // nothing at all for those rows, which is the exact failure being fixed.
+  if (roomGroups.every((g) => g.photos.length === 0) && flat.length > 0) {
+    roomGroups.push({
+      roomKey: '__ungrouped',
+      label: 'Photos',
+      photos: signedFlat.filter(Boolean),
+      minPhotos: 0,
+    });
+  }
+
+  return {
+    ...packet,
+    photoUrls: signedFlat,
+    checklistLog: log ? { ...log, roomPhotos: undefined } : log,
+    roomGroups,
+  };
+}
+
 export async function getJobDetails(jobId: string) {
   const job = await db.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
@@ -211,15 +293,16 @@ export async function getJobDetails(jobId: string) {
 
   // Evidence photos live in a private bucket; the stored values are object
   // paths (older rows hold legacy public URLs). Swap them for short-lived
-  // signed URLs so the admin viewer can render them.
-  const evidencePacket = job.evidencePacket
-    ? {
-        ...job.evidencePacket,
-        photoUrls: (
-          await createSignedUrls(EVIDENCE_BUCKET, job.evidencePacket.photoUrls ?? [])
-        ).map((url) => url ?? ''),
-      }
-    : job.evidencePacket;
+  // signed URLs so the viewer can render them.
+  //
+  // `photoUrls` is the flat list the packet keeps for validation. The viewer
+  // needs them grouped by room, which only `checklistLog.roomPhotos` knows —
+  // so both are signed, and both are signed in ONE round trip rather than one
+  // per room.
+  const evidencePacket = await signEvidencePacket(
+    job.evidencePacket,
+    job.property
+  );
 
   return {
     ...job,

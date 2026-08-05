@@ -136,6 +136,11 @@ export async function POST(
       device = null;
     }
 
+    // Recorded, never enforced — and the asymmetry with check-in is
+    // deliberate, not an oversight. Check-in is gated because the clean has to
+    // physically happen at the property; submission is not, because cleaners
+    // are explicitly allowed to finish their paperwork from home (client
+    // requirement, 2026-08). Do not "fix" this for symmetry with check-in.
     const geofence = await evaluateGeofence(property.id, device);
 
     await db.transaction(async (tx) => {

@@ -10,12 +10,18 @@ export function CleanerCard({
   allCleaners,
   onAction,
   readOnly = false,
+  showInternals = true,
 }: {
   job: JobDetails;
   primaryCleaner?: JobDetails['cleaners'][0]['cleaner'];
   allCleaners: JobDetails['cleaners'];
   onAction: (action: AdminConfirmAction) => void;
   readOnly?: boolean;
+  /**
+   * Reliability score and on-call status are internal staff performance data.
+   * Customers see who cleaned their property and nothing more.
+   */
+  showInternals?: boolean;
 }) {
   const handleCheckIn = () => {
     onAction({
@@ -65,10 +71,14 @@ export function CleanerCard({
           <>
             <div>
               <p className="font-semibold text-gray-800">{primaryCleaner.fullName}</p>
-              <p className="text-sm text-gray-500">
-                Reliability: {primaryCleaner.reliabilityScore ? `${primaryCleaner.reliabilityScore}%` : 'N/A'}
-              </p>
-              <p className="text-sm text-gray-500">Status: {primaryCleaner.onCallStatus}</p>
+              {showInternals && (
+                <>
+                  <p className="text-sm text-gray-500">
+                    Reliability: {primaryCleaner.reliabilityScore ? `${primaryCleaner.reliabilityScore}%` : 'N/A'}
+                  </p>
+                  <p className="text-sm text-gray-500">Status: {primaryCleaner.onCallStatus}</p>
+                </>
+              )}
             </div>
 
             {/* Other cleaners */}

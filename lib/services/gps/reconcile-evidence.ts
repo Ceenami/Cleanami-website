@@ -7,6 +7,7 @@ import {
   evaluateArrival,
   evaluateGeofence,
   type DeviceLocation,
+  type GeofenceResult,
 } from "@/lib/services/gps/geofence";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 
@@ -74,13 +75,25 @@ export async function reconcileEvidenceAccountability(
       evidence.checkOutAccuracyMeters
     );
 
+    // Reconciliation only rewrites the recorded facts (distance, in/out of
+    // fence). It deliberately ignores the blocking `verdict` — that decision
+    // belongs to the live check-in, and re-deciding it here after the fact
+    // could retroactively invalidate a check-in an admin already cleared.
+    const undecided: GeofenceResult = {
+      distanceMiles: null,
+      withinGeofence: null,
+      verdict: "unknown",
+      reason: "property_not_geocoded",
+      accuracyMiles: null,
+    };
+
     const [checkInGeo, checkOutGeo] = await Promise.all([
       job.propertyId
         ? evaluateGeofence(job.propertyId, checkInDevice)
-        : Promise.resolve({ distanceMiles: null, withinGeofence: null }),
+        : Promise.resolve(undecided),
       job.propertyId
         ? evaluateGeofence(job.propertyId, checkOutDevice)
-        : Promise.resolve({ distanceMiles: null, withinGeofence: null }),
+        : Promise.resolve(undecided),
     ]);
 
     const arrival = evidence.gpsCheckInTimestamp

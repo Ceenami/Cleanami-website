@@ -323,7 +323,11 @@ export const RealTimeJobBoard = () => {
                             }
                             className="text-teal-600 hover:text-teal-900"
                           >
-                            Details
+                            {job.evidencePacket?.photoCount
+                              ? `Details · ${job.evidencePacket.photoCount} photo${
+                                  job.evidencePacket.photoCount === 1 ? "" : "s"
+                                }`
+                              : "Details"}
                           </Link>
                         </div>
                       </td>

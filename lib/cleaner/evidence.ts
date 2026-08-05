@@ -99,6 +99,65 @@ export function getMissingPhotoRequirements(
   return missing;
 }
 
+/**
+ * Human label for a room key that has no matching requirement.
+ *
+ * Requirements are derived from the property as it is *now*, but photos were
+ * taken against the property as it was *then*. Remove a bedroom or turn off
+ * the hot tub and the stored evidence still contains `bedroom-3` /`hot-tub`,
+ * with no requirement left to supply a label. Those photos must still be
+ * shown — evidence is a historical record, not a view of current config.
+ */
+function fallbackRoomLabel(roomKey: string): string {
+  const match = roomKey.match(/^(.*?)-(\d+)$/);
+  const base = match ? match[1] : roomKey;
+  const suffix = match ? ` ${match[2]}` : "";
+  const words = base.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1) + suffix;
+}
+
+export type EvidenceRoomGroup = {
+  roomKey: string;
+  label: string;
+  /** Stored object paths, or signed URLs once a caller has swapped them. */
+  photos: string[];
+  /** What the requirement asks for; 0 for a room no longer required. */
+  minPhotos: number;
+};
+
+/**
+ * Group a packet's room photos for display, in requirement order.
+ *
+ * Required rooms come first and in the order the cleaner was asked for them,
+ * including any that ended up with no photos (so a reviewer can see the gap).
+ * Anything left in the packet that no longer maps to a requirement is appended
+ * rather than dropped.
+ */
+export function buildEvidenceRoomGroups(
+  requirements: RoomPhotoRequirement[],
+  roomPhotos: RoomPhotosMap
+): EvidenceRoomGroup[] {
+  const groups: EvidenceRoomGroup[] = requirements.map((req) => ({
+    roomKey: req.roomKey,
+    label: req.label,
+    photos: roomPhotos[req.roomKey] ?? [],
+    minPhotos: req.minPhotos,
+  }));
+
+  const known = new Set(requirements.map((req) => req.roomKey));
+  for (const [roomKey, photos] of Object.entries(roomPhotos)) {
+    if (known.has(roomKey) || photos.length === 0) continue;
+    groups.push({
+      roomKey,
+      label: fallbackRoomLabel(roomKey),
+      photos,
+      minPhotos: 0,
+    });
+  }
+
+  return groups;
+}
+
 export function flattenRoomPhotos(roomPhotos: RoomPhotosMap): string[] {
   return Object.values(roomPhotos).flat();
 }

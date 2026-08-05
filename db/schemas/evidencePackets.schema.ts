@@ -22,6 +22,10 @@ export const evidencePackets = pgTable('evidence_packets', {
   checkInAccuracyMeters: numeric('check_in_accuracy_meters', { precision: 8, scale: 2 }),
   checkInDistanceMiles: numeric('check_in_distance_miles', { precision: 8, scale: 3 }),
   checkInWithinGeofence: boolean('check_in_within_geofence'),
+  // Set only when a cleaner checked in while confidently outside the geofence
+  // and justified it. Both columns move together — see migration 0031.
+  checkInOverrideReason: text('check_in_override_reason'),
+  checkInOverrideAt: timestamp('check_in_override_at', { withTimezone: true }),
   checkOutLatitude: numeric('check_out_latitude', { precision: 10, scale: 8 }),
   checkOutLongitude: numeric('check_out_longitude', { precision: 11, scale: 8 }),
   checkOutAccuracyMeters: numeric('check_out_accuracy_meters', { precision: 8, scale: 2 }),

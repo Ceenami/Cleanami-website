@@ -6,6 +6,19 @@ export function IssuesCard({ evidencePacket }: { evidencePacket: JobDetails['evi
   const hasPendingReview = evidencePacket?.status === 'pending_review';
   const isIncomplete = evidencePacket?.status === 'incomplete';
 
+  // Location accountability. These columns have always been written and never
+  // shown, which made flagging an out-of-range check-in pointless — the alert
+  // fired and then led to a page that did not mention location at all.
+  const overrideReason = evidencePacket?.checkInOverrideReason ?? null;
+  const checkInDistance = evidencePacket?.checkInDistanceMiles ?? null;
+  const outOfRange = evidencePacket?.checkInWithinGeofence === false;
+  // Distinguish "we checked and could not tell" from "never checked": a
+  // recorded check-in with no distance means the fix or the property
+  // coordinates were missing.
+  const locationUnverified =
+    !!evidencePacket?.gpsCheckInTimestamp &&
+    evidencePacket?.checkInWithinGeofence == null;
+
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
       <div className="flex items-center mb-4 border-b pb-3">
@@ -16,6 +29,41 @@ export function IssuesCard({ evidencePacket }: { evidencePacket: JobDetails['evi
       </div>
 
       <div className="space-y-3">
+        {overrideReason && (
+          <div className="p-3 rounded-md bg-orange-50 border border-orange-300">
+            <p className="text-sm font-semibold text-orange-900">
+              Geofence overridden at check-in
+            </p>
+            {checkInDistance != null && (
+              <p className="text-xs text-orange-800 mt-1">
+                Device was {checkInDistance} mi from the property.
+              </p>
+            )}
+            <p className="text-sm text-orange-800 mt-1 italic">
+              &ldquo;{overrideReason}&rdquo;
+            </p>
+          </div>
+        )}
+
+        {!overrideReason && outOfRange && (
+          <div className="p-3 rounded-md bg-yellow-50 border border-yellow-200">
+            <p className="text-sm text-yellow-800">
+              Checked in
+              {checkInDistance != null ? ` ${checkInDistance} mi` : ''} outside
+              the geofence
+            </p>
+          </div>
+        )}
+
+        {!overrideReason && locationUnverified && (
+          <div className="p-3 rounded-md bg-gray-50 border border-gray-200">
+            <p className="text-sm text-gray-700">
+              Check-in location could not be verified (no usable GPS fix, or the
+              property has no coordinates on file)
+            </p>
+          </div>
+        )}
+
         {hasPendingReview && (
           <div className="p-3 rounded-md bg-yellow-50 border border-yellow-200">
             <p className="text-sm text-yellow-800">Evidence pending admin review</p>
@@ -28,9 +76,14 @@ export function IssuesCard({ evidencePacket }: { evidencePacket: JobDetails['evi
           </div>
         )}
 
-        {!hasPendingReview && !isIncomplete && evidencePacket?.status === 'complete' && (
-          <p className="text-sm text-green-600">✓ No issues</p>
-        )}
+        {!hasPendingReview &&
+          !isIncomplete &&
+          !overrideReason &&
+          !outOfRange &&
+          !locationUnverified &&
+          evidencePacket?.status === 'complete' && (
+            <p className="text-sm text-green-600">✓ No issues</p>
+          )}
 
         {!evidencePacket && (
           <p className="text-sm text-gray-500">No evidence packet yet</p>
