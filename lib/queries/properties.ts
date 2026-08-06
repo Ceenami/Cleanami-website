@@ -4,6 +4,7 @@ import { db } from '@/db';
 import { properties, customers, subscriptions, jobs, checklistFiles } from '@/db/schemas';
 import { eq, sql, and } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
+import { geocodeAddress } from '@/lib/services/google-maps/geocoding';
 import {
   PaginationParams,
   SearchParams,
@@ -377,4 +378,101 @@ export async function deleteProperty(
     propertyId,
     address: property.address,
   };
+}
+
+/** Fields accepted when creating a property. `customerId` is set by the caller
+ * from the authenticated session, never from the request body. */
+export type CreatePropertyInput = {
+  customerId: string;
+  address: string;
+  bedCount: number;
+  bathCount: string; // numeric column -> string in Drizzle
+  sqFt?: number | null;
+  hasHotTub?: boolean;
+  laundryType: "in_unit" | "off_site" | "none";
+  laundryLoads?: number | null;
+  hotTubServiceLevel?: boolean;
+  hotTubDrain?: boolean;
+  hotTubDrainCadence?:
+    | "4_weeks"
+    | "6_weeks"
+    | "2_months"
+    | "3_months"
+    | "4_months"
+    | null;
+  iCalUrl?: string | null;
+  defaultCheckInTime?: string;
+  defaultCheckOutTime?: string;
+};
+
+/**
+ * Creates a property under an existing customer.
+ *
+ * Until this existed, a property could only be born inside
+ * `completeOnboarding()` — which creates customer + property + subscription +
+ * first payment as one transaction. So an existing customer could never gain a
+ * second property and staff could not add one at all.
+ *
+ * The address is geocoded here rather than lazily, because the coordinates are
+ * what the check-in geofence decides against: a property with no coordinates
+ * makes every check-in "unknown", which is allowed-and-flagged rather than
+ * enforced. A geocode failure is NOT fatal — a property the customer can see
+ * and correct beats a refused form — but it is reported so the caller can say
+ * so.
+ */
+export async function createProperty(
+  input: CreatePropertyInput
+): Promise<{ propertyId: string; geocoded: boolean }> {
+  const owner = await db.query.customers.findFirst({
+    where: eq(customers.id, input.customerId),
+    columns: { id: true },
+  });
+  if (!owner) {
+    throw new Error("Customer not found");
+  }
+
+  const coordinates = await geocodeAddress(input.address);
+
+  const [created] = await db
+    .insert(properties)
+    .values({
+      customerId: input.customerId,
+      address: input.address.trim(),
+      bedCount: input.bedCount,
+      bathCount: input.bathCount,
+      sqFt: input.sqFt ?? null,
+      hasHotTub: input.hasHotTub ?? false,
+      laundryType: input.laundryType,
+      laundryLoads: input.laundryLoads ?? null,
+      // Hot-tub servicing on a property with no hot tub is not a meaningful
+      // state, and it is what made the pricing engine add hot-tub hours to
+      // properties that have none (migration 0032).
+      hotTubServiceLevel: input.hasHotTub
+        ? input.hotTubServiceLevel ?? false
+        : false,
+      hotTubDrain: input.hasHotTub ? input.hotTubDrain ?? false : false,
+      hotTubDrainCadence: input.hasHotTub
+        ? input.hotTubDrainCadence ?? null
+        : null,
+      // No checklist upload on this form, so fall back to the system default
+      // rather than leaving the property with no checklist at all.
+      useDefaultChecklist: true,
+      iCalUrl: input.iCalUrl ?? null,
+      ...(input.defaultCheckInTime
+        ? { defaultCheckInTime: input.defaultCheckInTime }
+        : {}),
+      ...(input.defaultCheckOutTime
+        ? { defaultCheckOutTime: input.defaultCheckOutTime }
+        : {}),
+      ...(coordinates
+        ? {
+            latitude: coordinates.latitude.toString(),
+            longitude: coordinates.longitude.toString(),
+            geocodedAt: new Date(),
+          }
+        : {}),
+    })
+    .returning({ id: properties.id });
+
+  return { propertyId: created.id, geocoded: coordinates !== null };
 }

@@ -183,20 +183,37 @@ export async function bookOneOffClean(
 
   const customer = await db.query.customers.findFirst({
     where: eq(customers.id, customerId),
-    columns: { stripeCustomerId: true, email: true },
+    columns: { stripeCustomerId: true, email: true, skipPayment: true },
   });
-  const stripe = getStripe();
-  if (!stripe || !customer?.stripeCustomerId) {
-    return { success: false, error: "Payment is not set up for your account." };
-  }
 
-  const paymentMethods = await stripe.paymentMethods.list({
-    customer: customer.stripeCustomerId,
-    type: "card",
-  });
-  const paymentMethodId = paymentMethods.data[0]?.id;
-  if (!paymentMethodId) {
-    return { success: false, error: "No saved card on file. Please contact support." };
+  // `skip_payment` is how a comped or demo account transacts without a card.
+  // `completeOnboarding()` has always honoured it; this path did not, so those
+  // customers could not book a one-off at all — they hit "Payment is not set
+  // up for your account" with no way forward.
+  const skipPayment = customer?.skipPayment === true;
+
+  const stripe = getStripe();
+  let paymentMethodId: string | undefined;
+
+  if (!skipPayment) {
+    if (!stripe || !customer?.stripeCustomerId) {
+      return {
+        success: false,
+        error: "Payment is not set up for your account.",
+      };
+    }
+
+    const paymentMethods = await stripe.paymentMethods.list({
+      customer: customer.stripeCustomerId,
+      type: "card",
+    });
+    paymentMethodId = paymentMethods.data[0]?.id;
+    if (!paymentMethodId) {
+      return {
+        success: false,
+        error: "No saved card on file. Please contact support.",
+      };
+    }
   }
 
   // Customer-entered promo code — resolved authoritatively here, never trusting
@@ -236,14 +253,22 @@ export async function bookOneOffClean(
     };
   }
 
-  let paymentIntentId: string;
+  // Null on the skip-payment path: no money moved, so there is no intent to
+  // record. The job then carries no paymentIntentId, which is exactly what
+  // capture-and-payout treats as prepaid — the cleaner is still paid.
+  let paymentIntentId: string | null = null;
+  if (skipPayment) {
+    chargeAmountCents = 0;
+  } else {
   try {
-    const paymentIntent = await stripe.paymentIntents.create(
+    const paymentIntent = await stripe!.paymentIntents.create(
       {
         amount: chargeAmountCents,
         currency: "usd",
-        customer: customer.stripeCustomerId,
-        payment_method: paymentMethodId,
+        // Both are guaranteed by the `!skipPayment` guard above, which returns
+        // early when either is missing.
+        customer: customer.stripeCustomerId!,
+        payment_method: paymentMethodId!,
         off_session: true,
         confirm: true,
         metadata: {
@@ -282,6 +307,7 @@ export async function bookOneOffClean(
       error: err instanceof Error ? err.message : "Payment failed.",
     };
   }
+  }
 
   const hotTubTimeAdditions = await loadHotTubTimeAdditions();
   const staffing = buildJobStaffingUpdate({
@@ -310,7 +336,9 @@ export async function bookOneOffClean(
       expectedHours: staffing.expectedHours,
       addonsSnapshot: staffing.addonsSnapshot,
       promoCodeId: appliedPromo?.promoCodeId ?? null,
-      notes: `[System] One-off clean prepaid. PaymentIntent ${paymentIntentId}.`,
+      notes: skipPayment
+        ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`
+        : `[System] One-off clean prepaid. PaymentIntent ${paymentIntentId}.`,
     })
     .returning({ id: jobs.id });
 
@@ -324,7 +352,11 @@ export async function bookOneOffClean(
       customerId,
       subscriptionId: null,
       jobId: job.id,
-      paymentIntentId,
+      // `promo_redemptions.payment_intent_id` is the idempotency key, so it
+      // cannot be null. With no charge there is no intent, so the job id
+      // stands in — still unique per booking, so the code is burned exactly
+      // once here too.
+      paymentIntentId: paymentIntentId ?? `skip_payment_${job.id}`,
       originalAmountCents: amountCents,
       discountAmountCents: appliedPromo.discountCents,
       finalAmountCents: chargeAmountCents,
