@@ -4,6 +4,11 @@ import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
 export type RoomPhotoRequirement = {
   roomKey: string;
   label: string;
+  /**
+   * How many photos the cleaner must supply. `0` means the room is offered but
+   * never blocks submission — `getMissingPhotoRequirements` can't report it, so
+   * a `0` requirement is how "optional" is expressed throughout.
+   */
   minPhotos: number;
 };
 
@@ -70,6 +75,24 @@ export function getRoomPhotoRequirements(property: {
       minPhotos: 1,
     });
   }
+
+  // Exterior shots, offered for every property but never required (client
+  // request, 2026-08). They exist for the customer's benefit — the outside is
+  // what a guest sees first — and are optional because the cleaner's scope is
+  // the interior: an unmowed lawn or a dark arrival is not something they can
+  // fix, so a missing exterior photo must never hold up their payout.
+  //
+  // Listed last so the required rooms stay contiguous at the top of the form.
+  requirements.push({
+    roomKey: "front-exterior",
+    label: "Front yard / porch",
+    minPhotos: 0,
+  });
+  requirements.push({
+    roomKey: "back-exterior",
+    label: "Backyard",
+    minPhotos: 0,
+  });
 
   return requirements;
 }

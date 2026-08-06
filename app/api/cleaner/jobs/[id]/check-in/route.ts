@@ -138,6 +138,7 @@ export async function POST(
           verdict: "unknown",
           reason: "property_not_geocoded",
           accuracyMiles: null,
+          radiusMiles: GEOFENCE_RADIUS_MILES,
         };
 
     // Geofence gate (client requirement: check-in must happen at the property).
@@ -172,7 +173,10 @@ export async function POST(
               error: `You appear to be ${geofence.distanceMiles} mi from the property. Check in once you have arrived — or tell us why you're checking in from here.`,
               code: "outside_geofence",
               distanceMiles: geofence.distanceMiles,
-              radiusMiles: GEOFENCE_RADIUS_MILES,
+              // The radius this refusal was actually measured against — the
+              // property's own override when it has one, not the global
+              // default. The app shows it, so it has to be the real one.
+              radiusMiles: geofence.radiusMiles,
               canOverride: true,
             }
           : {
