@@ -43,6 +43,25 @@ export function OneOffCleanBooking({
   );
   const earliest = useMemo(minDate, []);
 
+  /**
+   * Parses a response that is *supposed* to be JSON, and explains it when it
+   * isn't. A bare `res.json()` on an error page throws `Unexpected token '<'`,
+   * which tells the customer nothing and hides the status that would — a
+   * gateway timeout returns an HTML 504, not JSON.
+   */
+  async function readJson(res: Response, fallback: string) {
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(
+        res.status === 502 || res.status === 504
+          ? "The server took too long to respond. Your card has not been charged — please try again in a moment."
+          : `${fallback} (server error ${res.status})`
+      );
+    }
+  }
+
   if (properties.length === 0) {
     return (
       <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-600">
@@ -92,7 +111,7 @@ export function OneOffCleanBooking({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ propertyId, code }),
       });
-      const data = await res.json();
+      const data = await readJson(res, "Could not check that promo code.");
       if (!res.ok || !data.valid) {
         setPromo(null);
         throw new Error(data.message ?? "That promo code is not valid.");
@@ -133,7 +152,7 @@ export function OneOffCleanBooking({
           ...(promo ? { promoCode: promo.code } : {}),
         }),
       });
-      const data = await res.json();
+      const data = await readJson(res, "Could not book the clean.");
       if (!res.ok) throw new Error(data.error ?? "Could not book the clean.");
       setConfirmed({ amountCents: data.amountCents, promoCode: data.promoCode });
       clearPromo();
