@@ -4,10 +4,13 @@ import { useState } from 'react';
 
 export function EvidenceReviewModal({
   photoUrls,
+  photoLabels,
   currentIndex,
   onClose,
 }: {
   photoUrls: string[];
+  /** Room name per photo, index-aligned with `photoUrls`. Optional. */
+  photoLabels?: string[];
   currentIndex: number;
   onClose: () => void;
 }) {
@@ -36,7 +39,9 @@ export function EvidenceReviewModal({
           <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-medium text-gray-900">
-                Evidence Photo {activeIndex + 1} of {photoUrls.length}
+                {photoLabels?.[activeIndex]
+                  ? `${photoLabels[activeIndex]} — photo ${activeIndex + 1} of ${photoUrls.length}`
+                  : `Evidence Photo ${activeIndex + 1} of ${photoUrls.length}`}
               </h3>
               <button
                 onClick={onClose}

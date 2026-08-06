@@ -7,6 +7,10 @@ import { createClient } from '@/lib/supabase/client';
 import type { JobDetails } from '@/lib/queries/jobs';
 import { JobSummaryHeader } from './JobSummaryHeader';
 import { EvidenceReviewSection } from './EvidenceReviewSection';
+import {
+  EvidencePhotoGallery,
+  flattenGalleryPhotos,
+} from './EvidencePhotoGallery';
 import { JobHistorySection } from './JobHistorySeciont';
 import { PropertyDetailsCard } from './PropertyDetailsCard';
 import { CleanerCard } from './CleanerCard';
@@ -15,16 +19,25 @@ import { AdminActionsCard, type AdminConfirmAction } from './AdminActionsCard';
 import { EvidenceReviewModal } from './modals/EvidenceReviewModal';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { useRealtimeCleanerCard } from '@/hooks/useRealtimeCleanerCard';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
 
 
-export function JobDetailsClient({ jobId }: { jobId: string }) {
+export function JobDetailsClient({
+  jobId,
+  isAdmin,
+}: {
+  jobId: string;
+  /**
+   * Resolved on the server from `users.role`, and passed in.
+   *
+   * This used to be read from `user.user_metadata.role` on the client, which
+   * `lib/auth/server-roles.ts` is explicit about: user_metadata is editable by
+   * the user it belongs to and is never authoritative. A customer could set it
+   * and unlock the admin actions card.
+   */
+  isAdmin: boolean;
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { data: user } = useCurrentUser();
-  const isAdmin =
-    user?.user_metadata?.role === "admin" ||
-    user?.user_metadata?.role === "super_admin";
   useRealtimeCleanerCard(jobId)
   const { data: job, isLoading } = useQuery<JobDetails>({
     queryKey: ['job-details', jobId],
@@ -36,7 +49,7 @@ export function JobDetailsClient({ jobId }: { jobId: string }) {
   });
 
   // Modal states
-  const [reviewPhotoIndex, setReviewPhotoIndex] = useState<number | null>(null);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const [confirmAction, setConfirmAction] = useState<AdminConfirmAction | null>(null);
 
   // Real-time subscription (admin only — uses direct Supabase client)
@@ -86,6 +99,7 @@ export function JobDetailsClient({ jobId }: { jobId: string }) {
   }
 
   const primaryCleaner = job.cleaners.find(c => c.role === 'primary')?.cleaner;
+  const galleryPhotos = flattenGalleryPhotos(job.evidencePacket?.roomGroups);
 
   return (
     <>
@@ -106,11 +120,18 @@ export function JobDetailsClient({ jobId }: { jobId: string }) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           <div className="lg:col-span-2 space-y-6">
-            <EvidenceReviewSection
-              evidencePacket={job.evidencePacket}
-              onReviewPhoto={(index) => setReviewPhotoIndex(index)}
+            <EvidencePhotoGallery
+              roomGroups={job.evidencePacket?.roomGroups}
+              onOpenPhoto={setGalleryIndex}
+              emptyMessage={
+                isAdmin
+                  ? 'No photos have been submitted for this job yet.'
+                  : "Photos will appear here once your cleaner has finished and submitted them."
+              }
             />
-            <JobHistorySection jobId={jobId} />
+            <EvidenceReviewSection evidencePacket={job.evidencePacket} />
+            {/* Internal workflow trail — not customer-facing. */}
+            {isAdmin && <JobHistorySection jobId={jobId} />}
           </div>
 
           {/* Sidebar */}
@@ -121,9 +142,12 @@ export function JobDetailsClient({ jobId }: { jobId: string }) {
               allCleaners={job.cleaners}
               onAction={(action) => setConfirmAction(action)}
               readOnly={!isAdmin}
+              showInternals={isAdmin}
             />
             <PropertyDetailsCard property={job.property} />
-            <IssuesCard evidencePacket={job.evidencePacket} />
+            {/* Evidence-workflow states ("pending admin review", "packet
+                incomplete") are internal process language. */}
+            {isAdmin && <IssuesCard evidencePacket={job.evidencePacket} />}
             {isAdmin && (
               <AdminActionsCard
                 job={job}
@@ -135,11 +159,12 @@ export function JobDetailsClient({ jobId }: { jobId: string }) {
       </div>
 
       {/* Modals */}
-      {reviewPhotoIndex !== null && job.evidencePacket?.photoUrls && (
+      {galleryIndex !== null && galleryPhotos.length > 0 && (
         <EvidenceReviewModal
-          photoUrls={job.evidencePacket.photoUrls}
-          currentIndex={reviewPhotoIndex}
-          onClose={() => setReviewPhotoIndex(null)}
+          photoUrls={galleryPhotos.map((p) => p.url)}
+          photoLabels={galleryPhotos.map((p) => p.label)}
+          currentIndex={galleryIndex}
+          onClose={() => setGalleryIndex(null)}
         />
       )}
 
