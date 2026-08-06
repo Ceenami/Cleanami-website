@@ -1,7 +1,12 @@
 import "server-only";
 
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { gpsTrackingLogs } from "@/db/schemas";
+import { gpsTrackingLogs, properties } from "@/db/schemas";
+import {
+  MAX_GEOFENCE_RADIUS_METERS,
+  MIN_GEOFENCE_RADIUS_METERS,
+} from "@/lib/constants/geofence";
 import {
   calculateDistance,
   getPropertyCoordinates,
@@ -9,11 +14,12 @@ import {
 } from "@/lib/services/google-maps/geocoding";
 
 /**
- * Geofence radius around the property (miles). Browser GPS is imprecise, so
- * this is intentionally generous.
+ * Default geofence radius around a property (miles), used when the property has
+ * no explicit `geofenceRadiusMeters`. Browser GPS is imprecise, so this is
+ * intentionally generous.
  *
- * Two separate things are derived from this radius, and they must not be
- * confused:
+ * Two separate things are derived from the effective radius, and they must not
+ * be confused:
  *   - `withinGeofence` — the plain `distance <= radius` fact, recorded on the
  *     evidence packet and used to flag a check-in for admin review. Unchanged
  *     semantics; historical rows stay comparable.
@@ -23,10 +29,63 @@ import {
  */
 export const GEOFENCE_RADIUS_MILES = 0.3;
 
+const METERS_PER_MILE = 1609.344;
+
+/** The default expressed in metres, for admin UI copy and API responses. */
+export const DEFAULT_GEOFENCE_RADIUS_METERS = Math.round(
+  GEOFENCE_RADIUS_MILES * METERS_PER_MILE
+);
+
+/**
+ * Turn a stored `geofence_radius_meters` into the radius in miles actually used
+ * for a decision.
+ *
+ * Clamped rather than rejected. The CHECK constraint already keeps new writes in
+ * range, so an out-of-range value here means legacy or hand-edited data — and
+ * for a safety control, silently widening the fence to whatever a bad row says
+ * is the one outcome to avoid. Non-finite and non-positive values fall back to
+ * the default for the same reason.
+ */
+export function resolveGeofenceRadiusMiles(
+  geofenceRadiusMeters: number | null | undefined
+): number {
+  if (
+    geofenceRadiusMeters == null ||
+    !Number.isFinite(geofenceRadiusMeters) ||
+    geofenceRadiusMeters <= 0
+  ) {
+    return GEOFENCE_RADIUS_MILES;
+  }
+  const clamped = Math.min(
+    MAX_GEOFENCE_RADIUS_METERS,
+    Math.max(MIN_GEOFENCE_RADIUS_METERS, geofenceRadiusMeters)
+  );
+  return clamped / METERS_PER_MILE;
+}
+
+/**
+ * The effective radius in miles for one property.
+ *
+ * A missing property yields the default rather than throwing: the caller is
+ * about to evaluate a geofence and "property row vanished" must not be a way to
+ * get a wider fence than normal.
+ */
+export async function getPropertyGeofenceRadiusMiles(
+  propertyId: string
+): Promise<number> {
+  try {
+    const row = await db.query.properties.findFirst({
+      where: eq(properties.id, propertyId),
+      columns: { geofenceRadiusMeters: true },
+    });
+    return resolveGeofenceRadiusMiles(row?.geofenceRadiusMeters);
+  } catch {
+    return GEOFENCE_RADIUS_MILES;
+  }
+}
+
 /** Arrivals within this many minutes of the scheduled window count as on-time. */
 export const ON_TIME_GRACE_MINUTES = 10;
-
-const METERS_PER_MILE = 1609.344;
 
 export type DeviceLocation = {
   latitude: number;
@@ -60,6 +119,13 @@ export type GeofenceResult = {
   reason: GeofenceReason;
   /** Device-reported accuracy in miles, when the device supplied one. */
   accuracyMiles: number | null;
+  /**
+   * The radius this decision was actually made against, in miles — the
+   * property's override or the system default. Returned so the caller can tell
+   * the cleaner what fence they missed, and so the audit trail records the rule
+   * as it stood at the time rather than as it stands today.
+   */
+  radiusMiles: number;
 };
 
 /**
@@ -73,18 +139,23 @@ export type GeofenceResult = {
  */
 function classify(
   distanceMiles: number,
-  accuracyMiles: number
+  accuracyMiles: number,
+  radiusMiles: number
 ): { verdict: GeofenceVerdict; reason: GeofenceReason } {
   // Confidently outside: even the nearest point the device could actually be
   // at is beyond the fence.
-  if (distanceMiles - accuracyMiles > GEOFENCE_RADIUS_MILES) {
+  if (distanceMiles - accuracyMiles > radiusMiles) {
     return { verdict: "outside", reason: "beyond_radius" };
   }
 
   // The error circle is wider than the fence itself, so "inside" cannot be
   // asserted either. Typical of an indoor Wi-Fi fix, and of iOS 14+ with
   // Precise Location off (which returns a fix fuzzed by kilometres).
-  if (accuracyMiles >= GEOFENCE_RADIUS_MILES) {
+  //
+  // Note this gets *rarer* as the radius widens: a property on the 1000 m
+  // ceiling only reaches `unknown` on a fix worse than ±1 km, so raising a
+  // radius tightens this free pass rather than loosening it.
+  if (accuracyMiles >= radiusMiles) {
     return { verdict: "unknown", reason: "low_accuracy" };
   }
 
@@ -99,10 +170,15 @@ function classify(
  * `distanceMiles`/`withinGeofence` stay null when either side is unavailable —
  * "we could not decide" is distinct from "out of range", and the DB columns
  * are nullable for exactly that reason.
+ *
+ * `radiusMilesOverride` lets a caller that already resolved the property's
+ * radius reuse it instead of re-querying. Reconciliation evaluates check-in and
+ * check-out for the same property back to back and is the reason it exists.
  */
 export async function evaluateGeofence(
   propertyId: string,
-  device: DeviceLocation | null
+  device: DeviceLocation | null,
+  radiusMilesOverride?: number
 ): Promise<GeofenceResult> {
   if (!device) {
     return {
@@ -111,8 +187,14 @@ export async function evaluateGeofence(
       verdict: "unknown",
       reason: "no_device_location",
       accuracyMiles: null,
+      radiusMiles: radiusMilesOverride ?? GEOFENCE_RADIUS_MILES,
     };
   }
+
+  // Sequential, never Promise.all: the transaction pooler drops all but the
+  // first query of a pipelined batch and the remaining promises never settle.
+  const radiusMiles =
+    radiusMilesOverride ?? (await getPropertyGeofenceRadiusMiles(propertyId));
 
   // A device that reports no accuracy is treated as an exact fix (0 miles of
   // error). That is the strict reading, and it is the safe one here: assuming
@@ -136,6 +218,7 @@ export async function evaluateGeofence(
       verdict: "unknown",
       reason: "property_not_geocoded",
       accuracyMiles,
+      radiusMiles,
     };
   }
 
@@ -144,14 +227,15 @@ export async function evaluateGeofence(
     longitude: device.longitude,
   });
   const rounded = Math.round(distance * 1000) / 1000;
-  const { verdict, reason } = classify(rounded, accuracyMiles);
+  const { verdict, reason } = classify(rounded, accuracyMiles, radiusMiles);
 
   return {
     distanceMiles: rounded,
-    withinGeofence: rounded <= GEOFENCE_RADIUS_MILES,
+    withinGeofence: rounded <= radiusMiles,
     verdict,
     reason,
     accuracyMiles,
+    radiusMiles,
   };
 }
 

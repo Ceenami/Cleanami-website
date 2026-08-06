@@ -282,6 +282,8 @@ export type UpdatePropertyInput = {
   defaultCheckInTime?: string;
   defaultCheckOutTime?: string;
   priceOverrideCents?: number | null;
+  /** Check-in fence in metres (50-1000); null restores the system default. */
+  geofenceRadiusMeters?: number | null;
 };
 
 export async function updateProperty(
@@ -312,6 +314,7 @@ export async function updateProperty(
     "defaultCheckInTime",
     "defaultCheckOutTime",
     "priceOverrideCents",
+    "geofenceRadiusMeters",
   ];
   for (const key of editableKeys) {
     if (input[key] !== undefined) patch[key] = input[key];

@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import {
   evaluateArrival,
   evaluateGeofence,
+  getPropertyGeofenceRadiusMiles,
+  GEOFENCE_RADIUS_MILES,
   type DeviceLocation,
   type GeofenceResult,
 } from "@/lib/services/gps/geofence";
@@ -85,16 +87,23 @@ export async function reconcileEvidenceAccountability(
       verdict: "unknown",
       reason: "property_not_geocoded",
       accuracyMiles: null,
+      radiusMiles: GEOFENCE_RADIUS_MILES,
     };
 
-    const [checkInGeo, checkOutGeo] = await Promise.all([
-      job.propertyId
-        ? evaluateGeofence(job.propertyId, checkInDevice)
-        : Promise.resolve(undecided),
-      job.propertyId
-        ? evaluateGeofence(job.propertyId, checkOutDevice)
-        : Promise.resolve(undecided),
-    ]);
+    // Sequential, and the property's radius is resolved once and passed into
+    // both calls. Running these two concurrently would pipeline their queries
+    // into the transaction pooler, which keeps only the first and leaves the
+    // rest of the promises to hang forever.
+    const radiusMiles = job.propertyId
+      ? await getPropertyGeofenceRadiusMiles(job.propertyId)
+      : GEOFENCE_RADIUS_MILES;
+
+    const checkInGeo = job.propertyId
+      ? await evaluateGeofence(job.propertyId, checkInDevice, radiusMiles)
+      : undecided;
+    const checkOutGeo = job.propertyId
+      ? await evaluateGeofence(job.propertyId, checkOutDevice, radiusMiles)
+      : undecided;
 
     const arrival = evidence.gpsCheckInTimestamp
       ? evaluateArrival(job.checkInTime, evidence.gpsCheckInTimestamp)

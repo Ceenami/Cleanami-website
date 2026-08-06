@@ -38,6 +38,14 @@ export const properties = pgTable(
     latitude: numeric("latitude", { precision: 10, scale: 8 }),
     longitude: numeric("longitude", { precision: 11, scale: 8 }),
     geocodedAt: timestamp("geocoded_at"),
+    /**
+     * Check-in geofence radius in metres (50-1000), or null to use the system
+     * default. Raised for properties with a large lot, where the door can sit
+     * legitimately far from the geocoded street pin. See
+     * lib/services/gps/geofence.ts — the DB holds metres, the GPS code works
+     * in miles, and the conversion happens in exactly one place.
+     */
+    geofenceRadiusMeters: integer("geofence_radius_meters"),
     iCalUrl: text('ical_url'),
     /** Admin per-property price override in cents; null = use calculated price. */
     priceOverrideCents: integer('price_override_cents'),

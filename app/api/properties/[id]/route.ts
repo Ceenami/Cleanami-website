@@ -3,6 +3,10 @@ import { z } from "zod";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { deleteProperty, updateProperty } from "@/lib/queries/properties";
 import { deletePropertyParamsSchema } from "@/lib/validations/customer-record";
+import {
+  MAX_GEOFENCE_RADIUS_METERS,
+  MIN_GEOFENCE_RADIUS_METERS,
+} from "@/lib/constants/geofence";
 
 // Accept HH:MM or HH:MM:SS (some browsers' <input type="time"> omit seconds);
 // normalized to HH:MM:SS before storage so the column format stays consistent.
@@ -34,6 +38,19 @@ const updatePropertySchema = z
     defaultCheckOutTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
     // Admin price override in cents; 0 or null clears it (task 1.9).
     priceOverrideCents: z.number().int().min(0).nullable().optional(),
+    /**
+     * Per-property check-in fence in metres; null restores the system default.
+     * Bounded here as well as by the DB CHECK because this is a payout control —
+     * an unbounded radius silently removes the proof that the cleaner was ever
+     * at the property.
+     */
+    geofenceRadiusMeters: z
+      .number()
+      .int()
+      .min(MIN_GEOFENCE_RADIUS_METERS)
+      .max(MAX_GEOFENCE_RADIUS_METERS)
+      .nullable()
+      .optional(),
   })
   .strict();
 

@@ -259,6 +259,11 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         {roomRequirements.map((req) => {
           const photos = roomPhotos[req.roomKey] ?? [];
           const previews = roomPhotoPreviews[req.roomKey] ?? [];
+          // `minPhotos: 0` marks a room that is offered but never required.
+          // It trivially satisfies `photos.length >= req.minPhotos`, so without
+          // this it would render green and ticked while empty — reading as
+          // "done" for something never asked for.
+          const isOptional = req.minPhotos === 0;
           const met = photos.length >= req.minPhotos;
           const isUploading = uploadingRoom === req.roomKey;
 
@@ -267,7 +272,11 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
               key={req.roomKey}
               className={cn(
                 "rounded-xl border p-4",
-                met ? "border-green-200 bg-green-50/50" : "border-gray-200 bg-white"
+                isOptional
+                  ? "border-gray-200 bg-white"
+                  : met
+                  ? "border-green-200 bg-green-50/50"
+                  : "border-gray-200 bg-white"
               )}
             >
               <div className="mb-3 flex items-center justify-between">
@@ -276,10 +285,16 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
                     {req.label}
                   </h3>
                   <p className="text-xs text-gray-500">
-                    {photos.length}/{req.minPhotos} photos minimum
+                    {isOptional
+                      ? photos.length > 0
+                        ? `${photos.length} photo${
+                            photos.length === 1 ? "" : "s"
+                          } — optional`
+                        : "Optional"
+                      : `${photos.length}/${req.minPhotos} photos minimum`}
                   </p>
                 </div>
-                {met ? (
+                {isOptional ? null : met ? (
                   <CheckCircle2 className="h-5 w-5 text-green-600" />
                 ) : (
                   <XCircle className="h-5 w-5 text-red-500" />

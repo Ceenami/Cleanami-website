@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { Card } from "./Card";
 import { PencilIcon } from "lucide-react";
 import type { PropertyDetails } from "@/lib/queries/properties";
+import {
+  MAX_GEOFENCE_RADIUS_METERS,
+  MIN_GEOFENCE_RADIUS_METERS,
+} from "@/lib/constants/geofence";
 
 type LaundryType = "in_unit" | "off_site" | "none";
 type DrainCadence =
@@ -44,6 +48,10 @@ export const PropertyEditForm = ({ property }: Props) => {
       property.priceOverrideCents != null
         ? (property.priceOverrideCents / 100).toString()
         : "",
+    geofenceRadiusMeters:
+      property.geofenceRadiusMeters != null
+        ? property.geofenceRadiusMeters.toString()
+        : "",
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -71,6 +79,10 @@ export const PropertyEditForm = ({ property }: Props) => {
         form.priceOverrideDollars.trim() === ""
           ? null
           : Math.round(Number(form.priceOverrideDollars) * 100),
+      geofenceRadiusMeters:
+        form.geofenceRadiusMeters.trim() === ""
+          ? null
+          : Math.round(Number(form.geofenceRadiusMeters)),
     };
 
     try {
@@ -284,6 +296,30 @@ export const PropertyEditForm = ({ property }: Props) => {
           <p className="mt-1 text-xs text-gray-500">
             Overrides the calculated per-clean price for this property on every
             charge (recurring and one-off). Blank = use standard pricing.
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass}>Check-in radius (metres)</label>
+          <input
+            type="number"
+            min={MIN_GEOFENCE_RADIUS_METERS}
+            max={MAX_GEOFENCE_RADIUS_METERS}
+            step={10}
+            placeholder="Leave blank for the standard 483 m"
+            className={inputClass}
+            value={form.geofenceRadiusMeters}
+            onChange={(e) =>
+              setForm({ ...form, geofenceRadiusMeters: e.target.value })
+            }
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            How far from the property a cleaner may be and still check in.
+            Distance is measured from the geocoded street address, so raise this
+            for a property whose lot is large enough that the door is a long way
+            from the road. Blank = the standard 483 m. Max{" "}
+            {MAX_GEOFENCE_RADIUS_METERS} m — widening it also widens the range a
+            cleaner can check in from without ever reaching the property.
           </p>
         </div>
 
