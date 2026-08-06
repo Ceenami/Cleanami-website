@@ -8,7 +8,8 @@ import { PropertiesTable } from '@/components/dashbboard/admin/properties/Proper
 import { PropertiesWithOwner } from '@/lib/queries/properties';
 import { createClient } from '@/lib/supabase/client';
 import { ConfirmationModal } from '@/components/dashbboard/admin/ui/ConfirmationModal';
-import { TriangleAlertIcon } from 'lucide-react';
+import { PlusIcon, TriangleAlertIcon } from 'lucide-react';
+import { AddPropertyModal } from '@/components/dashbboard/admin/properties/AddPropertyModal';
 import { SearchBar } from '@/components/dashbboard/admin/ui/SearchBar';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 
@@ -43,6 +44,7 @@ export const PropertiesPageClient = () => {
     user?.user_metadata?.role === 'admin' ||
     user?.user_metadata?.role === 'super_admin';
   const [propertyToDelete, setPropertyToDelete] = useState<PropertiesWithOwner['data'][number] | null>(null);
+  const [addingProperty, setAddingProperty] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm] = useDebounce(searchTerm, 500);
 
@@ -101,12 +103,25 @@ export const PropertiesPageClient = () => {
      <div className="space-y-6">
         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
           <SearchBar onSearch={setSearchTerm} placeholder="Search by address, owner, email, or phone..." />
-          {/* <button className="w-full md:w-auto flex items-center justify-center bg-teal-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-teal-600">
+          <button
+            type="button"
+            onClick={() => setAddingProperty(true)}
+            className="w-full md:w-auto flex items-center justify-center bg-teal-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-teal-600"
+          >
             <PlusIcon className="mr-2 h-5 w-5" />
             Add Property
-          </button> */}
+          </button>
         </div>
-        
+
+        {/* On the admin list the owner is not implied by context, so the modal
+            asks for one. In the customer portal it is omitted entirely and the
+            server uses the session's own customer id. */}
+        <AddPropertyModal
+          open={addingProperty}
+          onClose={() => setAddingProperty(false)}
+          pickCustomer={!isOwnerPortal}
+        />
+
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
             <PropertiesTable
               properties={allProperties}

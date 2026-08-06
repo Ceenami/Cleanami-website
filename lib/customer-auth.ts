@@ -4,6 +4,7 @@ import { getDbOrNull } from "@/db";
 import { customers, jobs, properties } from "@/db/schemas";
 import { createClient } from "@/lib/supabase/server";
 import {
+  getSessionIdentity,
   getSessionRole,
   resolveRoleFromDatabase,
 } from "@/lib/auth/server-roles";
@@ -17,10 +18,10 @@ export type CustomerAuthResult = {
 };
 
 async function resolveCustomerEmail(
-  claims: Record<string, unknown>
+  claimsEmail: string | undefined
 ): Promise<string | null> {
-  if (typeof claims.email === "string" && claims.email.length > 0) {
-    return claims.email;
+  if (claimsEmail && claimsEmail.length > 0) {
+    return claimsEmail;
   }
 
   const supabase = await createClient();
@@ -68,17 +69,18 @@ async function lookupCustomerByEmail(email: string) {
  * linked customers row (same email, portal_access_enabled) may use customer APIs.
  */
 export async function getCustomerAuth(): Promise<CustomerAuthResult> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const claims = data?.claims;
+  // Identity via `getSessionIdentity()`, which reads the cookie session OR an
+  // `Authorization: Bearer` token. This used to read cookies only, while
+  // `getSessionRole()` has always been bearer-aware — so the two could
+  // disagree inside a single request, and a bearer-authenticated caller would
+  // pass the role gate only to be refused here as unauthenticated.
+  const { supabaseUserId, email: claimsEmail } = await getSessionIdentity();
 
-  if (!claims?.sub) {
+  if (!supabaseUserId) {
     return { customerId: null, error: "Unauthorized" };
   }
 
-  const claimsEmail =
-    typeof claims.email === "string" ? claims.email : undefined;
-  const userRole = await resolveRoleFromDatabase(claims.sub, claimsEmail);
+  const userRole = await resolveRoleFromDatabase(supabaseUserId, claimsEmail);
   if (userRole === "cleaner") {
     return { customerId: null, error: "Forbidden" };
   }
@@ -90,7 +92,7 @@ export async function getCustomerAuth(): Promise<CustomerAuthResult> {
     return { customerId: null, error: "Forbidden" };
   }
 
-  const email = await resolveCustomerEmail(claims);
+  const email = await resolveCustomerEmail(claimsEmail);
   if (!email) {
     return {
       customerId: null,
@@ -107,17 +109,18 @@ export async function getCustomerAuth(): Promise<CustomerAuthResult> {
  * with a linked customers row (same email, portal_access_enabled) may enter.
  */
 export async function getCustomerPortalLayoutAuth(): Promise<CustomerAuthResult> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const claims = data?.claims;
+  // Identity via `getSessionIdentity()`, which reads the cookie session OR an
+  // `Authorization: Bearer` token. This used to read cookies only, while
+  // `getSessionRole()` has always been bearer-aware — so the two could
+  // disagree inside a single request, and a bearer-authenticated caller would
+  // pass the role gate only to be refused here as unauthenticated.
+  const { supabaseUserId, email: claimsEmail } = await getSessionIdentity();
 
-  if (!claims?.sub) {
+  if (!supabaseUserId) {
     return { customerId: null, error: "Unauthorized" };
   }
 
-  const claimsEmail =
-    typeof claims.email === "string" ? claims.email : undefined;
-  const userRole = await resolveRoleFromDatabase(claims.sub, claimsEmail);
+  const userRole = await resolveRoleFromDatabase(supabaseUserId, claimsEmail);
   if (userRole === "cleaner") {
     return { customerId: null, error: "Forbidden" };
   }
@@ -129,7 +132,7 @@ export async function getCustomerPortalLayoutAuth(): Promise<CustomerAuthResult>
     return { customerId: null, error: "Forbidden" };
   }
 
-  const email = await resolveCustomerEmail(claims);
+  const email = await resolveCustomerEmail(claimsEmail);
   if (!email) {
     return {
       customerId: null,
@@ -190,14 +193,12 @@ export async function resolvePortalCustomerScope(
   }
 
   if (isAdmin && ownerScope) {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getClaims();
-    const claims = data?.claims;
-    if (!claims?.sub) {
+    const { supabaseUserId, email: claimsEmail } = await getSessionIdentity();
+    if (!supabaseUserId) {
       return { isAdmin, isCustomer, error: "Unauthorized" };
     }
 
-    const email = await resolveCustomerEmail(claims);
+    const email = await resolveCustomerEmail(claimsEmail);
     if (!email) {
       return { isAdmin, isCustomer, error: "Unauthorized" };
     }
