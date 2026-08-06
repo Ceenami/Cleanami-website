@@ -19,29 +19,30 @@ export default async function BookOneOffPage() {
   });
 
   const pricing = new PricingService();
-  const items = await Promise.all(
-    props.map(async (p) => {
-      const pd = await pricing.calculatePrice({
-        bedrooms: p.bedCount,
-        bathrooms: Number(p.bathCount),
-        sqft: p.sqFt ?? 0,
-        laundryService: p.laundryType,
-        laundryLoads: p.laundryLoads,
-        hasHotTub: p.hasHotTub,
-        hotTubService: p.hotTubServiceLevel,
-        hotTubDrain: p.hotTubDrain,
-        hotTubDrainCadence: p.hotTubDrainCadence,
-        subscriptionMonths: 1,
-        priceOverrideCents: p.priceOverrideCents,
-      } as any);
-      return {
-        id: p.id,
-        address: p.address,
-        price:
-          pd.pricingUnavailable || pd.isCustomQuote ? null : pd.totalPerClean,
-      };
-    })
-  );
+  // Priced one property at a time. The first call populates the shared rules
+  // cache, so the rest are pure computation — and concurrent DB reads here
+  // would risk the pooler-pipelining hang described in db/index.ts.
+  const items = [];
+  for (const p of props) {
+    const pd = await pricing.calculatePrice({
+      bedrooms: p.bedCount,
+      bathrooms: Number(p.bathCount),
+      sqft: p.sqFt ?? 0,
+      laundryService: p.laundryType,
+      laundryLoads: p.laundryLoads,
+      hasHotTub: p.hasHotTub,
+      hotTubService: p.hotTubServiceLevel,
+      hotTubDrain: p.hotTubDrain,
+      hotTubDrainCadence: p.hotTubDrainCadence,
+      subscriptionMonths: 1,
+      priceOverrideCents: p.priceOverrideCents,
+    } as any);
+    items.push({
+      id: p.id,
+      address: p.address,
+      price: pd.pricingUnavailable || pd.isCustomQuote ? null : pd.totalPerClean,
+    });
+  }
 
   return (
     <div className="mx-auto max-w-2xl p-4 sm:p-6 lg:p-8">

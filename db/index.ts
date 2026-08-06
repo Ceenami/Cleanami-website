@@ -50,5 +50,37 @@ export const db = new Proxy({} as DrizzleDb, {
   },
 });
 
+/**
+ * Runs database reads one at a time and returns their results in order.
+ *
+ * Use this instead of `Promise.all([...queries])`. `DATABASE_URL` points at
+ * Supabase's *transaction-mode* pooler (port 6543), and postgres.js pipelines
+ * concurrent queries down a single connection whenever the pool hands the same
+ * connection to more than one in-flight query. That pooler answers only the
+ * first pipelined query and silently drops the rest: the remaining promises
+ * never resolve *and never reject*, so the caller hangs forever rather than
+ * failing. On a server-rendered page that is a request that never responds —
+ * which is exactly how `/customer/book` presented, as a page stuck loading.
+ *
+ * It is a race, not a constant. Whether two queries collide depends on how many
+ * pool connections happen to be open at that moment, which is why it reproduced
+ * in production (`max: 3`) but never in development (`max: 5`). Raising `max`
+ * only lowers the odds; not pipelining is the fix.
+ *
+ * Sequential reads cost one round trip each (~200ms), which is the right price
+ * for a request that completes at all.
+ */
+export async function sequentialQueries<
+  T extends readonly (() => Promise<unknown>)[],
+>(
+  ...queries: T
+): Promise<{ -readonly [K in keyof T]: Awaited<ReturnType<T[K]>> }> {
+  const results: unknown[] = [];
+  for (const query of queries) {
+    results.push(await query());
+  }
+  return results as { -readonly [K in keyof T]: Awaited<ReturnType<T[K]>> };
+}
+
 export type Database = DrizzleDb;
 export { schema };

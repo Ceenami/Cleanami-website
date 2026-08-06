@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/db";
+import { db, sequentialQueries } from "@/db";
 import {
   cleaners,
   jobs,
@@ -24,16 +24,19 @@ async function notifyAssignedPrimary(
   checkInTime: Date | null
 ): Promise<void> {
   try {
-    const [cleaner, property] = await Promise.all([
-      db.query.cleaners.findFirst({
-        where: eq(cleaners.id, cleanerId),
-        columns: { fullName: true, email: true },
-      }),
-      db.query.properties.findFirst({
-        where: eq(properties.id, propertyId),
-        columns: { address: true },
-      }),
-    ]);
+    // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+    const [cleaner, property] = await sequentialQueries(
+      () =>
+        db.query.cleaners.findFirst({
+          where: eq(cleaners.id, cleanerId),
+          columns: { fullName: true, email: true },
+        }),
+      () =>
+        db.query.properties.findFirst({
+          where: eq(properties.id, propertyId),
+          columns: { address: true },
+        })
+    );
     const address = property?.address ?? "your assigned property";
     const jobDate = checkInTime ? checkInTime.toLocaleString() : "soon";
 

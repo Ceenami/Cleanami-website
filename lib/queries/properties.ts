@@ -1,6 +1,6 @@
 
 import 'server-only';
-import { db } from '@/db';
+import { db, sequentialQueries } from '@/db';
 import { properties, customers, subscriptions, jobs, checklistFiles } from '@/db/schemas';
 import { eq, sql, and } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
@@ -208,10 +208,11 @@ export async function mergeProperties(
     throw new Error("Source and target property must be different");
   }
 
-  const [source, target] = await Promise.all([
-    db.query.properties.findFirst({ where: eq(properties.id, sourcePropertyId) }),
-    db.query.properties.findFirst({ where: eq(properties.id, targetPropertyId) }),
-  ]);
+  // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+  const [source, target] = await sequentialQueries(
+    () => db.query.properties.findFirst({ where: eq(properties.id, sourcePropertyId) }),
+    () => db.query.properties.findFirst({ where: eq(properties.id, targetPropertyId) })
+  );
 
   if (!source || !target) {
     throw new Error("Property not found");
