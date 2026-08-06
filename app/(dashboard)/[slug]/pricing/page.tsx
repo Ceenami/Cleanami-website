@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db, sequentialQueries } from "@/db";
 import { asc, desc } from "drizzle-orm";
 import {
   basePricingRules,
@@ -18,13 +18,16 @@ export default async function AdminPricingPage() {
     laundryRules,
     hotTubRules,
     uploadHistory,
-  ] = await Promise.all([
-    db.query.basePricingRules.findMany({ orderBy: asc(basePricingRules.bedrooms) }),
-    db.query.sqftSurchargeRules.findMany({ orderBy: asc(sqftSurchargeRules.rangeStart) }),
-    db.query.laundryPricingRules.findMany(),
-    db.query.hotTubPricingRules.findMany(),
-    db.query.pricingUploads.findMany({ orderBy: desc(pricingUploads.createdAt), limit: 10 }),
-  ]);
+    // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+    // Five parallel reads on the transaction pooler can hang this page the same
+    // way it hung /customer/book.
+  ] = await sequentialQueries(
+    () => db.query.basePricingRules.findMany({ orderBy: asc(basePricingRules.bedrooms) }),
+    () => db.query.sqftSurchargeRules.findMany({ orderBy: asc(sqftSurchargeRules.rangeStart) }),
+    () => db.query.laundryPricingRules.findMany(),
+    () => db.query.hotTubPricingRules.findMany(),
+    () => db.query.pricingUploads.findMany({ orderBy: desc(pricingUploads.createdAt), limit: 10 })
+  );
 
   const firstCleanDiscountPercent = await getFirstCleanDiscountPercent();
 

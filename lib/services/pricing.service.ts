@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db, sequentialQueries } from "@/db";
 import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import { resolveBasePrice } from "@/lib/pricing/base-price";
@@ -26,13 +26,17 @@ let rulesCache: { rules: PricingRules; expiresAt: number } | null = null;
 let rulesInFlight: Promise<PricingRules> | null = null;
 
 async function loadPricingRules() {
+  // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+  // Four parallel reads is what left `/customer/book` loading forever once a
+  // customer owned a property (with none, this was never reached). The cache
+  // below means the extra round trips are paid once a minute, not per repricing.
   const [basePrices, sqftSurcharges, laundryRules, hotTubRules] =
-    await Promise.all([
-      db.query.basePricingRules.findMany(),
-      db.query.sqftSurchargeRules.findMany(),
-      db.query.laundryPricingRules.findMany(),
-      db.query.hotTubPricingRules.findMany(),
-    ]);
+    await sequentialQueries(
+      () => db.query.basePricingRules.findMany(),
+      () => db.query.sqftSurchargeRules.findMany(),
+      () => db.query.laundryPricingRules.findMany(),
+      () => db.query.hotTubPricingRules.findMany()
+    );
 
   return { basePrices, sqftSurcharges, laundryRules, hotTubRules };
 }

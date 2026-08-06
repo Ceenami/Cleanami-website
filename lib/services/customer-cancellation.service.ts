@@ -73,23 +73,25 @@ async function createCleanerPayouts(
   const hours = parseFloat(expectedHours || "0");
   const basePay = hours * CLEANER_HOURLY_RATE;
 
-  await Promise.all(
-    payTargets.map((assignment) => {
-      let total = basePay;
-      let urgentBonus: string | null = null;
-      if (assignment.urgentBonus) {
-        urgentBonus = "10.00";
-        total += 10;
-      }
-      return db.insert(payouts).values({
-        jobId,
-        cleanerId: assignment.cleanerId,
-        amount: total.toFixed(2),
-        urgentBonusAmount: urgentBonus,
-        status: "pending",
-      });
-    })
-  );
+  // One insert at a time — see `sequentialQueries` in db/index.ts. Concurrent
+  // statements can be pipelined onto a single pooler connection, where all but
+  // the first are dropped without an error; here that would hang the
+  // cancellation with some cleaners silently unpaid.
+  for (const assignment of payTargets) {
+    let total = basePay;
+    let urgentBonus: string | null = null;
+    if (assignment.urgentBonus) {
+      urgentBonus = "10.00";
+      total += 10;
+    }
+    await db.insert(payouts).values({
+      jobId,
+      cleanerId: assignment.cleanerId,
+      amount: total.toFixed(2),
+      urgentBonusAmount: urgentBonus,
+      status: "pending",
+    });
+  }
 
   return payTargets.length;
 }

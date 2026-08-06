@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/db";
+import { db, sequentialQueries } from "@/db";
 import {
   cleaners,
   jobs,
@@ -62,6 +62,8 @@ export async function createRestockRequestForJob(input: {
   if (!job?.propertyId) {
     return { success: false, error: "This job has no property on file." };
   }
+  // Bound out of `job` so the narrowing above survives into the closures below.
+  const propertyId = job.propertyId;
 
   const [created] = await db
     .insert(restockRequests)
@@ -78,16 +80,19 @@ export async function createRestockRequestForJob(input: {
 
   // Best-effort alert; a notification failure must not lose the request.
   try {
-    const [cleaner, property] = await Promise.all([
-      db.query.cleaners.findFirst({
-        where: eq(cleaners.id, input.cleanerId),
-        columns: { fullName: true },
-      }),
-      db.query.properties.findFirst({
-        where: eq(properties.id, job.propertyId),
-        columns: { address: true },
-      }),
-    ]);
+    // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+    const [cleaner, property] = await sequentialQueries(
+      () =>
+        db.query.cleaners.findFirst({
+          where: eq(cleaners.id, input.cleanerId),
+          columns: { fullName: true },
+        }),
+      () =>
+        db.query.properties.findFirst({
+          where: eq(properties.id, propertyId),
+          columns: { address: true },
+        })
+    );
 
     await notifyAdminsOfRestockRequest({
       cleanerName: cleaner?.fullName ?? "A cleaner",

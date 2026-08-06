@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { db } = await import("@/db");
+  const { db, sequentialQueries } = await import("@/db");
   const { cleaners, properties } = await import("@/db/schemas");
   const { isNull } = await import("drizzle-orm");
 
@@ -74,22 +74,27 @@ export async function GET(request: NextRequest) {
       propertiesWithoutCoords,
       cleanersWithCoords,
       propertiesWithCoords,
-    ] = await Promise.all([
-      db.query.cleaners.findMany({
-        where: isNull(cleaners.latitude),
-        columns: { id: true },
-      }),
-      db.query.properties.findMany({
-        where: isNull(properties.latitude),
-        columns: { id: true },
-      }),
-      db.query.cleaners.findMany({
-        columns: { id: true, latitude: true },
-      }),
-      db.query.properties.findMany({
-        columns: { id: true, latitude: true },
-      }),
-    ]);
+      // Sequential, not `Promise.all` — see `sequentialQueries` in db/index.ts.
+    ] = await sequentialQueries(
+      () =>
+        db.query.cleaners.findMany({
+          where: isNull(cleaners.latitude),
+          columns: { id: true },
+        }),
+      () =>
+        db.query.properties.findMany({
+          where: isNull(properties.latitude),
+          columns: { id: true },
+        }),
+      () =>
+        db.query.cleaners.findMany({
+          columns: { id: true, latitude: true },
+        }),
+      () =>
+        db.query.properties.findMany({
+          columns: { id: true, latitude: true },
+        })
+    );
 
     return NextResponse.json({
       cleaners: {
