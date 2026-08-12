@@ -39,8 +39,10 @@ ALTER TABLE "properties"
   )
   NOT VALID;
 
+-- No semicolons inside this string, please: a naive statement splitter cuts the
+-- literal in half and the whole file fails to apply.
 COMMENT ON CONSTRAINT "properties_laundry_loads_required" ON "properties" IS
-  'A laundry service requires a load count of at least 1; loads drive the per-load customer charge. Added NOT VALID because pre-existing rows violate it.';
+  'A laundry service requires a load count of at least 1. Loads drive the per-load customer charge. Added NOT VALID because pre-existing rows violate it.';
 
 -- Before applying:
 --   1. Run `node _testing/report-laundry-loads-gaps.mjs` (read-only) and send
