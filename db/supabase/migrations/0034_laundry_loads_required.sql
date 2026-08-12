@@ -1,9 +1,12 @@
 -- 0034 — laundry loads must accompany a laundry service
 --
--- ============================ DO NOT APPLY YET ============================
--- This migration is written but deliberately NOT hand-applied. See the
--- "Before applying" section at the bottom.
--- ==========================================================================
+-- ===================== APPLIED AND VALIDATED 2026-08-12 =====================
+-- Applied to the shared Supabase project, then promoted with
+--   ALTER TABLE "properties" VALIDATE CONSTRAINT "properties_laundry_loads_required";
+-- after the 6 pre-existing violating rows were given load counts. `convalidated`
+-- is true, so the NOT VALID caveat below is now historical — the constraint is
+-- enforced on every row. Re-running this file is harmless (it drops and re-adds).
+-- ============================================================================
 --
 -- WHY
 -- `properties.laundry_loads` is nullable with no constraint, so a property can
@@ -44,12 +47,15 @@ ALTER TABLE "properties"
 COMMENT ON CONSTRAINT "properties_laundry_loads_required" ON "properties" IS
   'A laundry service requires a load count of at least 1. Loads drive the per-load customer charge. Added NOT VALID because pre-existing rows violate it.';
 
--- Before applying:
---   1. Run `node _testing/report-laundry-loads-gaps.mjs` (read-only) and send
---      the list to the client.
---   2. Have the client supply the real per-property load estimate. Do NOT
---      backfill from the size table — that changes what a live customer is
---      billed on their next clean.
---   3. Apply this file.
---   4. Then, once no rows violate it, promote the constraint:
---        ALTER TABLE "properties" VALIDATE CONSTRAINT "properties_laundry_loads_required";
+-- What was done (2026-08-12):
+--   1. `node _testing/report-laundry-loads-gaps.mjs` listed the 6 violating
+--      rows — all demo/test accounts, no third-party customer among them.
+--   2. Each was given the v12 size-based load count (2/3/4). Safe here only
+--      because they were demo accounts; for a live customer, get the real
+--      estimate rather than inferring one, since it changes their next bill.
+--   3. This file applied, then the constraint promoted with VALIDATE.
+--
+-- Note for a fresh environment: applying this against a database that still has
+-- violating rows leaves the constraint NOT VALID, which still blocks unrelated
+-- UPDATEs to those rows (the lazy re-geocode writes, for one). Clear the rows
+-- first, then VALIDATE.
