@@ -21,6 +21,7 @@ import {
 import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
 import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
+import { voidCharge } from "@/lib/services/payment/void-charge";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
 import { sendCancellationEmail } from "@/lib/services/email.service";
 import { and, eq, gt, inArray, ne } from "drizzle-orm";
@@ -100,27 +101,13 @@ async function voidCustomerCharge(job: {
   paymentIntentId: string | null;
   paymentStatus: string | null;
 }) {
-  const stripe = getStripe();
-  if (!stripe || !job.paymentIntentId || isSkippedPaymentIntent(job.paymentIntentId)) {
-    return;
-  }
-
-  if (job.paymentStatus === "authorized") {
-    try {
-      await stripe.paymentIntents.cancel(job.paymentIntentId);
-    } catch (error) {
-      console.warn("[cancelJob] PI cancel failed:", error);
-    }
-    return;
-  }
-
-  if (job.paymentStatus === "captured") {
-    try {
-      await stripe.refunds.create({ payment_intent: job.paymentIntentId });
-    } catch (error) {
-      console.warn("[cancelJob] refund failed:", error);
-    }
-  }
+  // Shared with the one-off booking path's compensating refund — see
+  // `lib/services/payment/void-charge.ts` for why there is only one copy.
+  await voidCharge({
+    paymentIntentId: job.paymentIntentId,
+    paymentStatus: job.paymentStatus,
+    context: "cancelJob",
+  });
 }
 
 async function chargeCustomerForLateCancel(

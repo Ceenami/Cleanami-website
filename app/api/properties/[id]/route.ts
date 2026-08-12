@@ -7,6 +7,11 @@ import {
   MAX_GEOFENCE_RADIUS_METERS,
   MIN_GEOFENCE_RADIUS_METERS,
 } from "@/lib/constants/geofence";
+import { serviceAreaErrorCode } from "@/lib/services/google-maps/service-area-guard";
+import {
+  LAUNDRY_LOADS_REQUIRED_MESSAGE,
+  laundryLoadsMissing,
+} from "@/lib/validations/laundry-loads";
 
 // Accept HH:MM or HH:MM:SS (some browsers' <input type="time"> omit seconds);
 // normalized to HH:MM:SS before storage so the column format stays consistent.
@@ -26,7 +31,11 @@ const updatePropertySchema = z
       .optional(),
     hasHotTub: z.boolean().optional(),
     laundryType: z.enum(["in_unit", "off_site", "none"]).optional(),
-    laundryLoads: z.number().int().min(0).nullable().optional(),
+    // min(1), not min(0): zero loads on a laundry property under-charges the
+    // same way a blank does. Note this schema can only catch the case where
+    // BOTH fields are present — a patch that changes only `laundryType` is
+    // caught by `updateProperty`, which sees the merged row.
+    laundryLoads: z.number().int().min(1).nullable().optional(),
     hotTubServiceLevel: z.boolean().optional(),
     hotTubDrain: z.boolean().optional(),
     hotTubDrainCadence: z
@@ -51,8 +60,26 @@ const updatePropertySchema = z
       .max(MAX_GEOFENCE_RADIUS_METERS)
       .nullable()
       .optional(),
+    /**
+     * Deliberate retry after the server refused an out-of-area address. This
+     * route is already admin-gated by `getAdminAuth`, so the flag is inherently
+     * admin-only here.
+     */
+    confirmOutOfServiceArea: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) =>
+      // Only meaningful when both arrive together; the merged-state check in
+      // `updateProperty` covers the partial cases.
+      data.laundryType === undefined ||
+      data.laundryLoads === undefined ||
+      !laundryLoadsMissing({
+        laundryType: data.laundryType,
+        laundryLoads: data.laundryLoads,
+      }),
+    { message: LAUNDRY_LOADS_REQUIRED_MESSAGE, path: ["laundryLoads"] }
+  );
 
 export async function PATCH(
   request: NextRequest,
@@ -82,14 +109,21 @@ export async function PATCH(
       );
     }
 
-    const result = await updateProperty(idParsed.data.propertyId, parsed.data);
+    const { confirmOutOfServiceArea, ...fields } = parsed.data;
+    const result = await updateProperty(idParsed.data.propertyId, fields, {
+      allowOutOfServiceArea: confirmOutOfServiceArea === true,
+    });
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
     console.error("[PATCH /api/properties/[id]]", err);
     const message =
       err instanceof Error ? err.message : "Failed to update property";
     const status = message.includes("not found") ? 404 : 400;
-    return NextResponse.json({ error: message }, { status });
+    const code = serviceAreaErrorCode(err);
+    return NextResponse.json(
+      { error: message, ...(code ? { code } : {}) },
+      { status }
+    );
   }
 }
 

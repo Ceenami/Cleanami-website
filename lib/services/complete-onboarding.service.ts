@@ -13,6 +13,7 @@ import { SignupFormData, signupFormSchema } from "@/lib/validations/bookng-modal
 import { ICalService } from "@/lib/services/iCal/ical.service";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
+import { geocodeAddressResult } from "@/lib/services/google-maps/geocoding";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer-account.service";
 import { sendBookingConfirmationEmail } from "@/lib/services/email.service";
@@ -45,40 +46,29 @@ export type CompleteOnboardingResult =
     }
   | { success: false; error: string };
 
+/**
+ * Coordinates as the property columns want them (numeric -> string).
+ *
+ * This used to be a private reimplementation of the Google call, which meant it
+ * could not tell "address does not exist" from "we could not reach Google" and
+ * drifted from the shared geocoder. It now delegates, keeping only the
+ * string-coercion and the null-on-any-failure contract — onboarding runs AFTER
+ * the card is charged, so it must never fail on a geocode problem.
+ */
 async function geocodeAddress(
   address: string
 ): Promise<{ latitude: string; longitude: string } | null> {
-  const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-  if (!googleMapsApiKey) {
+  const result = await geocodeAddressResult(address);
+  if (result.status !== "ok") {
     console.warn(
-      "Geocoding skipped: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is not configured"
+      `[completeOnboarding] geocode unusable (${result.status}) for: ${address}`
     );
     return null;
   }
-
-  try {
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
-        address
-      )}&key=${googleMapsApiKey}`
-    );
-
-    const data = await response.json();
-
-    if (data.status === "OK" && data.results.length > 0) {
-      const location = data.results[0].geometry.location;
-      return {
-        latitude: location.lat.toString(),
-        longitude: location.lng.toString(),
-      };
-    }
-
-    console.warn("Geocoding failed during onboarding:", data.status, address);
-    return null;
-  } catch (error) {
-    console.error("Geocoding error during onboarding:", error);
-    return null;
-  }
+  return {
+    latitude: result.coordinates.latitude.toString(),
+    longitude: result.coordinates.longitude.toString(),
+  };
 }
 
 async function uploadFileWithRetry(
@@ -198,6 +188,26 @@ export async function completeOnboardingForPayment(
         success: false,
         error:
           "This payment does not match the submitted booking. Please contact support.",
+      };
+    }
+
+    // The address is service-area checked when the PaymentIntent is created,
+    // and the intent's metadata is written with the secret key — so comparing
+    // against it closes the swap: pay for an in-area address, then complete
+    // with an out-of-area one. Same failure shape as the email check above.
+    const piAddress =
+      typeof paymentIntent.metadata?.property_address === "string"
+        ? paymentIntent.metadata.property_address
+        : null;
+    if (
+      !piAddress ||
+      piAddress.trim().toLowerCase() !==
+        (validatedData.address ?? "").trim().toLowerCase()
+    ) {
+      return {
+        success: false,
+        error:
+          "This payment does not match the submitted property address. Please contact support.",
       };
     }
 

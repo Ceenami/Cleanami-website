@@ -14,6 +14,13 @@ export const PUBLIC_NAV_ROUTES = [{ route: "/", title: "home" },
 export const SERVER_URL =
   process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
 
+/**
+ * Customer-facing support address. Property details are maintained by CleanNami
+ * rather than edited by customers (Remaining Tasks Phase 5), so this is the
+ * route a customer takes to get a property changed.
+ */
+export const SUPPORT_EMAIL = "cleannami@ceenami.com";
+
 export const PRIVATE_ADMIN_NAV_ROUTES = [
   {
     icon: <LayoutDashboard />,

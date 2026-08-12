@@ -32,6 +32,7 @@ export function AddPropertyModal({
   onClose,
   customerId,
   pickCustomer = false,
+  canOverrideServiceArea = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -42,11 +43,18 @@ export function AddPropertyModal({
    * customer portal this stays false and the server uses the session's own id.
    */
   pickCustomer?: boolean;
+  /**
+   * Whether to offer "save anyway" when the address falls outside the service
+   * area. Cosmetic only — the server authorizes the override independently, so
+   * a customer who forces the flag is still hard-blocked.
+   */
+  canOverrideServiceArea?: boolean;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [outOfAreaPrompt, setOutOfAreaPrompt] = useState<string | null>(null);
   const [owners, setOwners] = useState<{ id: string; name: string; email: string }[]>([]);
   const [ownerId, setOwnerId] = useState(customerId ?? "");
 
@@ -87,11 +95,11 @@ export function AddPropertyModal({
 
   if (!open) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (confirmOutOfServiceArea: boolean) => {
     setSaving(true);
     setError(null);
     setWarning(null);
+    if (!confirmOutOfServiceArea) setOutOfAreaPrompt(null);
 
     const payload: Record<string, unknown> = {
       address: form.address.trim(),
@@ -100,7 +108,12 @@ export function AddPropertyModal({
       sqFt: form.sqFt === "" ? null : Number(form.sqFt),
       hasHotTub: form.hasHotTub,
       laundryType: form.laundryType,
-      laundryLoads: form.laundryLoads === "" ? null : Number(form.laundryLoads),
+      // Null only when there is no laundry service. Otherwise send the number
+      // so the server rejects a blank rather than storing a $0-priced property.
+      laundryLoads:
+        form.laundryType === "none" || form.laundryLoads === ""
+          ? null
+          : Number(form.laundryLoads),
       // Only meaningful with a hot tub; the server enforces this too, since a
       // hot-tub service flag on a property without one is what made the
       // pricing engine bill hot-tub time it should not have (migration 0032).
@@ -116,6 +129,7 @@ export function AddPropertyModal({
       // Sent only by an admin. A customer omits it and the server fills in
       // their own id — it is never trusted from the browser.
       ...(pickCustomer || customerId ? { customerId: ownerId } : {}),
+      ...(confirmOutOfServiceArea ? { confirmOutOfServiceArea: true } : {}),
     };
 
     try {
@@ -127,6 +141,13 @@ export function AddPropertyModal({
       const data = await res.json();
 
       if (!res.ok) {
+        // Out-of-area is a refusal an admin may deliberately override, so it
+        // gets a confirm step rather than a dead end. Anyone without the
+        // capability just sees the message.
+        if (data.code === "OUT_OF_SERVICE_AREA" && canOverrideServiceArea) {
+          setOutOfAreaPrompt(data.error ?? "That address is outside our service area.");
+          return;
+        }
         setError(data.error ?? "Could not add the property.");
         return;
       }
@@ -146,6 +167,11 @@ export function AddPropertyModal({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submit(false);
   };
 
   return (
@@ -192,6 +218,34 @@ export function AddPropertyModal({
             {warning && (
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                 {warning}
+              </div>
+            )}
+            {outOfAreaPrompt && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <p>{outOfAreaPrompt}</p>
+                <p className="mt-2">
+                  Saving anyway will create a property we do not currently
+                  service. Cleaner matching works from the property&apos;s
+                  location, so it may find nobody nearby.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void submit(true)}
+                    className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
+                  >
+                    {saving ? "Saving…" : "Save anyway"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => setOutOfAreaPrompt(null)}
+                    className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Change the address
+                  </button>
+                </div>
               </div>
             )}
 
@@ -287,19 +341,27 @@ export function AddPropertyModal({
                   <option value="off_site">Off-Site</option>
                 </select>
               </div>
-              <div>
-                <label className={labelClass}>Laundry Loads</label>
-                <input
-                  type="number"
-                  min={0}
-                  className={inputClass}
-                  value={form.laundryLoads}
-                  onChange={(e) =>
-                    setForm({ ...form, laundryLoads: e.target.value })
-                  }
-                  placeholder="Leave blank to estimate"
-                />
-              </div>
+              {/* Only shown when it is billable, and required when shown: a
+                  blank count prices laundry at $0. Mirrors the booking form. */}
+              {form.laundryType !== "none" && (
+                <div>
+                  <label className={labelClass}>
+                    Estimated loads per turnover
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    required
+                    className={inputClass}
+                    value={form.laundryLoads}
+                    onChange={(e) =>
+                      setForm({ ...form, laundryLoads: e.target.value })
+                    }
+                    placeholder="e.g. 3"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-4">

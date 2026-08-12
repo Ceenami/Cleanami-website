@@ -4,7 +4,11 @@ import { db, sequentialQueries } from '@/db';
 import { properties, customers, subscriptions, jobs, checklistFiles } from '@/db/schemas';
 import { eq, sql, and } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
-import { geocodeAddress } from '@/lib/services/google-maps/geocoding';
+import { assertAddressInServiceArea } from '@/lib/services/google-maps/service-area-guard';
+import {
+  assertLaundryLoads,
+  normalizeLaundryLoads,
+} from '@/lib/validations/laundry-loads';
 import {
   PaginationParams,
   SearchParams,
@@ -115,9 +119,27 @@ export async function getPropertiesWithOwner({
 
 export type PropertiesWithOwner = Awaited<ReturnType<typeof getPropertiesWithOwner>>;
 
-export async function getPropertyDetails(propertyId: string) {
+/**
+ * Full property record for the detail page.
+ *
+ * `scope` is REQUIRED rather than optional on purpose. This query returns the
+ * joined customer row (name, email, phone) and is prefetched server-side by a
+ * page shared between /admin and /customer, so an unscoped read here is how a
+ * customer could open any property id and receive another customer's details.
+ * Making the caller write `{ customerId: null }` turns an unscoped read into a
+ * deliberate, greppable act instead of a forgotten argument.
+ */
+export async function getPropertyDetails(
+  propertyId: string,
+  scope: { customerId: string | null }
+) {
   const property = await db.query.properties.findFirst({
-    where: eq(properties.id, propertyId),
+    where: scope.customerId
+      ? and(
+          eq(properties.id, propertyId),
+          eq(properties.customerId, scope.customerId)
+        )
+      : eq(properties.id, propertyId),
     with: {
       customer: true,
 
@@ -288,15 +310,32 @@ export type UpdatePropertyInput = {
 
 export async function updateProperty(
   propertyId: string,
-  input: UpdatePropertyInput
+  input: UpdatePropertyInput,
+  options?: { allowOutOfServiceArea?: boolean }
 ): Promise<{ propertyId: string }> {
   const existing = await db.query.properties.findFirst({
     where: eq(properties.id, propertyId),
-    columns: { id: true, address: true },
+    // laundryType/laundryLoads are read so the check below can see the MERGED
+    // result of a partial patch — a body that changes only `laundryType` is
+    // exactly the case a per-field schema rule cannot catch.
+    columns: {
+      id: true,
+      address: true,
+      laundryType: true,
+      laundryLoads: true,
+    },
   });
   if (!existing) {
     throw new Error("Property not found");
   }
+
+  const mergedLaundryType = input.laundryType ?? existing.laundryType;
+  const mergedLaundryLoads =
+    input.laundryLoads !== undefined ? input.laundryLoads : existing.laundryLoads;
+  assertLaundryLoads({
+    laundryType: mergedLaundryType,
+    laundryLoads: mergedLaundryLoads,
+  });
 
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   const editableKeys: (keyof UpdatePropertyInput)[] = [
@@ -320,14 +359,41 @@ export async function updateProperty(
     if (input[key] !== undefined) patch[key] = input[key];
   }
 
-  // If the address changed, clear the stale geocode so it re-geocodes on next use.
+  // Switching to "none" must clear any stored count, or flipping back to a
+  // laundry service would silently resurrect a number nobody re-confirmed.
+  if (input.laundryType !== undefined) {
+    patch.laundryLoads = normalizeLaundryLoads(
+      mergedLaundryType,
+      mergedLaundryLoads
+    );
+  }
+
+  // An address change re-runs the service-area gate. This used to just null the
+  // geocode and defer to a lazy re-geocode, which meant an in-area property
+  // could be edited to any address on earth without a check. Geocoding eagerly
+  // also closes the window where the property has no coordinates and every
+  // check-in there is invisible to the geofence.
   if (
     typeof input.address === "string" &&
     input.address.trim() !== existing.address
   ) {
-    patch.latitude = null;
-    patch.longitude = null;
-    patch.geocodedAt = null;
+    const check = await assertAddressInServiceArea(input.address.trim(), {
+      allowOutOfArea: options?.allowOutOfServiceArea === true,
+      context: "updateProperty",
+    });
+
+    if (check.coordinates) {
+      patch.latitude = check.coordinates.latitude.toString();
+      patch.longitude = check.coordinates.longitude.toString();
+      patch.geocodedAt = new Date();
+    } else {
+      // Geocoding was unavailable (or an admin overrode a non-resolving
+      // address): fall back to the previous lazy-re-geocode behaviour rather
+      // than keeping coordinates that belong to the old address.
+      patch.latitude = null;
+      patch.longitude = null;
+      patch.geocodedAt = null;
+    }
   }
 
   await db.update(properties).set(patch).where(eq(properties.id, propertyId));
@@ -420,12 +486,17 @@ export type CreatePropertyInput = {
  * The address is geocoded here rather than lazily, because the coordinates are
  * what the check-in geofence decides against: a property with no coordinates
  * makes every check-in "unknown", which is allowed-and-flagged rather than
- * enforced. A geocode failure is NOT fatal — a property the customer can see
- * and correct beats a refused form — but it is reported so the caller can say
- * so.
+ * enforced. The same geocode now also gates the service area — this form used
+ * to accept any address on earth, bypassing the check the public booking form
+ * has always run. A geocode we cannot reach is still NOT fatal (see
+ * `assertAddressInServiceArea`), and is reported so the caller can say so.
+ *
+ * `allowOutOfServiceArea` defaults to false so a new caller is gated unless it
+ * opts out in writing. Only an admin route may set it.
  */
 export async function createProperty(
-  input: CreatePropertyInput
+  input: CreatePropertyInput,
+  options?: { allowOutOfServiceArea?: boolean }
 ): Promise<{ propertyId: string; geocoded: boolean }> {
   const owner = await db.query.customers.findFirst({
     where: eq(customers.id, input.customerId),
@@ -435,7 +506,16 @@ export async function createProperty(
     throw new Error("Customer not found");
   }
 
-  const coordinates = await geocodeAddress(input.address);
+  assertLaundryLoads({
+    laundryType: input.laundryType,
+    laundryLoads: input.laundryLoads,
+  });
+
+  const check = await assertAddressInServiceArea(input.address, {
+    allowOutOfArea: options?.allowOutOfServiceArea === true,
+    context: "createProperty",
+  });
+  const coordinates = check.coordinates;
 
   const [created] = await db
     .insert(properties)
@@ -447,7 +527,7 @@ export async function createProperty(
       sqFt: input.sqFt ?? null,
       hasHotTub: input.hasHotTub ?? false,
       laundryType: input.laundryType,
-      laundryLoads: input.laundryLoads ?? null,
+      laundryLoads: normalizeLaundryLoads(input.laundryType, input.laundryLoads),
       // Hot-tub servicing on a property with no hot tub is not a meaningful
       // state, and it is what made the pricing engine add hot-tub hours to
       // properties that have none (migration 0032).

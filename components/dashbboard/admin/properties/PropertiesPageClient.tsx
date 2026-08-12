@@ -120,6 +120,7 @@ export const PropertiesPageClient = () => {
           open={addingProperty}
           onClose={() => setAddingProperty(false)}
           pickCustomer={!isOwnerPortal}
+          canOverrideServiceArea={isAdmin && !isOwnerPortal}
         />
 
         <div className="bg-white rounded-lg shadow-md overflow-hidden">

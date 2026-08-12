@@ -27,6 +27,7 @@ export const PropertyEditForm = ({ property }: Props) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [outOfAreaPrompt, setOutOfAreaPrompt] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     address: property.address ?? "",
@@ -54,11 +55,11 @@ export const PropertyEditForm = ({ property }: Props) => {
         : "",
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (confirmOutOfServiceArea: boolean) => {
     setSaving(true);
     setError(null);
     setSuccess(false);
+    if (!confirmOutOfServiceArea) setOutOfAreaPrompt(null);
 
     const payload: Record<string, unknown> = {
       address: form.address.trim(),
@@ -67,7 +68,12 @@ export const PropertyEditForm = ({ property }: Props) => {
       bathCount: Number(form.bathCount),
       hasHotTub: form.hasHotTub,
       laundryType: form.laundryType,
-      laundryLoads: form.laundryLoads === "" ? null : Number(form.laundryLoads),
+      // Null only when there is no laundry service; otherwise send the number
+      // so a blank is rejected rather than silently priced at $0.
+      laundryLoads:
+        form.laundryType === "none" || form.laundryLoads === ""
+          ? null
+          : Number(form.laundryLoads),
       hotTubServiceLevel: form.hotTubServiceLevel,
       hotTubDrain: form.hotTubDrain,
       hotTubDrainCadence:
@@ -83,6 +89,7 @@ export const PropertyEditForm = ({ property }: Props) => {
         form.geofenceRadiusMeters.trim() === ""
           ? null
           : Math.round(Number(form.geofenceRadiusMeters)),
+      ...(confirmOutOfServiceArea ? { confirmOutOfServiceArea: true } : {}),
     };
 
     try {
@@ -93,6 +100,14 @@ export const PropertyEditForm = ({ property }: Props) => {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        // An admin may deliberately keep a property outside the service area,
+        // so this refusal offers a confirm step instead of a dead end.
+        if (body.code === "OUT_OF_SERVICE_AREA") {
+          setOutOfAreaPrompt(
+            body.error ?? "That address is outside our service area."
+          );
+          return;
+        }
         throw new Error(body.error ?? "Failed to update property");
       }
       setSuccess(true);
@@ -102,6 +117,11 @@ export const PropertyEditForm = ({ property }: Props) => {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submit(false);
   };
 
   const inputClass =
@@ -172,18 +192,25 @@ export const PropertyEditForm = ({ property }: Props) => {
               <option value="off_site">Off-Site</option>
             </select>
           </div>
-          <div>
-            <label className={labelClass}>Laundry Loads</label>
-            <input
-              type="number"
-              min={0}
-              className={inputClass}
-              value={form.laundryLoads}
-              onChange={(e) =>
-                setForm({ ...form, laundryLoads: e.target.value })
-              }
-            />
-          </div>
+          {/* Required whenever laundry is billable — a blank count prices
+              laundry at $0 and loses the off-site base fee entirely. */}
+          {form.laundryType !== "none" && (
+            <div>
+              <label className={labelClass}>Estimated loads per turnover</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                required
+                className={inputClass}
+                value={form.laundryLoads}
+                onChange={(e) =>
+                  setForm({ ...form, laundryLoads: e.target.value })
+                }
+                placeholder="e.g. 3"
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-4">
@@ -326,6 +353,34 @@ export const PropertyEditForm = ({ property }: Props) => {
         {error && <p className="text-sm text-red-600">{error}</p>}
         {success && (
           <p className="text-sm text-green-600">Property updated.</p>
+        )}
+        {outOfAreaPrompt && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <p>{outOfAreaPrompt}</p>
+            <p className="mt-2">
+              Saving anyway keeps a property we do not currently service.
+              Cleaner matching works from the property&apos;s location, so it
+              may find nobody nearby.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void submit(true)}
+                className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
+              >
+                {saving ? "Saving…" : "Save anyway"}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setOutOfAreaPrompt(null)}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Change the address
+              </button>
+            </div>
+          </div>
         )}
 
         <button

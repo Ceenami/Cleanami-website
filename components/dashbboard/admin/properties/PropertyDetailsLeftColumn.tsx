@@ -5,11 +5,19 @@ import { PropertyDetails } from "@/lib/queries/properties";
 interface LeftColumnProps {
   property: PropertyDetails;
   subscription: PropertyDetails["activeSubscription"];
+  /**
+   * Admin-only affordances. The Pause/Cancel buttons below have never had an
+   * `onClick` — they are inert in the admin portal too — so they are hidden
+   * rather than shown to a customer who would reasonably expect them to work.
+   * Customers cancel through `CustomerSubscriptionCancelButton`.
+   */
+  isAdmin?: boolean;
 }
 
 export default function PropertyDetailsLeftColumn({
   property,
   subscription,
+  isAdmin = true,
 }: LeftColumnProps) {
   return (
     <div className="space-y-6">
@@ -47,6 +55,16 @@ export default function PropertyDetailsLeftColumn({
             {property.laundryType.replace("_", "-")}
           </span>
         </p>
+        {/* Loads are a direct multiplier on the price, so they belong on the
+            summary rather than only inside the admin edit form. */}
+        {property.laundryType !== "none" && (
+          <p className="text-sm">
+            Laundry Loads:{" "}
+            <span className="font-semibold">
+              {property.laundryLoads ?? "Not set"}
+            </span>
+          </p>
+        )}
       </Card>
 
       <Card icon={<CreditCardIcon />} title="Subscription">
@@ -72,14 +90,16 @@ export default function PropertyDetailsLeftColumn({
                   : "N/A"}
               </span>
             </p>
-            <div className="flex gap-2 pt-2">
-              <button className="flex-1 text-sm py-2 px-4 rounded-md bg-yellow-500 text-white hover:bg-yellow-600">
-                Pause
-              </button>
-              <button className="flex-1 text-sm py-2 px-4 rounded-md bg-red-600 text-white hover:bg-red-700">
-                Cancel
-              </button>
-            </div>
+            {isAdmin && (
+              <div className="flex gap-2 pt-2">
+                <button className="flex-1 text-sm py-2 px-4 rounded-md bg-yellow-500 text-white hover:bg-yellow-600">
+                  Pause
+                </button>
+                <button className="flex-1 text-sm py-2 px-4 rounded-md bg-red-600 text-white hover:bg-red-700">
+                  Cancel
+                </button>
+              </div>
+            )}
           </>
         ) : (
           <p className="text-sm text-gray-500">
