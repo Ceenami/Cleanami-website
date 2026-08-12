@@ -7,12 +7,20 @@ interface PropertyHeaderProps {
   property: PropertyDetails;
   customer: PropertyDetails['customer'];
   listHref?: string;
+  /**
+   * Owner name/email/phone. Off in the customer portal: it is the viewer's own
+   * contact detail, so it adds nothing, and rendering an owner block on a page
+   * a customer can reach is the habit that leaked other customers' details in
+   * the first place.
+   */
+  showOwner?: boolean;
 }
 
 export const PropertyHeader = ({
   property,
   customer,
   listHref = "/admin/properties",
+  showOwner = true,
 }: PropertyHeaderProps) => {
   return (
     <div>
@@ -25,17 +33,23 @@ export const PropertyHeader = ({
       </Link>
       <div className="bg-white p-6 rounded-lg shadow-md">
         <h1 className="text-3xl font-bold text-gray-900">{property.address}</h1>
-        <p className="text-gray-500 mt-1">Owned by: {customer?.name ?? 'N/A'}</p>
-        <div className="mt-3 flex flex-col gap-1 text-sm text-gray-600 sm:flex-row sm:gap-6">
-          <p>
-            <span className="font-medium text-gray-700">Email:</span>{" "}
-            {formatContactValue(customer?.email)}
-          </p>
-          <p>
-            <span className="font-medium text-gray-700">Phone:</span>{" "}
-            {formatContactValue(customer?.phone)}
-          </p>
-        </div>
+        {showOwner && (
+          <>
+            <p className="text-gray-500 mt-1">
+              Owned by: {customer?.name ?? 'N/A'}
+            </p>
+            <div className="mt-3 flex flex-col gap-1 text-sm text-gray-600 sm:flex-row sm:gap-6">
+              <p>
+                <span className="font-medium text-gray-700">Email:</span>{" "}
+                {formatContactValue(customer?.email)}
+              </p>
+              <p>
+                <span className="font-medium text-gray-700">Phone:</span>{" "}
+                {formatContactValue(customer?.phone)}
+              </p>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

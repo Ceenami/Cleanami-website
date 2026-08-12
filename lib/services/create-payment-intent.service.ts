@@ -15,6 +15,8 @@ import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { geocodeAddressResult } from "@/lib/services/google-maps/geocoding";
 import { isPointInServiceArea } from "@/lib/google-maps/serviceArea/index.ts";
+import { CUSTOM_QUOTE_BOOKING_MESSAGE } from "@/lib/pricing/custom-quote-message";
+import { LAUNDRY_LOADS_REQUIRED_MESSAGE } from "@/lib/validations/laundry-loads";
 import { getStartOfTodayEastern } from "@/lib/time/eastern";
 import { addDays } from "date-fns";
 import Stripe from "stripe";
@@ -95,11 +97,17 @@ export async function quoteFirstCleanChargeCents(
   const priceDetails = await pricingService.calculatePrice(normalized);
 
   if (priceDetails.isCustomQuote) {
-    return {
-      ok: false,
-      error:
-        "Properties over 3,000 sq ft require a custom quote. Please book a setup call or contact CleanNami.",
-    };
+    // Was worded as sq ft only, which misread the bed/bath case as a sq ft
+    // problem. Shared wording now covers both reasons.
+    return { ok: false, error: CUSTOM_QUOTE_BOOKING_MESSAGE };
+  }
+
+  // The pre-charge barrier for laundry loads. `signupFormSchema`'s refine is a
+  // backstop only: its single server-side parse runs in complete-onboarding,
+  // which is AFTER the card is charged, so a rejection there strands a paid
+  // customer. Refusing here costs them a form correction instead.
+  if (priceDetails.laundryLoadsMissing) {
+    return { ok: false, error: LAUNDRY_LOADS_REQUIRED_MESSAGE };
   }
 
   const priceBeforeDiscountsCents = Math.round(priceDetails.totalPerClean * 100);

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  LAUNDRY_LOADS_REQUIRED_MESSAGE,
+  laundryLoadsMissing,
+} from "@/lib/validations/laundry-loads";
 
 export const signupFormSchema = z
   .object({
@@ -82,6 +86,25 @@ export const signupFormSchema = z
       message: "Your first clean must be at least 7 days from today.",
       path: ["firstCleanDate"],
     }
+  )
+  .refine(
+    (data) => {
+      // A laundry service with no load count prices laundry at $0 (and loses
+      // the off-site base fee), so the pair must travel together.
+      //
+      // Guarded on `laundryService` being present because `SignupForm` calls
+      // `signupFormSchema.partial().safeParse()` on every step — an unguarded
+      // refine would fail steps 1-3, where the field has not been reached yet.
+      if (data.laundryService === undefined) return true;
+      return !laundryLoadsMissing({
+        laundryType: data.laundryService,
+        laundryLoads: data.laundryLoads,
+      });
+    },
+    {
+      message: LAUNDRY_LOADS_REQUIRED_MESSAGE,
+      path: ["laundryLoads"],
+    }
   );
 
 export type SignupFormData = Partial<z.infer<typeof signupFormSchema>>;
@@ -113,6 +136,13 @@ export interface PriceDetails {
    * rather than quietly showing $0.
    */
   pricingUnavailable: boolean;
+  /**
+   * The property has a laundry service but no usable load count, so the price
+   * shown is too low (it omits the per-load charge). A data defect on the
+   * property, not a property we cannot price — the distinction matters because
+   * unattended recurring charges log and proceed where interactive flows refuse.
+   */
+  laundryLoadsMissing: boolean;
   periodicCharges: Array<{
     description: string;
     amount: number;

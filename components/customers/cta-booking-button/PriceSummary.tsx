@@ -1,4 +1,6 @@
 import { PriceDetails } from "@/lib/validations/bookng-modal";
+import { CUSTOM_QUOTE_BOOKING_MESSAGE } from "@/lib/pricing/custom-quote-message";
+import { LAUNDRY_LOADS_REQUIRED_MESSAGE } from "@/lib/validations/laundry-loads";
 import { Tag, HelpCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { PriceRow } from "./Pricerow";
 
@@ -54,9 +56,23 @@ export const PriceSummary = ({
         <AlertTriangle className="h-10 w-10 text-yellow-500 mb-4" />
         <h4 className="font-semibold text-yellow-800">Custom Quote Required</h4>
         <p className="text-sm text-yellow-700 mt-1">
-          Larger properties — over 3,000 sq ft, or with more bedrooms or
-          bathrooms than our standard pricing covers — need a custom quote.
-          Please continue and we will contact you with pricing.
+          {CUSTOM_QUOTE_BOOKING_MESSAGE}
+        </p>
+      </div>
+    );
+  }
+
+  // The price below would be missing the per-load charge, so show why rather
+  // than quoting a number we know is too low.
+  if (priceDetails.laundryLoadsMissing) {
+    return (
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 h-full flex flex-col items-center justify-center text-center">
+        <AlertTriangle className="h-10 w-10 text-yellow-500 mb-4" />
+        <h4 className="font-semibold text-yellow-800">
+          Laundry Loads Required
+        </h4>
+        <p className="text-sm text-yellow-700 mt-1">
+          {LAUNDRY_LOADS_REQUIRED_MESSAGE}
         </p>
       </div>
     );

@@ -3,6 +3,7 @@ import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import { resolveBasePrice } from "@/lib/pricing/base-price";
 import { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
+import { laundryLoadsMissing } from "@/lib/validations/laundry-loads";
 
 export { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
@@ -124,6 +125,9 @@ export class PricingService {
         totalPerClean: overridePrice,
         isCustomQuote: false,
         pricingUnavailable: false,
+        // An admin-set override IS the price, so an incomplete load count
+        // cannot make it wrong.
+        laundryLoadsMissing: false,
         periodicCharges: hotTubCost.periodic,
       };
     }
@@ -172,6 +176,7 @@ export class PricingService {
       totalPerClean,
       isCustomQuote,
       pricingUnavailable,
+      laundryLoadsMissing: laundryCost.loadsMissing,
       periodicCharges: hotTubCost.periodic,
     };
   }
@@ -183,26 +188,45 @@ export class PricingService {
     return surchargeRule ? surchargeRule.surchargeCents / 100 : 0;
   }
 
+  /**
+   * Customer laundry revenue. NOTE: `laundryLoads` here is the *customer's*
+   * estimate stored on the property, and it drives the customer price ONLY.
+   * Cleaner hours and the $5/load Laundry Lead bonus come from a separate
+   * size-derived count (`expectedLaundryLoads` in `lib/pricing/staffing-logic.ts`,
+   * persisted to `jobs.addons_snapshot.laundryLoads`). The two are deliberately
+   * decoupled — do not merge them.
+   */
   private _calculateLaundryCost(
     formData: SignupFormData,
     rules: any[]
-  ): { total: number } {
+  ): { total: number; loadsMissing: boolean } {
     const { laundryService, laundryLoads = 0 } = formData;
     const loads = Number(laundryLoads) || 0;
+
+    const loadsMissing = laundryLoadsMissing({
+      laundryType: laundryService,
+      laundryLoads: Number.isFinite(Number(laundryLoads))
+        ? Number(laundryLoads)
+        : null,
+    });
 
     const inUnitRule = rules.find((r) => r.serviceType === "In-Unit");
     const offSiteRule = rules.find((r) => r.serviceType === "Off-Site");
 
     if (laundryService === "in_unit" && inUnitRule) {
       const perLoadCost = inUnitRule.customerRevenuePerLoadCents / 100;
-      return { total: loads * perLoadCost };
+      return { total: loads * perLoadCost, loadsMissing };
     }
-    if (laundryService === "off_site" && loads > 0 && offSiteRule) {
+    // The $20 off-site base fee is charged for the *service*, not per load, so
+    // it must not be gated on the load count. It used to be, which meant an
+    // off-site property with a blank count billed $0 for laundry entirely
+    // rather than merely losing the per-load part.
+    if (laundryService === "off_site" && offSiteRule) {
       const baseCost = offSiteRule.customerRevenueBaseCents / 100;
       const perLoadCost = offSiteRule.customerRevenuePerLoadCents / 100;
-      return { total: baseCost + loads * perLoadCost };
+      return { total: baseCost + loads * perLoadCost, loadsMissing };
     }
-    return { total: 0 };
+    return { total: 0, loadsMissing };
   }
 
   private _calculateHotTubCost(

@@ -7,6 +7,11 @@ import {
   resolvePortalCustomerScope,
 } from "@/lib/customer-auth";
 import { getSessionRole } from "@/lib/auth/server-roles";
+import { serviceAreaErrorCode } from "@/lib/services/google-maps/service-area-guard";
+import {
+  LAUNDRY_LOADS_REQUIRED_MESSAGE,
+  laundryLoadsMissing,
+} from "@/lib/validations/laundry-loads";
 
 export async function GET(request: NextRequest) {
   try {
@@ -54,7 +59,9 @@ const createPropertySchema = z
     sqFt: z.number().int().positive().nullable().optional(),
     hasHotTub: z.boolean().optional(),
     laundryType: z.enum(["in_unit", "off_site", "none"]),
-    laundryLoads: z.number().int().min(0).nullable().optional(),
+    // min(1), not min(0): zero loads on a laundry property is the same $0
+    // under-charge as leaving it blank.
+    laundryLoads: z.number().int().min(1).nullable().optional(),
     hotTubServiceLevel: z.boolean().optional(),
     hotTubDrain: z.boolean().optional(),
     hotTubDrainCadence: z
@@ -66,8 +73,23 @@ const createPropertySchema = z
     defaultCheckOutTime: z.string().regex(timeRegex).transform(normalizeTime).optional(),
     /** Admin only. A customer's property is always created under themselves. */
     customerId: z.string().uuid().optional(),
+    /**
+     * Admin only, and only sent on a deliberate retry after the server has
+     * already refused the address once. Accepted in the schema because it is
+     * `.strict()`, but authorized in the handler — a customer sending it is
+     * ignored, not obeyed.
+     */
+    confirmOutOfServiceArea: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) =>
+      !laundryLoadsMissing({
+        laundryType: data.laundryType,
+        laundryLoads: data.laundryLoads,
+      }),
+    { message: LAUNDRY_LOADS_REQUIRED_MESSAGE, path: ["laundryLoads"] }
+  );
 
 /**
  * Creates a property.
@@ -115,11 +137,23 @@ export async function POST(request: NextRequest) {
     customerId = auth.customerId;
   }
 
+  // Only an admin may push a property outside the service area, and only by
+  // confirming after an explicit refusal. Same reasoning as `customerId` above:
+  // the flag is read from the body but authorized here, so a customer who sends
+  // it gets the hard block anyway.
+  const allowOutOfServiceArea =
+    isAdmin && parsed.data.confirmOutOfServiceArea === true;
+
   try {
-    // Drop the body's customerId — `customerId` above is the authorised one.
+    // Drop the body's customerId — `customerId` above is the authorised one —
+    // and the override flag, which is not a property field.
     const fields = { ...parsed.data };
     delete fields.customerId;
-    const result = await createProperty({ ...fields, customerId });
+    delete fields.confirmOutOfServiceArea;
+    const result = await createProperty(
+      { ...fields, customerId },
+      { allowOutOfServiceArea }
+    );
 
     return NextResponse.json(
       {
@@ -139,8 +173,11 @@ export async function POST(request: NextRequest) {
     console.error("[POST /api/properties]", err);
     const message =
       err instanceof Error ? err.message : "Failed to create property";
+    // `code` lets the admin form offer "save anyway" on this specific refusal
+    // instead of pattern-matching the message text.
+    const code = serviceAreaErrorCode(err);
     return NextResponse.json(
-      { error: message },
+      { error: message, ...(code ? { code } : {}) },
       { status: message.includes("not found") ? 404 : 400 }
     );
   }
