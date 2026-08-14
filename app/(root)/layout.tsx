@@ -83,6 +83,12 @@ export default function Layout({
                 >
                   About Us
                 </Link>
+                <Link
+                  href="/privacy-policy"
+                  className="text-gray-600 hover:text-brand transition-colors duration-200 text-sm"
+                >
+                  Privacy Policy
+                </Link>
                 {/* Add more links here if needed, e.g., /services, /contact */}
               </nav>
             </div>
