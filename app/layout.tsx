@@ -9,6 +9,7 @@ import { SonnerToaster } from "@/components/SonnerToaster";
 export const metadata: Metadata = {
   title: APP_NAME,
   description: APP_DESCRIPTION,
+  manifest: "/site.webmanifest",
 };
 
 export default function RootLayout({
