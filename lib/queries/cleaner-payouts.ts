@@ -48,6 +48,7 @@ export async function getCleanerPayouts(cleanerId: string): Promise<{
       status: payouts.status,
       urgentBonusAmount: payouts.urgentBonusAmount,
       laundryBonusAmount: payouts.laundryBonusAmount,
+      lateDeductionAmount: payouts.lateDeductionAmount,
       createdAt: payouts.createdAt,
       jobCheckInTime: jobs.checkInTime,
       propertyAddress: properties.address,
@@ -72,6 +73,7 @@ export async function getCleanerPayouts(cleanerId: string): Promise<{
     const amount = parseFloat(row.amount);
     const urgentBonusAmount = parseFloat(row.urgentBonusAmount ?? "0");
     const laundryBonusAmount = parseFloat(row.laundryBonusAmount ?? "0");
+    const lateDeductionAmount = parseFloat(row.lateDeductionAmount ?? "0");
     const status = (row.status ?? "pending") as CleanerPayoutRow["status"];
 
     if (status === "released" && row.createdAt >= firstOfMonth) {
@@ -112,6 +114,12 @@ export async function getCleanerPayouts(cleanerId: string): Promise<{
         amount,
         urgentBonusAmount,
         laundryBonusAmount,
+        // Without this the base pay back-derives to the post-deduction amount,
+        // so a forfeited job reads as "0 hours" instead of showing the hours
+        // worked and the deduction that cancelled them.
+        latePenalty: lateDeductionAmount,
+        latePenaltyReason:
+          lateDeductionAmount > 0 ? "Late arrival deduction" : null,
       }),
     };
   });
