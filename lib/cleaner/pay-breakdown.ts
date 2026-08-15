@@ -15,33 +15,53 @@ export type PayBreakdownData = {
 };
 
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
 
 const BASE_RATE = CLEANER_HOURLY_RATE;
 
+/**
+ * Display breakdown for a job's pay, delegating every figure to
+ * `computeCleanerPay` — the same function that writes the `payouts` row.
+ *
+ * It must stay a delegation. This previously recomputed pay inline and took a
+ * `latePenalty` number that callers filled with `reliabilityEvents.penaltyPoints`,
+ * so reliability POINTS were subtracted as DOLLARS: a 2h job at 83 min late
+ * showed 34 − 25 = $9.00 against an actual payout of $0.00 (>=60 min forfeits
+ * base pay per spec §5/§8). Pass the lateness itself, not a penalty figure.
+ */
 export function buildPayBreakdown(input: {
   expectedHours: string | null;
   role: string;
   urgentBonus: boolean | null;
   laundryLoads?: number | null;
-  latePenalty?: number;
+  /** The cleaner's own rate; falls back to the standard rate when unset. */
+  hourlyRateCents?: number | null;
+  /** Minutes late on arrival — the deduction is derived from this, in dollars. */
+  arrivalDelayMinutes?: number | null;
   latePenaltyReason?: string | null;
 }): PayBreakdownData {
   const baseHours = parseFloat(input.expectedHours || "0");
-  const basePay = Math.round(baseHours * BASE_RATE * 100) / 100;
+
+  const pay = computeCleanerPay({
+    expectedHours: baseHours,
+    hourlyRateCents: input.hourlyRateCents,
+    role: input.role,
+    laundryLoads: input.laundryLoads,
+    urgentBonus: input.urgentBonus,
+    arrivalDelayMinutes: input.arrivalDelayMinutes,
+  });
+
   const urgentBonusEligible = input.urgentBonus ?? false;
-  const urgentBonus = urgentBonusEligible ? 10 : 0;
+  const urgentBonus = pay.urgentBonus ?? 0;
 
   const laundryLoads =
     input.role === "laundry_lead" ? (input.laundryLoads ?? 0) : 0;
-  const laundryBonus = laundryLoads * 5;
+  const laundryBonus = pay.laundryBonus ?? 0;
 
-  const latePenalty = input.latePenalty ?? 0;
+  const basePay = pay.basePay;
+  const latePenalty = pay.lateDeduction ?? 0;
   const latePenaltyReason = input.latePenaltyReason ?? null;
-
-  const total =
-    Math.round(
-      (basePay + urgentBonus + laundryBonus - latePenalty) * 100
-    ) / 100;
+  const total = pay.total;
 
   let role: CleanerJobRole = "primary";
   if (input.role === "laundry_lead") role = "laundryLead";
@@ -50,7 +70,7 @@ export function buildPayBreakdown(input: {
 
   return {
     baseHours,
-    baseRate: BASE_RATE,
+    baseRate: pay.hourlyRate,
     basePay,
     urgentBonus,
     laundryLoads,

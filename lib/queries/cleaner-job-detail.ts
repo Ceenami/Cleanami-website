@@ -107,6 +107,8 @@ export async function getCleanerJobDetail(
       eq(jobsToCleaners.jobId, jobId)
     ),
     with: {
+      // Pay is computed at the cleaner's own rate, not a flat default.
+      cleaner: { columns: { hourlyRateCents: true } },
       job: {
         with: {
           property: {
@@ -142,21 +144,25 @@ export async function getCleanerJobDetail(
     ),
   });
 
-  const latePenalty = lateEvent?.penaltyPoints
-    ? Math.min(lateEvent.penaltyPoints, 25)
-    : 0;
-
   const checklistFiles = await signChecklistFiles(property?.checklistFiles ?? []);
+
+  // The deduction is derived from the recorded lateness, in dollars — never
+  // from `lateEvent.penaltyPoints`, which is a reliability score in points and
+  // was previously subtracted from pay as if it were currency.
+  const arrivalDelayMinutes = job.evidencePacket?.arrivalDelayMinutes ?? null;
 
   const payBreakdown = buildPayBreakdown({
     expectedHours: job.expectedHours,
     role: assignment.role,
     urgentBonus: assignment.urgentBonus,
     laundryLoads: job.addonsSnapshot?.laundryLoads,
-    latePenalty,
+    hourlyRateCents: assignment.cleaner?.hourlyRateCents,
+    arrivalDelayMinutes,
     latePenaltyReason: lateEvent
       ? `${lateEvent.eventType.replace("_", " ")} (${lateEvent.notes ?? "reliability event"})`
-      : null,
+      : arrivalDelayMinutes && arrivalDelayMinutes > 0
+        ? `Arrived ${arrivalDelayMinutes} min late`
+        : null,
   });
 
   return {

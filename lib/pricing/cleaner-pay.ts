@@ -39,6 +39,8 @@ export type CleanerPayInput = {
 };
 
 export type CleanerPayResult = {
+  /** The rate actually used (dollars/hour) — the cleaner's own, or the fallback. */
+  hourlyRate: number;
   basePay: number;
   laundryBonus: number | null;
   urgentBonus: number | null;
@@ -68,6 +70,7 @@ export function computeCleanerPay(input: CleanerPayInput): CleanerPayResult {
     basePay - deduction + (laundryBonus ?? 0) + (urgentBonus ?? 0);
 
   return {
+    hourlyRate: rateCents / 100,
     basePay,
     laundryBonus,
     urgentBonus,
