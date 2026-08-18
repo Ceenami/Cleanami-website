@@ -20,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* Google Ads Conversion Tracking */}
+        {/* Google Analytics (GA4) + Google Ads conversion tracking */}
         <GoogleAnalytics />
       </head>
 
