@@ -332,6 +332,28 @@ export async function completeOnboardingForPayment(
         iCalUrl,
         defaultCheckInTime: validatedData.defaultCheckInTime,
         defaultCheckOutTime: validatedData.defaultCheckOutTime,
+        /**
+         * Counterproposal items 5, 6, 7 (M3). `petsAllowed` is a pricing input
+         * and the intent was created with it, so failing to persist it would
+         * make every later re-price of this property disagree with what the
+         * customer was charged.
+         *
+         * `entryInstructions` holds door codes. This row is the ONLY place it
+         * lives. It is not in the intent metadata above, and it
+         * must not reach an email, a notification, `jobs.notes` or
+         * `jobs.addons_snapshot`.
+         */
+        petsAllowed: validatedData.petsAllowed ?? false,
+        entryMethod: validatedData.entryMethod ?? null,
+        entryInstructions: validatedData.entryInstructions ?? null,
+        parkingInstructions: validatedData.parkingInstructions ?? null,
+        /**
+         * Hard-coded, never read from the form. This is the vacation-rental
+         * completion path; a form field that could re-label the property is a
+         * field an attacker can flip. Every insert path
+         * passes it explicitly".
+         */
+        serviceType: "vacation_rental_subscription",
       };
 
       if (coordinates) {

@@ -285,6 +285,18 @@ export async function createPaymentIntentForSignup(
     property_address: normalizedFormData.address ?? "N/A",
     property_details: `${normalizedFormData.bedrooms} bed, ${normalizedFormData.bathrooms} bath, ${normalizedFormData.sqft ?? "N/A"} sqft`,
     laundry_service: `${normalizedFormData.laundryService} (${normalizedFormData.laundryLoads ?? 0} loads)`,
+    // Item 7. This entry exists because the price now depends on it: the
+    // completion step reprices from the submitted form and compares against
+    // `paymentIntent.amount`, so a form that lost `petsAllowed` on the way back
+    // would differ by $10 and REJECT a booking the customer has already paid
+    // for. It is recorded here for traceability; the re-price reads the form.
+    //
+    // `entry_method`, `entry_instructions` and `parking_instructions` are
+    // deliberately NOT here. Stripe metadata is retrievable with the API key
+    // and visible in the dashboard, none of it affects the price, so there is
+    // nothing to re-verify and everything to leak.
+    pets_allowed: normalizedFormData.petsAllowed ? "yes" : "no",
+    service_type: "vacation_rental_subscription",
     hot_tub_service: (normalizedFormData.hasHotTub && "has hot tub") || "",
     hot_tub_drain: (normalizedFormData.hotTubDrain && "drain hot tub") || "",
     hotTub_drain_cadence: normalizedFormData.hotTubDrainCadence || "",

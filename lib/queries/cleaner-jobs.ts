@@ -40,6 +40,17 @@ export type CleanerJobSummary = {
   role: CleanerJobRole;
   urgentBonus: boolean;
   teammates: CleanerJobTeammate[];
+  /**
+   * 0035 — drives the Residential / Turnover badge on the job card.
+   *
+   * The badge is all this list gets. Entry method, access details and parking
+   * stay on the DETAIL view only: the list is every job a cleaner can
+   * see, and shipping a door code per card would put a set of credentials on a
+   * screen that exists to be scrolled past.
+   */
+  serviceType: string;
+  /** True when the property allows pets — the card shows the item 7 note. */
+  petsAllowed: boolean;
 };
 
 function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
@@ -98,6 +109,8 @@ export async function getCleanerUpcomingJobs(
       expectedHours: jobs.expectedHours,
       addonsSnapshot: jobs.addonsSnapshot,
       propertyAddress: properties.address,
+      serviceType: jobs.serviceType,
+      petsAllowed: properties.petsAllowed,
       role: jobsToCleaners.role,
       isTeamLeader: jobsToCleaners.isTeamLeader,
       urgentBonus: jobsToCleaners.urgentBonus,
@@ -175,6 +188,8 @@ export async function getCleanerUpcomingJobs(
     return {
       jobId: assignment.jobId,
       propertyAddress: assignment.propertyAddress,
+      serviceType: assignment.serviceType ?? "vacation_rental_subscription",
+      petsAllowed: assignment.petsAllowed ?? false,
       arrivalWindow: formatDateTime(checkInTime),
       mustFinishBefore: formatDateTime(assignment.checkOutTime),
       scheduledAt: checkInTime?.toISOString() ?? null,

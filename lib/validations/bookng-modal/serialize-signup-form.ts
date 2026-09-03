@@ -77,6 +77,20 @@ export function deserializeSignupFormDataFromServer(
  * positive load count; anything else stays undefined. Pricing already treats
  * undefined as zero loads (`pricing.service.ts` `_calculateLaundryCost`).
  */
+/**
+ * A boolean that may have arrived as a string. `Boolean("false")` is `true`,
+ * so the string cases have to be read rather than coerced. Anything unset is
+ * false, which is the safe default for a fee: never charge by accident.
+ */
+function toBooleanish(value: unknown): boolean {
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    return v === "true" || v === "1" || v === "yes" || v === "on";
+  }
+  if (typeof value === "number") return value !== 0;
+  return value === true;
+}
+
 export function normalizeSignupFormDataForPricing(
   data: SignupFormData
 ): SignupFormData {
@@ -92,6 +106,16 @@ export function normalizeSignupFormDataForPricing(
         ? laundryLoads
         : undefined,
     subscriptionMonths: Number(data.subscriptionMonths) || 1,
+    // NOT `Boolean(...)`. The trap is precisely this: a value that has been
+    // through JSON or a varchar column can arrive as the STRING "false", and
+    // `Boolean("false")` is `true` — which would bill a $10 pet fee on every
+    // clean of a property with no pets. `toBooleanish` reads the string.
+    //
+    // The sibling coercions below still use `Boolean(...)`. That is deliberate,
+    // not an oversight: they read from columns that are real `boolean`s today
+    // (verified against the live catalog), and changing their semantics could
+    // move an existing vacation-rental price, which invariant #2 forbids.
+    petsAllowed: toBooleanish(data.petsAllowed),
     hasHotTub: Boolean(data.hasHotTub),
     hotTubService: Boolean(data.hotTubService),
     hotTubDrain: Boolean(data.hotTubDrain),

@@ -257,6 +257,10 @@ import {
   DASHBOARD_PAST_DAYS,
   getDashboardJobDateRange,
 } from "@/lib/queries/dashboard-job-window";
+import {
+  SERVICE_TYPE_LABELS,
+  type ServiceType,
+} from "@/lib/constants/service-type";
 
 interface AssignedCleaner {
   id: string;
@@ -269,7 +273,23 @@ interface JobRecord {
   assignedCleaners: AssignedCleaner[];
   status: string;
   checkInTime?: string | null;
+  /** 0035. Older rows all default to the vacation-rental literal. */
+  serviceType?: ServiceType | null;
 }
+
+/** the admin job list is filterable by service type. */
+type ServiceTypeFilter = ServiceType | "all";
+
+const SERVICE_TYPE_BADGE: Record<ServiceType, string> = {
+  vacation_rental_subscription: "bg-sky-100 text-sky-800",
+  residential_one_time: "bg-violet-100 text-violet-800",
+};
+
+/** Short enough for a table cell; the full label is the select's wording. */
+const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
+  vacation_rental_subscription: "Vacation Rental",
+  residential_one_time: "Residential",
+};
 
 interface GetJobsResponse {
   data: JobRecord[];
@@ -280,14 +300,19 @@ type JobStatus = "all" | "unassigned" | "assigned" | "in-progress" | "completed"
 
 
 
+type JobsQueryKey = readonly [
+  string,
+  { status: JobStatus; query: string; serviceType: ServiceTypeFilter },
+];
+
 type FetchJobsContext = {
   pageParam?: number;
-  queryKey: readonly [string, { status: JobStatus; query: string }];
+  queryKey: JobsQueryKey;
 };
 
 async function fetchJobs(context: FetchJobsContext) {
   const { pageParam = 1, queryKey } = context;
-  const { status, query } = queryKey[1] as { status: JobStatus; query: string };
+  const { status, query, serviceType } = queryKey[1];
   const { startDate, endDate } = getDashboardJobDateRange();
   const params = new URLSearchParams({
     page: String(pageParam),
@@ -299,6 +324,10 @@ async function fetchJobs(context: FetchJobsContext) {
 
   if (status !== "all") {
     params.append("status", status);
+  }
+
+  if (serviceType !== "all") {
+    params.append("serviceType", serviceType);
   }
 
   if (query.trim()) {
@@ -317,10 +346,20 @@ export const JobListView = () => {
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<JobStatus>("all");
+  const [serviceTypeFilter, setServiceTypeFilter] =
+    useState<ServiceTypeFilter>("all");
 
   const queryKey = useMemo(
-    () => ["jobs", { status: statusFilter, query: searchTerm }] as const,
-    [statusFilter, searchTerm]
+    () =>
+      [
+        "jobs",
+        {
+          status: statusFilter,
+          query: searchTerm,
+          serviceType: serviceTypeFilter,
+        },
+      ] as const,
+    [statusFilter, searchTerm, serviceTypeFilter]
   );
 
   const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInfiniteQuery({
@@ -365,6 +404,23 @@ export const JobListView = () => {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <SearchBar onSearch={setSearchTerm} placeholder="Search by job ID, address, or cleaner..." />
           <select
+            aria-label="Service type"
+            value={serviceTypeFilter}
+            onChange={(event) =>
+              setServiceTypeFilter(event.target.value as ServiceTypeFilter)
+            }
+            className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
+          >
+            <option value="all">All service types</option>
+            <option value="vacation_rental_subscription">
+              {SERVICE_TYPE_LABELS.vacation_rental_subscription}
+            </option>
+            <option value="residential_one_time">
+              {SERVICE_TYPE_LABELS.residential_one_time}
+            </option>
+          </select>
+          <select
+            aria-label="Status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as JobStatus)}
             className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
@@ -386,6 +442,7 @@ export const JobListView = () => {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Property</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cleaner</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Check-In</th>
@@ -395,21 +452,36 @@ export const JobListView = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {status === "pending" ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-6 text-center text-gray-500">Loading jobs...</td>
+                  <td colSpan={7} className="px-6 py-6 text-center text-gray-500">Loading jobs...</td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-6 text-center text-red-500">Error loading jobs.</td>
+                  <td colSpan={7} className="px-6 py-6 text-center text-red-500">Error loading jobs.</td>
                 </tr>
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-6 text-center text-gray-500">No jobs found.</td>
+                  <td colSpan={7} className="px-6 py-6 text-center text-gray-500">No jobs found.</td>
                 </tr>
               ) : (
                 jobs.map((job) => (
                   <tr key={job.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{job.id}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{job.property?.address ?? "Unknown"}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                          SERVICE_TYPE_BADGE[
+                            job.serviceType ?? "vacation_rental_subscription"
+                          ]
+                        }`}
+                      >
+                        {
+                          SERVICE_TYPE_SHORT[
+                            job.serviceType ?? "vacation_rental_subscription"
+                          ]
+                        }
+                      </span>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}
                     </td>

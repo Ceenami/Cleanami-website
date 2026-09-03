@@ -27,6 +27,17 @@ export const CUSTOM_QUOTE_BOOKING_MESSAGE = `${CUSTOM_QUOTE_EXPLANATION} ${CUSTO
 export const CUSTOM_QUOTE_EXISTING_PROPERTY_MESSAGE = `${CUSTOM_QUOTE_EXPLANATION} ${CUSTOM_QUOTE_EXISTING_PROPERTY_CTA}`;
 
 /**
+ * Residential one-time flow. Same explanation, different call to action: a
+ * homeowner booking a single clean has no subscription to continue into, so
+ * "continue and we will contact you" would be a promise with nothing behind
+ * it. Points at support, like the existing-property case.
+ */
+export const CUSTOM_QUOTE_RESIDENTIAL_CTA =
+  "Please contact CleanNami support and we will quote this home for you.";
+
+export const CUSTOM_QUOTE_RESIDENTIAL_MESSAGE = `${CUSTOM_QUOTE_EXPLANATION} ${CUSTOM_QUOTE_RESIDENTIAL_CTA}`;
+
+/**
  * Shown when a property has laundry service but no load count, which makes its
  * price wrong rather than merely unknown. Deliberately does not ask the
  * customer to supply the number — property details are maintained by CleanNami.

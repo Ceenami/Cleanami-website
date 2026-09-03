@@ -53,7 +53,13 @@ export default async function Page({ params }: PageProps) {
       queryKey={['job-details', id]}
       queryFn={() => getJobDetails(id)}
     >
-      <JobDetailsClient jobId={id} isAdmin={isAdmin} />
+      <JobDetailsClient
+        jobId={id}
+        isAdmin={isAdmin}
+        // Resolved from `users.role` on the server; the route re-checks it
+        // for real. This only decides whether the override affordance renders.
+        isSuperAdmin={userRole === 'super_admin'}
+      />
     </PrefetchedPage>
   );
 }

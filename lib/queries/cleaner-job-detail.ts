@@ -20,6 +20,8 @@ import {
 import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
+import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { getEntryMethod } from "@/lib/constants/service-type";
 
 function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
   if (role === "laundry_lead") return "laundryLead";
@@ -86,6 +88,49 @@ export type CleanerJobDetail = {
   propertyAddress: string | null;
   arrivalWindow: string | null;
   mustFinishBefore: string | null;
+  /**
+   * Drives the pet note on the cleaner's job detail.
+   *
+   * Read live from the property, not from addons_snapshot.petsAllowed. The
+   * snapshot is a pricing freeze and is the right source for what the customer
+   * was billed; this is a warning about what the cleaner will walk into, so
+   * current truth is what matters. They only diverge when an admin edits the
+   * property after the job was created — exactly the case worth telling them.
+   */
+  petsAllowed: boolean;
+  /** 0035. Drives the badge and every label below. */
+  serviceType: string;
+  /**
+   * The mistake this exists to prevent: on a residential clean check_out_time is
+   * the finish deadline (window end plus expected hours), so rendering it as the
+   * end of the arrival window would tell a cleaner to finish a three-hour clean
+   * inside a two-hour slot. The window's real bounds live only in the snapshot
+   * key, which is what this resolves.
+   *
+   * Null on a vacation-rental job, which has a guest check-out time instead.
+   */
+  arrivalWindowLabel: string | null;
+  /**
+   * Entry method, access details, parking — credentials.
+   *
+   * Safe here and only here: this query is assignment-scoped, selecting through
+   * jobsToCleaners on both cleanerId and jobId, so a cleaner who is not on this
+   * job gets null for the whole detail. They are deliberately absent from
+   * cleaner-jobs.ts — the job LIST must not carry a door code for every job a
+   * cleaner can see.
+   *
+   * Read live from the property, never from addons_snapshot.
+   */
+  entryMethod: string | null;
+  entryMethodLabel: string | null;
+  entryInstructions: string | null;
+  parkingInstructions: string | null;
+  /**
+   * The customer's own notes. Rendered SEPARATELY from the access details —
+   * item 13 lists them separately, and a note about the dog is not a note about
+   * the gate code.
+   */
+  customerNotes: string | null;
   role: CleanerJobRole;
   urgentBonus: boolean;
   teammates: { name: string }[];
@@ -172,6 +217,18 @@ export async function getCleanerJobDetail(
     propertyAddress: property?.address ?? null,
     arrivalWindow: formatDateTime(job.checkInTime),
     mustFinishBefore: formatDateTime(job.checkOutTime),
+    petsAllowed: property?.petsAllowed ?? false,
+    serviceType: job.serviceType ?? "vacation_rental_subscription",
+    arrivalWindowLabel:
+      job.serviceType === "residential_one_time"
+        ? getArrivalWindow(job.addonsSnapshot?.arrivalWindow ?? undefined)
+            ?.label ?? null
+        : null,
+    entryMethod: property?.entryMethod ?? null,
+    entryMethodLabel: getEntryMethod(property?.entryMethod)?.label ?? null,
+    entryInstructions: property?.entryInstructions ?? null,
+    parkingInstructions: property?.parkingInstructions ?? null,
+    customerNotes: property?.specialInstructions ?? null,
     role: mapRole(assignment.role, assignment.isTeamLeader),
     urgentBonus: assignment.urgentBonus ?? false,
     teammates: teammateRows

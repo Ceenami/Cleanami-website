@@ -12,11 +12,27 @@ interface Props {
    * could otherwise read the old price and continue before it caught up.
    */
   isRecalculating?: boolean;
+  /**
+   * Heading over the breakdown. "Price per Clean" is right for a subscription;
+   * a one-time residential clean wants "Your Price". Lifted into a prop rather
+   * than forking the component, per M3.
+   */
+  title?: string;
+  /**
+   * The custom-quote call to action differs by flow: a new vacation-rental
+   * signup has a booking to continue into and we follow up with pricing, while
+   * a homeowner booking a single clean has nothing to continue to and is
+   * pointed at support instead. Both strings live in
+   * `lib/pricing/custom-quote-message.ts`; only the choice is made here.
+   */
+  customQuoteMessage?: string;
 }
 
 export const PriceSummary = ({
   priceDetails,
   isRecalculating = false,
+  title = "Price per Clean",
+  customQuoteMessage = CUSTOM_QUOTE_BOOKING_MESSAGE,
 }: Props) => {
   // Only a genuinely absent quote shows the placeholder. `basePrice === 0` must
   // NOT be used as that signal: the form starts at 2 bed / 1 bath, so a price is
@@ -55,9 +71,7 @@ export const PriceSummary = ({
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 h-full flex flex-col items-center justify-center text-center">
         <AlertTriangle className="h-10 w-10 text-yellow-500 mb-4" />
         <h4 className="font-semibold text-yellow-800">Custom Quote Required</h4>
-        <p className="text-sm text-yellow-700 mt-1">
-          {CUSTOM_QUOTE_BOOKING_MESSAGE}
-        </p>
+        <p className="text-sm text-yellow-700 mt-1">{customQuoteMessage}</p>
       </div>
     );
   }
@@ -81,7 +95,7 @@ export const PriceSummary = ({
   return (
     <div className="bg-gray-50 rounded-lg p-6 h-full">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h3 className="font-semibold text-lg text-gray-800">Price per Clean</h3>
+        <h3 className="font-semibold text-lg text-gray-800">{title}</h3>
         {isRecalculating && (
           <span
             className="flex items-center gap-1.5 text-xs font-medium text-gray-500"
@@ -123,6 +137,12 @@ export const PriceSummary = ({
           <PriceRow
             label="Hot Tub Service"
             value={`$${priceDetails.hotTubCost.toFixed(2)}`}
+          />
+        )}
+        {priceDetails.petFee > 0 && (
+          <PriceRow
+            label="Pet Fee"
+            value={`$${priceDetails.petFee.toFixed(2)}`}
           />
         )}
         {priceDetails.discountAmount > 0 && (

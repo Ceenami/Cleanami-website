@@ -1,10 +1,12 @@
 import { BadgeDollarSignIcon, CalendarPlusIcon, ClipboardListIcon, CreditCardIcon, House, LayoutDashboard, LocateFixed, MailIcon, PackageIcon, Shield, TicketPercentIcon, UserIcon, UsersIcon } from "lucide-react";
 
 export const Logo = "https://ymccorozcd.ufs.sh/f/CFfiFeS2XelzZy5o0ZubBmJY75j80sif9WEVdIAGnpCtTSqr"
-export const APP_NAME =
-  "CleanNami - Airbnb & Vacation Rental Cleaning Services | Florida Coast";
-export const APP_DESCRIPTION =
-  "Premium **vacation rental cleaning** and residential services across Florida's coast. Specializing in efficient **same-day turnovers** and reliable **Airbnb cleaning** in New Smyrna Beach, Daytona Beach, and Edgewater.";
+/**
+ * The `<title>` and meta description. Defined in `./app` (a plain .ts module)
+ * and re-exported here so existing `@/lib/constants` imports are unaffected.
+ * Server and non-JSX callers should import from `@/lib/constants/app` directly.
+ */
+export { APP_NAME, APP_DESCRIPTION } from "./app";
 
 export const PUBLIC_NAV_ROUTES = [{ route: "/", title: "home" },
   { route: "/about", title: "about" }
@@ -18,8 +20,12 @@ export const SERVER_URL =
  * Customer-facing support address. Property details are maintained by CleanNami
  * rather than edited by customers (Remaining Tasks Phase 5), so this is the
  * route a customer takes to get a property changed.
+ *
+ * Defined in `./contact` (a plain .ts module) and re-exported here so existing
+ * `@/lib/constants` imports are unaffected. Server modules should import it
+ * from `@/lib/constants/contact` directly — this file is TSX and carries React.
  */
-export const SUPPORT_EMAIL = "cleannami@ceenami.com";
+export { SUPPORT_EMAIL } from "./contact";
 
 export const PRIVATE_ADMIN_NAV_ROUTES = [
   {

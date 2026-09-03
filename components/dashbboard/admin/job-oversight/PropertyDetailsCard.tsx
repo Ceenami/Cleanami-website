@@ -1,8 +1,25 @@
 'use client';
 
 import type { JobDetails } from '@/lib/queries/jobs';
+import { AccessDetailsPanel } from '../AccessDetailsPanel';
 
-export function PropertyDetailsCard({ property }: { property: JobDetails['property'] }) {
+export function PropertyDetailsCard({
+  property,
+  /**
+   * Counterproposal items 6 and 12 put entry, access and parking on the admin
+   * job view. They are admin-and-assigned-cleaner only, and this card is
+   * rendered by `JobDetailsClient`, which serves the **customer portal** off the
+   * same component — so the panel is gated here, at the call site, and
+   * defaults to hidden. A customer seeing their own door code would be
+   * harmless; the gate exists because the next person to reuse this card will
+   * not re-derive that, and defaulting to shown is how a credential ends up on
+   * a page nobody audited.
+   */
+  showAccessDetails = false,
+}: {
+  property: JobDetails['property'];
+  showAccessDetails?: boolean;
+}) {
   if (!property) {
     return (
       <div className="bg-white p-6 rounded-lg shadow-md">
@@ -48,6 +65,20 @@ export function PropertyDetailsCard({ property }: { property: JobDetails['proper
           </span>
         </div>
       </div>
+
+      {showAccessDetails && (
+        <div className="mt-4 pt-4 border-t">
+          <p className="mb-2 text-xs font-medium text-gray-500">
+            Access &amp; entry
+          </p>
+          <AccessDetailsPanel
+            entryMethod={property.entryMethod}
+            entryInstructions={property.entryInstructions}
+            parkingInstructions={property.parkingInstructions}
+            petsAllowed={property.petsAllowed}
+          />
+        </div>
+      )}
 
       {property.customer && (
         <div className="mt-4 pt-4 border-t">

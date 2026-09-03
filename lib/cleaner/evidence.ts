@@ -1,5 +1,8 @@
 import type { Property } from "@/db/schemas/properties.schema";
-import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
+import {
+  DEFAULT_CHECKLIST_ITEMS,
+  RESIDENTIAL_DEFAULT_CHECKLIST_ITEMS,
+} from "@/lib/constants/default-checklist";
 import type { ChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 export type RoomPhotoRequirement = {
@@ -44,7 +47,7 @@ export function getRoomPhotoRequirements(property: {
     minPhotos: 1,
   });
 
-  // Spec §14.1: 1 photo per room — bedroom, kitchen, living area, hallway. Bed
+  // One photo per room — bedroom, kitchen, living area, hallway. Bed
   // rooms are counted above; a property always has one kitchen and one hallway
   // for evidence purposes (the schema does not track their counts).
   requirements.push({
@@ -67,7 +70,7 @@ export function getRoomPhotoRequirements(property: {
     });
   }
 
-  // Off-site laundry needs proof it was actually done (spec §14.1): a single
+  // Off-site laundry needs proof it was actually done : a single
   // receipt or machine-in-use photo. In-unit / no laundry needs nothing extra.
   if (property.laundryType === "off_site") {
     requirements.push({
@@ -189,7 +192,7 @@ export function flattenRoomPhotos(roomPhotos: RoomPhotosMap): string[] {
 export type ExpectedChecklistItem = { id: string; task: string; section?: string };
 
 /**
- * Spec §14.1/§14.2: a property with its own uploaded checklist
+ * A property with its own uploaded checklist
  * (`useDefaultChecklist = false`) must have the cleaner review and check off
  * that specific checklist, not the generic system default. `checklist_files`
  * stores documents (PDF/photo), not structured line items, so each uploaded
@@ -198,16 +201,38 @@ export type ExpectedChecklistItem = { id: string; task: string; section?: string
  * uploaded yet (fail open — an admin oversight shouldn't block a job).
  */
 export function getExpectedChecklistItems(
-  property: Pick<Property, "useDefaultChecklist">,
+  property: Pick<Property, "useDefaultChecklist"> & {
+    /**
+     * 0035. Optional so the ~half-dozen existing call sites keep compiling and
+     * keep behaving exactly as before — an omitted service type is a
+     * vacation-rental turnover, which is what every property was until 0035.
+     */
+    serviceType?: string | null;
+  },
   checklistFiles: { id: string; fileName: string }[]
 ): ExpectedChecklistItem[] {
+  // Unchanged, and it comes FIRST on purpose: a residential customer who
+  // uploaded their own checklist gets their own checklist, exactly as a rental
+  // owner does. The service-type branch below only chooses which *default*
+  // applies.
   if (!property.useDefaultChecklist && checklistFiles.length > 0) {
     return checklistFiles.map((file) => ({
       id: file.id,
       task: `Reviewed & completed: ${file.fileName}`,
     }));
   }
-  return DEFAULT_CHECKLIST_ITEMS.map(({ id, task, section }) => ({ id, task, section }));
+  // Item 18. Four of the turnover items are wrong in a lived-in home — see
+  // `RESIDENTIAL_DEFAULT_CHECKLIST_ITEMS` for which, and why the ids differ.
+  //
+  // The fail-open behaviour above is deliberately preserved: a property that
+  // opted out of the default but uploaded nothing still gets a default rather
+  // than an empty checklist, so an admin oversight cannot block a job.
+  const items =
+    property.serviceType === "residential_one_time"
+      ? RESIDENTIAL_DEFAULT_CHECKLIST_ITEMS
+      : DEFAULT_CHECKLIST_ITEMS;
+
+  return items.map(({ id, task, section }) => ({ id, task, section }));
 }
 
 export function getExpectedChecklistItemsFromSnapshot(snapshot: ChecklistSnapshot): ExpectedChecklistItem[] {

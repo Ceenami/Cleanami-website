@@ -60,7 +60,8 @@ export default function PrivacyPolicyPage() {
         <p className="text-gray-700 leading-relaxed mb-10">
           CleanNami (&ldquo;CleanNami,&rdquo; &ldquo;we,&rdquo;
           &ldquo;us,&rdquo; or &ldquo;our&rdquo;) provides vacation rental
-          turnover cleaning services, including the CleanNami website,
+          turnover cleaning and one-time residential cleaning services,
+          including the CleanNami website,
           customer portal, cleaner portal, and mobile application
           (collectively, the &ldquo;Services&rdquo;). This Privacy Policy
           explains how we collect, use, disclose, and protect information
@@ -148,7 +149,7 @@ export default function PrivacyPolicyPage() {
               "Provide, operate, maintain, and improve the CleanNami Services.",
               "Create customer accounts, cleaner accounts, jobs, assignments, checklists, calendar syncs, invoices, and payouts.",
               "Calculate pricing, expected cleaning time, team size, cleaner pay, labor cost, and job profitability.",
-              "Schedule vacation rental turnover cleans based on customer calendars and cleaner availability.",
+              "Schedule vacation rental turnover cleans based on customer calendars and cleaner availability, and one-time residential cleans based on the date and arrival window a customer selects.",
               "Verify cleaner arrival, departure, location, completion, proof-of-work, and job accountability.",
               "Send operational messages such as booking confirmations, subscription confirmations, job assignments, reminders, cancellation notices, failed payment notices, issue updates, and support messages.",
               "Review completed work, resolve customer issues, handle disputes, approve payouts, and maintain audit records.",

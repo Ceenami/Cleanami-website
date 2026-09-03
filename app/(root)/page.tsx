@@ -19,11 +19,17 @@ export default function Home() {
         <section className="py-20 bg-gray-50">
           <div className="container mx-auto px-4 text-center">
             <h2 className="text-4xl md:text-6xl font-bold mb-4 text-brand/80">
-              Turnovers on Autopilot
+              Three Steps, Either Way
             </h2>
+            {/* Reframed rather than branched. The old version's middle step was
+                "Sync Your Calendar", which is meaningless to a homeowner — and
+                branching the whole section per service would have meant two
+                versions of the page to keep in step for the sake of one word.
+                The three steps below fit both services as written. */}
             <p className="text-lg text-gray-600 max-w-2xl mx-auto mb-12">
-              Our process is designed for complete peace of mind in just three
-              simple steps. Once set up, every checkout is handled automatically — no need for manual scheduling or follow-ups.
+              Whether you rent your place out or live in it, the process is the
+              same: tell us about the property, pick your schedule, and let a
+              vetted cleaner take it from there.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
               <div className="flex flex-col items-center">
@@ -43,11 +49,12 @@ export default function Home() {
                   <LinkIcon className="h-10 w-10 text-white" />
                 </div>
                 <h3 className="text-xl font-bold mb-2">
-                  2. Sync Your Calendar
+                  2. Pick Your Schedule
                 </h3>
                 <p className="text-gray-600">
-                  Connect your Airbnb, VRBO, or iCal link. We automatically
-                  detect guest check-outs and schedule your turnovers.
+                  Renting it out? Connect your Airbnb, VRBO or iCal link and we
+                  schedule a turnover after every guest, automatically. Cleaning
+                  your own home? Just choose a date and an arrival window.
                 </p>
               </div>
               <div className="flex flex-col items-center">
@@ -58,8 +65,9 @@ export default function Home() {
                   3. Enjoy 5-Star Reliability
                 </h3>
                 <p className="text-gray-600">
-                  Our GPS-tracked, performance-managed cleaners ensure every
-                  turnover is perfect, on-time, and ready for your next guest.
+                  Our GPS-tracked, performance-managed cleaners show up on time
+                  and finish to your checklist — every turnover guest-ready,
+                  every home clean when you walk back in.
                 </p>
               </div>
             </div>
@@ -108,7 +116,7 @@ export default function Home() {
         <FAQSection />
 
 
-        <CTA title="Ready for Effortless Turnovers?" message="Get your no-obligation quote today." messageStyle="text-brand/60" titleStyle="text-brand/60"/>
+        <CTA title="Ready for an Effortless Clean?" message="Get your no-obligation quote today — turnover or one-time." messageStyle="text-brand/60" titleStyle="text-brand/60"/>
       </main>
     </>
   );

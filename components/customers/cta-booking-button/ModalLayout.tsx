@@ -11,6 +11,9 @@ interface Props {
   showPriceSummary: boolean;
   priceDetails: PriceDetails | null;
   isPriceRecalculating?: boolean;
+  /** Passed straight through to `PriceSummary`; see its props for why. */
+  priceSummaryTitle?: string;
+  priceSummaryCustomQuoteMessage?: string;
 }
 
 export const ModalLayout = ({
@@ -21,6 +24,8 @@ export const ModalLayout = ({
   showPriceSummary,
   priceDetails,
   isPriceRecalculating = false,
+  priceSummaryTitle,
+  priceSummaryCustomQuoteMessage,
 }: Props) => {
   if (!isOpen) return null;
 
@@ -54,6 +59,8 @@ export const ModalLayout = ({
                 <PriceSummary
                   priceDetails={priceDetails}
                   isRecalculating={isPriceRecalculating}
+                  title={priceSummaryTitle}
+                  customQuoteMessage={priceSummaryCustomQuoteMessage}
                 />
               </div>
             )}

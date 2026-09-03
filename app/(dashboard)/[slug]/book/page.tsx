@@ -34,6 +34,9 @@ export default async function BookOneOffPage() {
       hotTubService: p.hotTubServiceLevel,
       hotTubDrain: p.hotTubDrain,
       hotTubDrainCadence: p.hotTubDrainCadence,
+      // must match what `priceOneOffCents` will actually charge, or
+      // the customer is quoted one number and billed another.
+      petsAllowed: p.petsAllowed,
       subscriptionMonths: 1,
       priceOverrideCents: p.priceOverrideCents,
     } as any);

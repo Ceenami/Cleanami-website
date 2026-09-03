@@ -7,6 +7,10 @@ import { ArrowLeft, ClipboardCheck, Loader } from "lucide-react";
 import { PayBreakdown } from "@/components/cleaner/PayBreakdown";
 import { RestockRequestCard } from "@/components/cleaner/RestockRequestCard";
 import type { CleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
+import {
+  PETS_CLEANER_NOTE,
+  type ServiceType,
+} from "@/lib/constants/service-type";
 import { cn } from "@/lib/utils";
 
 const roleLabels: Record<CleanerJobDetail["role"], { label: string; className: string }> = {
@@ -14,6 +18,34 @@ const roleLabels: Record<CleanerJobDetail["role"], { label: string; className: s
   laundryLead: { label: "Laundry Lead", className: "bg-amber-100 text-amber-900" },
   primary: { label: "Primary", className: "bg-slate-100 text-slate-700" },
   backup: { label: "Backup", className: "bg-slate-100 text-slate-600" },
+};
+
+const SERVICE_TYPE_BADGE: Record<ServiceType, string> = {
+  vacation_rental_subscription: "bg-sky-100 text-sky-800",
+  residential_one_time: "bg-violet-100 text-violet-800",
+};
+
+/** Short enough for a badge; the long form is the customer-facing label. */
+const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
+  vacation_rental_subscription: "Turnover",
+  residential_one_time: "Residential",
+};
+
+/**
+ * The two timestamps mean the same two things for both service types —
+ * *arrive no earlier than this* and *be finished by this* — but they are named
+ * for the vacation-rental case, and reading a residential job through
+ * vacation-rental words is how the mapping gets implemented backwards.
+ */
+const TIME_LABELS: Record<ServiceType, { arrive: string; finish: string }> = {
+  vacation_rental_subscription: {
+    arrive: "Guest check-out",
+    finish: "Must finish before",
+  },
+  residential_one_time: {
+    arrive: "Arrival window",
+    finish: "Must finish before",
+  },
 };
 
 const statusLabels: Record<string, string> = {
@@ -132,6 +164,13 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
   }
 
   const role = roleLabels[job.role];
+  const serviceType = (job.serviceType as ServiceType) in SERVICE_TYPE_BADGE
+    ? (job.serviceType as ServiceType)
+    : "vacation_rental_subscription";
+  const labels = TIME_LABELS[serviceType];
+  const hasAccessInfo = Boolean(
+    job.entryMethodLabel || job.entryInstructions || job.parkingInstructions
+  );
   const canCheckIn = job.status === "assigned";
   const canCheckOut =
     job.status === "in-progress" && job.evidence.hasSubmitted;
@@ -160,14 +199,24 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
             <h1 className="text-lg font-bold text-gray-900">
               {job.propertyAddress ?? "Address pending"}
             </h1>
-            <span
-              className={cn(
-                "mt-1 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                role.className
-              )}
-            >
-              {role.label}
-            </span>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span
+                className={cn(
+                  "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                  SERVICE_TYPE_BADGE[serviceType]
+                )}
+              >
+                {SERVICE_TYPE_SHORT[serviceType]}
+              </span>
+              <span
+                className={cn(
+                  "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                  role.className
+                )}
+              >
+                {role.label}
+              </span>
+            </div>
           </div>
           {job.urgentBonus && (
             <span className="shrink-0 rounded-full bg-orange-500 px-2.5 py-1 text-xs font-bold text-white">
@@ -182,13 +231,28 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
 
         <dl className="space-y-2 text-sm text-gray-600">
           <div className="flex justify-between gap-4">
-            <dt className="font-medium text-gray-500">Arrival window</dt>
+            <dt className="font-medium text-gray-500">{labels.arrive}</dt>
             <dd className="text-right text-gray-900">
-              {job.arrivalWindow ?? "TBD"}
+              {/* The specific mistake this exists to prevent: the end of
+                  a residential arrival window is NOT `check_out_time`. That is
+                  the finish deadline — the window end plus the expected hours —
+                  so the bounds come from the snapshot's window key instead.
+                  `arrivalWindowLabel` is null for a turnover, which has a guest
+                  check-out time rather than a window. */}
+              {job.arrivalWindowLabel ? (
+                <>
+                  {job.arrivalWindowLabel}
+                  <span className="block text-xs text-gray-500">
+                    {job.arrivalWindow}
+                  </span>
+                </>
+              ) : (
+                job.arrivalWindow ?? "TBD"
+              )}
             </dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="font-medium text-gray-500">Must finish before</dt>
+            <dt className="font-medium text-gray-500">{labels.finish}</dt>
             <dd className="text-right text-gray-900">
               {job.mustFinishBefore ?? "TBD"}
             </dd>
@@ -202,7 +266,88 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
             </div>
           )}
         </dl>
+
+        {/* Counterproposal item 7, the client's exact string, from the one
+            shared constant the admin view also renders. */}
+        {job.petsAllowed && (
+          <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            🐾 {PETS_CLEANER_NOTE}
+          </p>
+        )}
       </div>
+
+      {/*
+        Item 13 — "door/lockbox/gate/garage code where applicable". This is the
+        whole point of collecting access details: a cleaner who cannot get in
+        cannot clean.
+
+        Safe here, and ONLY here, because `getCleanerJobDetail` is
+        assignment-scoped on both cleanerId and jobId — a cleaner who is not on
+        this job never receives these fields at all. They are deliberately
+        absent from the job LIST for the same reason.
+      */}
+      {hasAccessInfo && (
+        <div className="rounded-xl border bg-white p-4 shadow-sm">
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">
+            Getting in
+          </h3>
+          <dl className="space-y-2 text-sm">
+            {job.entryMethodLabel && (
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Entry method
+                </dt>
+                <dd className="text-gray-900">{job.entryMethodLabel}</dd>
+              </div>
+            )}
+            {job.entryInstructions && (
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Access details
+                </dt>
+                {/* Codes are typed with meaningful line breaks ("Gate 4821,
+                    then lockbox 0917"); `whitespace-pre-wrap` keeps them and
+                    `break-words` stops a long code widening the card. */}
+                <dd className="whitespace-pre-wrap break-words font-medium text-gray-900">
+                  {job.entryInstructions}
+                </dd>
+                <p className="mt-1 text-xs text-amber-700">
+                  Confidential — for this clean only. Do not share or write it
+                  down anywhere else.
+                </p>
+              </div>
+            )}
+            {job.parkingInstructions && (
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Parking
+                </dt>
+                <dd className="whitespace-pre-wrap break-words text-gray-900">
+                  {job.parkingInstructions}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
+
+      {/*
+        Rendered as its own card, not inside "Getting in". Item 13 lists the
+        customer's notes separately from the access instructions, and it is
+        right to: a note about the dog is not a note about the gate code, and
+        burying one in the other is how a cleaner misses whichever they were not
+        looking for.
+      */}
+      {job.customerNotes && (
+        <div className="rounded-xl border bg-white p-4 shadow-sm">
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">
+            Notes from the customer
+          </h3>
+          <p className="whitespace-pre-wrap break-words text-sm text-gray-700">
+            {job.customerNotes}
+          </p>
+        </div>
+      )}
 
       <PayBreakdown payout={job.payBreakdown} />
 

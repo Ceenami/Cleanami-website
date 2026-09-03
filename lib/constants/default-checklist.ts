@@ -1,6 +1,14 @@
 export type ChecklistItem = { id: string; task: string; completed: boolean; section?: string };
 
-/** CleanNami Basic Turnover Checklist, supplied by the client on 2026-09-18. */
+/**
+ * The vacation-rental turnover checklist. **Unchanged** — a residential job
+ * gets `RESIDENTIAL_DEFAULT_CHECKLIST_ITEMS` below instead.
+ *
+ * Item 18 asked where this lives and whether admin can edit it. The answers are
+ * "here, in code" and "no": it is a constant, deployed with the app, and there
+ * is no admin editor for it. A property that wants its own uploads one
+ * (`checklist_files`), which is a different and already-supported path.
+ */
 export const DEFAULT_CHECKLIST_ITEMS: ChecklistItem[] = [
   { id: "t1", section: "Section 1 - Arrival / Before Photos", task: "Check in through the app/website.", completed: false },
   { id: "t2", section: "Section 1 - Arrival / Before Photos", task: "Review property notes, access instructions, laundry instructions, hot tub instructions, and any customer-uploaded checklist.", completed: false },
@@ -51,4 +59,37 @@ export const DEFAULT_CHECKLIST_ITEMS: ChecklistItem[] = [
   { id: "t47", section: "Section 10 - Final Walkthrough", task: "Confirm no obvious guest belongings were left behind.", completed: false },
   { id: "t48", section: "Section 10 - Final Walkthrough", task: "Upload final after photos.", completed: false },
   { id: "t49", section: "Section 10 - Final Walkthrough", task: "Check out through the app/website.", completed: false },
+];
+
+/**
+ * The one-time residential checklist — counterproposal item 18.
+ *
+ * Four of the nine turnover items are wrong in a home somebody lives in, and
+ * wrong in a way a cleaner would have to ignore rather than complete:
+ *
+ * - *"Make all beds with fresh linens"* — a resident's linens are not ours to
+ *   change, and stripping their bed is worse than not touching it.
+ * - *"Stage living room pillows and throws per property guide"* — there is no
+ *   property guide, and a home is not staged for arrival.
+ * - *"Restock toiletries and paper products"* — we do not supply a home's
+ *   consumables.
+ * - *"Final walkthrough - property guest-ready"* — there is no guest.
+ *
+ * **The ids are `r1`-`r8`, deliberately not `d1`-`d9`.** `mergeChecklistItems`
+ * overlays prior completion state **by id**, so reusing the turnover ids would
+ * let a tick recorded against one checklist appear pre-completed on the other.
+ *
+ * This is a code constant, like the turnover list. Admin cannot edit it, and
+ * item 18 does not ask for that — an admin-editable checklist is on the
+ * counterproposal's own Phase 3 list.
+ */
+export const RESIDENTIAL_DEFAULT_CHECKLIST_ITEMS: ChecklistItem[] = [
+  { id: "r1", task: "Dust all surfaces in living areas and bedrooms.", completed: false },
+  { id: "r2", task: "Vacuum all carpets and rugs.", completed: false },
+  { id: "r3", task: "Sweep and mop all hard floors.", completed: false },
+  { id: "r4", task: "Clean and disinfect all bathroom surfaces (sinks, toilets, showers, tubs).", completed: false },
+  { id: "r5", task: "Wipe kitchen counters, appliance exteriors, and sink.", completed: false },
+  { id: "r6", task: "Wipe interior door handles, light switches, and other high-touch points.", completed: false },
+  { id: "r7", task: "Take out trash and replace liners.", completed: false },
+  { id: "r8", task: "Final walkthrough - all rooms clean and tidy, nothing of the customer's moved or removed.", completed: false },
 ];
