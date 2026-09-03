@@ -10,6 +10,8 @@ type CleanerAdminPatchBody = {
   eligibleForAssignments?: boolean;
   hasHotTubCert?: boolean;
   hasLaundryLeadCert?: boolean;
+  residentialQualified?: boolean;
+  petComfortable?: boolean;
 };
 
 export async function PATCH(
@@ -46,6 +48,20 @@ export async function PATCH(
     patch.hasLaundryLeadCert = body.hasLaundryLeadCert;
   }
 
+  // 0035 gave both columns a `true` default — opt-out, not
+  // opt-in, because defaulting false ships residential with an empty assignable
+  // pool that presents as a broken engine rather than as a policy. M5 made the
+  // assignment engine read them; without a writer, "admin-editable per cleaner"
+  // was a promise nothing kept, and an admin who needed to exclude one cleaner
+  // from residential work had no way to say so.
+  if (typeof body.residentialQualified === "boolean") {
+    patch.residentialQualified = body.residentialQualified;
+  }
+
+  if (typeof body.petComfortable === "boolean") {
+    patch.petComfortable = body.petComfortable;
+  }
+
   if (typeof body.address === "string" && body.address.trim().length > 0) {
     patch.address = body.address;
   }
@@ -66,6 +82,8 @@ export async function PATCH(
       eligibleForAssignments: cleaners.eligibleForAssignments,
       hasHotTubCert: cleaners.hasHotTubCert,
       hasLaundryLeadCert: cleaners.hasLaundryLeadCert,
+      residentialQualified: cleaners.residentialQualified,
+      petComfortable: cleaners.petComfortable,
     });
 
   if (!updated) {
