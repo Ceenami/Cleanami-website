@@ -47,7 +47,7 @@ export const CustomerPortalEmail = ({
 
           <Text style={paragraph}>
             Your subscription is active. Use the button below to sign in to your
-            customer dashboard and manage your turnovers.
+            customer dashboard and manage your cleans.
           </Text>
 
           <Section style={buttonContainer}>
@@ -73,7 +73,7 @@ export const CustomerPortalEmail = ({
           </Text>
 
           <Text style={footerSmall}>
-            CleanNami · Vacation Rental Turnover Service
+            CleanNami · Vacation Rental Turnovers &amp; Home Cleaning
             <br />
             <Link href={baseUrl} style={link}>
               {baseUrl}

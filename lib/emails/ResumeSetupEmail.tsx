@@ -99,7 +99,7 @@ export const ResumeSetupEmail = ({
           </Text>
 
           <Text style={footerSmall}>
-            CleanNami · Vacation Rental Turnover Service
+            CleanNami · Vacation Rental Turnovers &amp; Home Cleaning
             <br />
             <Link href={baseUrl} style={link}>
               {baseUrl}
