@@ -1,4 +1,4 @@
-import { pgTable, uuid, timestamp, text, pgEnum, boolean, uniqueIndex, primaryKey, index, numeric, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, timestamp, text, pgEnum, boolean, uniqueIndex, primaryKey, index, numeric, jsonb, varchar } from "drizzle-orm/pg-core";
 import { subscriptions } from "./subscriptions.schema";
 import { properties } from "./properties.schema";
 import { cleaners } from "./cleaners.schema";
@@ -41,6 +41,15 @@ export const jobs = pgTable('jobs', {
     inUnitLaundryHours?: number;
     offSiteLaundryHours?: number;
     hotTubHours?: number;
+    /** 0035 — drives the $10/clean pet fee and the cleaner's pet note. */
+    petsAllowed?: boolean;
+    /**
+     * 0035 — the arrival-window KEY, e.g. "9-11am". Display fidelity only: the
+     * job's real bounds are check_in_time (window start) and check_out_time
+     * (must-finish-before = window end PLUS expected hours, never the window
+     * end alone).
+     */
+    arrivalWindow?: string | null;
   }>(),
   /** 0040: the exact checklist and documents issued with this job. */
   checklistSnapshot: jsonb('checklist_snapshot').$type<ChecklistSnapshot | null>(),
@@ -56,11 +65,26 @@ export const jobs = pgTable('jobs', {
    */
   promoCodeId: uuid('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
   notes: text('notes'),
+  /**
+   * 0035 — varchar + CHECK, not a pgEnum: a value added by ALTER TYPE cannot be
+   * used until its transaction commits, which breaks add-then-backfill. Frozen
+   * at creation and never followed back to the property, in the same spirit as
+   * addonsSnapshot. Denormalised off `properties` so the same-day conflict rule
+   * and the admin filters need no join.
+   */
+  serviceType: varchar('service_type', {
+    enum: ['vacation_rental_subscription', 'residential_one_time'],
+  }).default('vacation_rental_subscription').notNull(),
+  /** 0035 — where the job came from, which is a different question from what kind of service it is. */
+  jobSource: varchar('job_source', {
+    enum: ['ical', 'manual', 'customer_one_off', 'public_residential_booking'],
+  }).default('ical').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
    uniqueIndex("calendar_event_uid_idx").on(table.calendarEventUid),
    index("jobs_status_idx").on(table.status),
+   index("jobs_service_type_idx").on(table.serviceType),
 ]);
 
 export const jobsToCleaners = pgTable('jobs_to_cleaners', {
