@@ -29,7 +29,14 @@ export async function getCleanerAuth(): Promise<CleanerAuthResult> {
   // `getClaims` verifies the signature (JWK for asymmetric keys, otherwise a
   // `getUser` round trip), so a forged token still fails.
   const bearerToken = await getBearerToken();
-  const { data } = await supabase.auth.getClaims(bearerToken ?? undefined);
+  // Same rethrow hazard as the Edge middleware: `getClaims` returns Supabase's
+  // own AuthErrors but rethrows everything else, including the plain
+  // `Error("JWT has expired")` from its `exp` check. A native-app token is
+  // client-held with no cookie to refresh from, so a stale one must read as
+  // "not signed in" and get a 401 — not a 500 from an unhandled throw.
+  const { data } = await supabase.auth
+    .getClaims(bearerToken ?? undefined)
+    .catch(() => ({ data: null }));
   const claims = data?.claims;
 
   if (!claims?.sub) {
