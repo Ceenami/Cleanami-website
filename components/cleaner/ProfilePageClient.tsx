@@ -36,6 +36,13 @@ const FAQ_ITEMS = [
   },
 ];
 
+/** One entry in the optional "related job" picker on the support form. */
+type DisputeJobOption = {
+  jobId: string;
+  propertyAddress: string | null;
+  scheduledAt: string | null;
+};
+
 export function ProfilePageClient() {
   const signOut = useSignOut();
   const searchParams = useSearchParams();
@@ -47,6 +54,8 @@ export function ProfilePageClient() {
   const [showDisputeForm, setShowDisputeForm] = useState(false);
   const [disputeType, setDisputeType] = useState("pay");
   const [disputeDescription, setDisputeDescription] = useState("");
+  const [disputeJobId, setDisputeJobId] = useState("");
+  const [disputeJobs, setDisputeJobs] = useState<DisputeJobOption[]>([]);
   const [disputeSubmitting, setDisputeSubmitting] = useState(false);
   const [disputeMessage, setDisputeMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +102,27 @@ export function ProfilePageClient() {
     }
   }
 
+  // Loaded when the form opens rather than on mount: most visits to this page
+  // are not filing a dispute, and the list is only ever a convenience. A
+  // failure here is silent by design — the form still submits without a job.
+  useEffect(() => {
+    if (!showDisputeForm || disputeJobs.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/cleaner/disputes");
+        if (!res.ok) return;
+        const body = (await res.json()) as { jobs?: DisputeJobOption[] };
+        if (!cancelled) setDisputeJobs(body.jobs ?? []);
+      } catch {
+        // Leave the picker empty; the field is optional.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showDisputeForm, disputeJobs.length]);
+
   async function handleDisputeSubmit(e: React.FormEvent) {
     e.preventDefault();
     setDisputeSubmitting(true);
@@ -104,12 +134,14 @@ export function ProfilePageClient() {
         body: JSON.stringify({
           type: disputeType,
           description: disputeDescription,
+          jobId: disputeJobId || null,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Submit failed");
       setDisputeMessage(data.message);
       setDisputeDescription("");
+      setDisputeJobId("");
       setShowDisputeForm(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submit failed");
@@ -280,6 +312,35 @@ export function ProfilePageClient() {
                     <option value="job_assignment">Job Assignment</option>
                   </select>
                 </div>
+                {disputeJobs.length > 0 && (
+                  <div>
+                    <label
+                      htmlFor="dispute-job"
+                      className="mb-1 block text-xs font-medium text-gray-600"
+                    >
+                      Related job{" "}
+                      <span className="font-normal text-gray-400">
+                        (optional)
+                      </span>
+                    </label>
+                    <select
+                      id="dispute-job"
+                      value={disputeJobId}
+                      onChange={(e) => setDisputeJobId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">No specific job</option>
+                      {disputeJobs.map((job) => (
+                        <option key={job.jobId} value={job.jobId}>
+                          {job.scheduledAt
+                            ? new Date(job.scheduledAt).toLocaleDateString()
+                            : "Unscheduled"}
+                          {job.propertyAddress ? ` — ${job.propertyAddress}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label
                     htmlFor="dispute-description"

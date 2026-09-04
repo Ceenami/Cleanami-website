@@ -8,7 +8,7 @@ import {
   cleaners,
   swapRequests,
 } from "@/db/schemas";
-import { and, eq, gte, lte, ne, inArray, asc } from "drizzle-orm";
+import { and, eq, gte, lte, ne, inArray, asc, desc } from "drizzle-orm";
 import { getCleanerJobWindowEnd } from "@/lib/cleaner/planning-window";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
 
@@ -207,4 +207,80 @@ export async function getCleanerUpcomingJobs(
       teammates: teammatesByJob.get(assignment.jobId) ?? [],
     };
   });
+}
+
+
+/** How far back the dispute job picker looks. */
+const DISPUTE_JOB_WINDOW_DAYS = 60;
+
+export type CleanerDisputeJobOption = {
+  jobId: string;
+  propertyAddress: string | null;
+  scheduledAt: string | null;
+};
+
+/**
+ * The jobs a cleaner may attach to a support request: their OWN assignments
+ * only, from the last 60 days onwards.
+ *
+ * Deliberately not `getCleanerUpcomingJobs`. That one is future-only
+ * (`checkInTime >= today`) and a pay dispute is almost always about a job
+ * already worked, so it returns precisely the wrong set here. It also computes
+ * pay, teammates and swap eligibility, none of which a picker needs.
+ *
+ * There is no upper bound, because the three dispute types point in different
+ * directions: `pay` is about a job already done, while `job_assignment` is
+ * usually about one still to come. A window that stopped at today would make
+ * that second kind unattachable.
+ *
+ * Cancelled jobs are included on purpose — "I was not paid for the job you
+ * cancelled" is a pay dispute, and hiding the job would hide the complaint.
+ */
+export async function getCleanerRecentJobsForDispute(
+  cleanerId: string
+): Promise<CleanerDisputeJobOption[]> {
+  const since = new Date(
+    Date.now() - DISPUTE_JOB_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  const rows = await db
+    .select({
+      jobId: jobs.id,
+      propertyAddress: properties.address,
+      checkInTime: jobs.checkInTime,
+    })
+    .from(jobsToCleaners)
+    .innerJoin(jobs, eq(jobsToCleaners.jobId, jobs.id))
+    .leftJoin(properties, eq(jobs.propertyId, properties.id))
+    .where(
+      and(eq(jobsToCleaners.cleanerId, cleanerId), gte(jobs.checkInTime, since))
+    )
+    .orderBy(desc(jobs.checkInTime))
+    .limit(50);
+
+  return rows.map((r) => ({
+    jobId: r.jobId,
+    propertyAddress: r.propertyAddress,
+    scheduledAt: r.checkInTime ? r.checkInTime.toISOString() : null,
+  }));
+}
+
+/**
+ * Was this cleaner actually assigned to this job? The submit route uses it to
+ * decide whether to keep a client-supplied `job_id` or drop it — never trust
+ * the id the form sends.
+ */
+export async function isJobAssignedToCleaner(
+  cleanerId: string,
+  jobId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ jobId: jobsToCleaners.jobId })
+    .from(jobsToCleaners)
+    .where(
+      and(eq(jobsToCleaners.jobId, jobId), eq(jobsToCleaners.cleanerId, cleanerId))
+    )
+    .limit(1);
+
+  return Boolean(row);
 }
