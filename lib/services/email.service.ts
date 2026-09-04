@@ -6,6 +6,10 @@ import TransactionalEmail, {
 } from "../emails/TransactionalEmail";
 import { SUPPORT_EMAIL } from "@/lib/constants/contact";
 import {
+  recordNotificationAttempt,
+  type NotificationMeta,
+} from "@/lib/services/notifications/notification-log";
+import {
   entryAccessReminder,
   RESIDENTIAL_CANCELLATION_POLICY,
   SERVICE_TYPE_LABELS,
@@ -32,15 +36,42 @@ function formatEasternDateLabel(isoDate: string): string {
 
 type SendResult = { success: boolean; error?: string };
 
-/** Generic branded transactional send. No-ops gracefully if Resend is unset. */
+/**
+ * Generic branded transactional send. No-ops gracefully if Resend is unset.
+ *
+ * Every outcome is written to `notification_log`, including the no-op. An
+ * unconfigured Resend key producing a `skipped` row is the whole point: without
+ * it, "this notification was never triggered" and "it was triggered and there
+ * were no credentials" look identical from the outside, and those are exactly
+ * the two things that have to be told apart.
+ *
+ * `trigger` comes from the named wrapper below rather than from the ~30 places
+ * that ask for an email — but an unnamed caller still produces a row.
+ */
 export async function sendTransactionalEmail(
   to: string,
   subject: string,
-  props: TransactionalEmailProps
+  props: TransactionalEmailProps,
+  meta?: NotificationMeta
 ): Promise<SendResult> {
+  const logMeta: NotificationMeta = {
+    trigger: "transactional_email",
+    ...meta,
+    recipient: to,
+  };
+
   try {
     const resend = getResend();
-    if (!resend) return { success: false, error: getEmailUnavailableMessage() };
+    if (!resend) {
+      const error = getEmailUnavailableMessage();
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "skipped",
+        error,
+        meta: logMeta,
+      });
+      return { success: false, error };
+    }
 
     const { error } = await resend.emails.send({
       from: EMAIL_FROM,
@@ -50,11 +81,28 @@ export async function sendTransactionalEmail(
     });
     if (error) {
       console.error("Resend error:", error);
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "failed",
+        error: error.message,
+        meta: logMeta,
+      });
       return { success: false, error: error.message };
     }
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "sent",
+      meta: logMeta,
+    });
     return { success: true };
   } catch (error) {
     console.error("Failed to send transactional email:", error);
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "failed",
+      error,
+      meta: logMeta,
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",
@@ -83,7 +131,7 @@ export function sendBookingConfirmationEmail(params: {
     ctaLabel: "Open your portal",
     ctaUrl: `${APP_URL}/customer/dashboard`,
     footnote: "You can manage or cancel cleans anytime from your portal.",
-  });
+  }, { trigger: "booking_confirmation" });
 }
 
 export function sendJobCompletionEmail(params: {
@@ -101,7 +149,7 @@ export function sendJobCompletionEmail(params: {
     ],
     ctaLabel: "View details",
     ctaUrl: `${APP_URL}/customer/dashboard`,
-  });
+  }, { trigger: "job_completion" });
 }
 
 /**
@@ -172,7 +220,9 @@ export function sendResidentialBookingConfirmationEmail(
   params: ResidentialBookingConfirmation
 ): Promise<SendResult> {
   const { subject, props } = buildResidentialBookingConfirmationEmail(params);
-  return sendTransactionalEmail(params.to, subject, props);
+  return sendTransactionalEmail(params.to, subject, props, {
+    trigger: "residential_booking_confirmation",
+  });
 }
 
 /**
@@ -196,7 +246,7 @@ export function sendAdminAlertEmail(params: {
     bodyLines: [params.message],
     ctaLabel: params.url ? "Open in the dashboard" : undefined,
     ctaUrl: params.url ? `${APP_URL}${params.url}` : undefined,
-  });
+  }, { trigger: "admin_alert" });
 }
 
 export function sendCancellationEmail(params: {
@@ -215,7 +265,7 @@ export function sendCancellationEmail(params: {
     ],
     ctaLabel: "View your schedule",
     ctaUrl: `${APP_URL}/customer/dashboard`,
-  });
+  }, { trigger: "cancellation" });
 }
 
 export function sendPaymentFailedEmail(params: {
@@ -233,7 +283,7 @@ export function sendPaymentFailedEmail(params: {
     ],
     ctaLabel: "Update payment",
     ctaUrl: `${APP_URL}/customer/dashboard`,
-  });
+  }, { trigger: "payment_failed" });
 }
 
 export function sendCleanerAssignmentEmail(params: {
@@ -252,7 +302,7 @@ export function sendCleanerAssignmentEmail(params: {
     ],
     ctaLabel: "View job",
     ctaUrl: `${APP_URL}/cleaner/jobs`,
-  });
+  }, { trigger: "cleaner_assignment" });
 }
 
 interface SendResumeEmailParams {
@@ -280,7 +330,14 @@ export async function sendCustomerPortalEmail({
   try {
     const resend = getResend();
     if (!resend) {
-      return { success: false, error: getEmailUnavailableMessage() };
+      const unavailable = getEmailUnavailableMessage();
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "skipped",
+        error: unavailable,
+        meta: { trigger: "customer_portal_invite", recipient: to },
+      });
+      return { success: false, error: unavailable };
     }
 
     const { error } = await resend.emails.send({
@@ -292,9 +349,20 @@ export async function sendCustomerPortalEmail({
 
     if (error) {
       console.error("Resend error:", error);
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "failed",
+        error: error.message,
+        meta: { trigger: "customer_portal_invite", recipient: to },
+      });
       return { success: false, error: error.message };
     }
 
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "sent",
+      meta: { trigger: "customer_portal_invite", recipient: to },
+    });
     return { success: true };
   } catch (error) {
     console.error("Failed to send customer portal email:", error);
@@ -313,7 +381,14 @@ export async function sendResumeEmail({
   try {
     const resend = getResend();
     if (!resend) {
-      return { success: false, error: getEmailUnavailableMessage() };
+      const unavailable = getEmailUnavailableMessage();
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "skipped",
+        error: unavailable,
+        meta: { trigger: "resume_setup", recipient: to },
+      });
+      return { success: false, error: unavailable };
     }
 
     const { error } = await resend.emails.send({
@@ -325,9 +400,20 @@ export async function sendResumeEmail({
 
     if (error) {
       console.error("Resend error:", error);
+      await recordNotificationAttempt({
+        channel: "email",
+        status: "failed",
+        error: error.message,
+        meta: { trigger: "resume_setup", recipient: to },
+      });
       return { success: false, error: error.message };
     }
 
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "sent",
+      meta: { trigger: "resume_setup", recipient: to },
+    });
     return { success: true };
   } catch (error) {
     console.error("Failed to send resume email:", error);
