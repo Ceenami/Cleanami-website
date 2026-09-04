@@ -11,12 +11,18 @@ import { isServiceUnavailableMessage } from "@/lib/env/messages";
 import { RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER } from "@/lib/constants/service-type";
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { serializeResidentialFormForServer } from "@/lib/validations/residential/serialize";
+import { PromoCodeField } from "../PromoCodeField";
 
 const stripePromise = getStripe();
 
 interface Props {
   formData: ResidentialFormData;
-  onPaymentSuccess: (paymentIntentId: string) => void;
+  setFormData: React.Dispatch<React.SetStateAction<ResidentialFormData>>;
+  /** Carries the amount actually charged, which is not the list price when a code applied. */
+  onPaymentSuccess: (
+    paymentIntentId: string,
+    chargedAmountCents: number | null
+  ) => void;
   paymentFinalizing?: boolean;
 }
 
@@ -38,11 +44,16 @@ interface Props {
  */
 export const R5Payment = ({
   formData,
+  setFormData,
   onPaymentSuccess,
   paymentFinalizing = false,
 }: Props) => {
   const [clientSecret, setClientSecret] = useState("");
   const [amountInCents, setAmountInCents] = useState<number | null>(null);
+  const [promoDiscountCents, setPromoDiscountCents] = useState(0);
+  const [priceBeforeDiscountCents, setPriceBeforeDiscountCents] = useState<
+    number | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [earliestDate, setEarliestDate] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -59,6 +70,8 @@ export const R5Payment = ({
     setEarliestDate(null);
     setClientSecret("");
     setAmountInCents(null);
+    setPromoDiscountCents(0);
+    setPriceBeforeDiscountCents(null);
 
     try {
       const response = await fetch("/api/residential/create-intent", {
@@ -70,6 +83,8 @@ export const R5Payment = ({
       const result = (await response.json()) as {
         clientSecret?: string;
         amountInCents?: number;
+        promoDiscountCents?: number;
+        priceBeforeDiscountCents?: number;
         error?: string;
         earliestBookableDate?: string | null;
       };
@@ -87,6 +102,8 @@ export const R5Payment = ({
       if (result.clientSecret) {
         setClientSecret(result.clientSecret);
         setAmountInCents(result.amountInCents ?? null);
+        setPromoDiscountCents(result.promoDiscountCents ?? 0);
+        setPriceBeforeDiscountCents(result.priceBeforeDiscountCents ?? null);
       } else {
         setError("Could not start your booking. Please refresh and try again.");
       }
@@ -130,14 +147,45 @@ export const R5Payment = ({
         {RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER}
       </p>
 
+      {/* Applying a code re-creates the PaymentIntent rather than adjusting a
+          number on screen, so what is displayed below is always what Stripe
+          will charge. The server re-resolves the code regardless. */}
+      <PromoCodeField
+        residentialFormData={formData}
+        onApply={(code) =>
+          setFormData((prev) => ({ ...prev, promoCode: code || undefined }))
+        }
+        disabled={isInitializing || paymentFinalizing}
+      />
+
       {amountInCents !== null && !error && (
-        <div className="flex items-baseline justify-between rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">
-          <span className="text-sm font-medium text-gray-700">
-            Charged today
-          </span>
-          <span className="text-lg font-semibold text-gray-900">
-            ${(amountInCents / 100).toFixed(2)}
-          </span>
+        <div className="space-y-1 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">
+          {promoDiscountCents > 0 && priceBeforeDiscountCents !== null && (
+            <>
+              <div className="flex items-baseline justify-between text-sm">
+                <span className="text-gray-600">Clean</span>
+                <span className="text-gray-500 line-through">
+                  ${(priceBeforeDiscountCents / 100).toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between text-sm">
+                <span className="text-teal-700">
+                  {formData.promoCode ?? "Promo code"}
+                </span>
+                <span className="text-teal-700">
+                  −${(promoDiscountCents / 100).toFixed(2)}
+                </span>
+              </div>
+            </>
+          )}
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm font-medium text-gray-700">
+              Charged today
+            </span>
+            <span className="text-lg font-semibold text-gray-900">
+              ${(amountInCents / 100).toFixed(2)}
+            </span>
+          </div>
         </div>
       )}
 
@@ -184,7 +232,14 @@ export const R5Payment = ({
 
       {clientSecret && !error ? (
         <Elements options={options} stripe={stripePromise}>
-          <CheckoutForm onPaymentSuccess={onPaymentSuccess} />
+          <CheckoutForm
+            onPaymentSuccess={(paymentIntentId) =>
+              // The amount the intent was created for, not the list price: with
+              // a code applied those differ, and the confirmation screen must
+              // show what was actually taken.
+              onPaymentSuccess(paymentIntentId, amountInCents)
+            }
+          />
         </Elements>
       ) : (
         !error && (

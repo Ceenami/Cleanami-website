@@ -1,16 +1,36 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  earliestBookableDate,
+  getBookableWindows,
+  RESIDENTIAL_NO_WINDOW_MESSAGE,
+} from "@/lib/scheduling/residential-notice";
+import { getAvailableArrivalWindows } from "@/lib/scheduling/arrival-windows";
+import {
+  SERVICE_TYPE_LABELS,
+  type ServiceType,
+} from "@/lib/constants/service-type";
 
-type PropertyItem = { id: string; address: string | null; price: number | null };
+type PropertyItem = {
+  id: string;
+  address: string | null;
+  price: number | null;
+  serviceType: string;
+  /** Only computed for a home; a rental is not offered windows. */
+  expectedHours: number | null;
+};
 
 function minDate(): string {
-  // Two days out (matches the server buffer), formatted yyyy-mm-dd.
+  // Two days out (matches the server buffer for a rental), formatted yyyy-mm-dd.
   const d = new Date();
   d.setDate(d.getDate() + 2);
   return d.toISOString().slice(0, 10);
 }
+
+const serviceTypeLabel = (value: string) =>
+  SERVICE_TYPE_LABELS[value as ServiceType] ?? "";
 
 export function OneOffCleanBooking({
   properties,
@@ -20,6 +40,7 @@ export function OneOffCleanBooking({
   const router = useRouter();
   const [propertyId, setPropertyId] = useState(properties[0]?.id ?? "");
   const [date, setDate] = useState("");
+  const [arrivalWindow, setArrivalWindow] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<{
@@ -41,7 +62,47 @@ export function OneOffCleanBooking({
     () => properties.find((p) => p.id === propertyId) ?? null,
     [properties, propertyId]
   );
-  const earliest = useMemo(minDate, []);
+  // A home and a rental are scheduled by different rules, and this is the only
+  // place the portal needs to know that. The public residential wizard uses
+  // these same three helpers, so the two flows cannot drift apart again.
+  const isResidential = selected?.serviceType === "residential_one_time";
+  const expectedHours = selected?.expectedHours ?? null;
+
+  const windowsThatFitTheDay = useMemo(
+    () =>
+      isResidential && expectedHours != null
+        ? getAvailableArrivalWindows(expectedHours)
+        : [],
+    [isResidential, expectedHours]
+  );
+
+  const bookableWindows = useMemo(
+    () =>
+      isResidential && expectedHours != null && date
+        ? getBookableWindows(date, expectedHours)
+        : [],
+    [isResidential, expectedHours, date]
+  );
+
+  const earliest = useMemo(() => {
+    if (isResidential && expectedHours != null) {
+      return earliestBookableDate(expectedHours) ?? minDate();
+    }
+    return minDate();
+  }, [isResidential, expectedHours]);
+
+  // A window chosen for one date can stop being offered on another — the
+  // 48-hour rule is per window, not per day — so drop a selection that is no
+  // longer on the list rather than submitting one the server will refuse.
+  useEffect(() => {
+    if (!isResidential) {
+      if (arrivalWindow) setArrivalWindow("");
+      return;
+    }
+    if (arrivalWindow && !bookableWindows.some((w) => w.key === arrivalWindow)) {
+      setArrivalWindow("");
+    }
+  }, [isResidential, bookableWindows, arrivalWindow]);
 
   /**
    * Parses a response that is *supposed* to be JSON, and explains it when it
@@ -85,6 +146,7 @@ export function OneOffCleanBooking({
           onClick={() => {
             setConfirmed(null);
             setDate("");
+            setArrivalWindow("");
           }}
           className="mt-4 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
         >
@@ -94,7 +156,10 @@ export function OneOffCleanBooking({
     );
   }
 
-  const canSubmit = propertyId && date && !submitting;
+  // A home cannot be booked without a window; a rental has none to choose.
+  const canSubmit = Boolean(
+    propertyId && date && !submitting && (!isResidential || arrivalWindow)
+  );
   // What the button will actually charge.
   const chargeDollars =
     promo != null ? promo.finalAmountCents / 100 : (selected?.price ?? null);
@@ -149,6 +214,7 @@ export function OneOffCleanBooking({
         body: JSON.stringify({
           propertyId,
           date,
+          ...(isResidential && arrivalWindow ? { arrivalWindow } : {}),
           ...(promo ? { promoCode: promo.code } : {}),
         }),
       });
@@ -174,6 +240,10 @@ export function OneOffCleanBooking({
           value={propertyId}
           onChange={(e) => {
             setPropertyId(e.target.value);
+            // The next property may be scheduled by different rules, so a date
+            // and window chosen for the previous one cannot carry over.
+            setDate("");
+            setArrivalWindow("");
             // The quote was priced against the previous property.
             clearPromo();
           }}
@@ -182,26 +252,77 @@ export function OneOffCleanBooking({
           {properties.map((p) => (
             <option key={p.id} value={p.id}>
               {p.address ?? "Property"}
+              {serviceTypeLabel(p.serviceType)
+                ? ` — ${serviceTypeLabel(p.serviceType)}`
+                : ""}
             </option>
           ))}
         </select>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          Clean date
-        </label>
-        <input
-          type="date"
-          min={earliest}
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-teal-500 focus:outline-none focus:ring-teal-500"
-        />
-        <p className="mt-1 text-xs text-gray-500">
-          Choose a date at least 2 days out so we can assign a cleaner.
-        </p>
-      </div>
+      {/* A home big enough to need more time than any window allows cannot be
+          scheduled online at all, and the refusal is the client's own wording —
+          the same one the public wizard shows. Do not invent a second. */}
+      {isResidential && windowsThatFitTheDay.length === 0 ? (
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
+          {RESIDENTIAL_NO_WINDOW_MESSAGE}
+        </div>
+      ) : (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">
+              Clean date
+            </label>
+            <input
+              type="date"
+              min={earliest}
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-teal-500 focus:outline-none focus:ring-teal-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              {isResidential
+                ? "One-time house cleanings require at least 48 hours notice so we can properly staff your clean."
+                : "Choose a date at least 2 days out so we can assign a cleaner."}
+            </p>
+          </div>
+
+          {isResidential && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Arrival window
+              </label>
+              {!date ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  Choose a date to see the available windows.
+                </p>
+              ) : bookableWindows.length === 0 ? (
+                // A date can be partly bookable: at 10am on Monday, Wednesday's
+                // 9-11 slot is 47 hours out and refused while its 1-3 slot is
+                // 51 and fine. So an empty list here means "not this date",
+                // not "not this home".
+                <p className="mt-1 text-xs text-amber-700">
+                  No arrival window on that date gives us the 48 hours&apos;
+                  notice we need. Please choose a later date.
+                </p>
+              ) : (
+                <select
+                  value={arrivalWindow}
+                  onChange={(e) => setArrivalWindow(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-teal-500 focus:outline-none focus:ring-teal-500"
+                >
+                  <option value="">Choose a window…</option>
+                  {bookableWindows.map((w) => (
+                    <option key={w.key} value={w.key}>
+                      {w.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
       {selected?.price != null && (
         <div>

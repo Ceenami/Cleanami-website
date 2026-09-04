@@ -247,12 +247,19 @@ export const ResidentialForm = ({
     void handleStepChange(Math.max(currentStep - 1, 1));
   };
 
-  const handlePaymentSuccess = async (paymentIntentId: string) => {
+  const handlePaymentSuccess = async (
+    paymentIntentId: string,
+    chargedAmountCents: number | null
+  ) => {
     setPaymentData({
       paymentIntentId,
-      amountInCents: priceDetails
-        ? Math.round(priceDetails.totalPerClean * 100)
-        : null,
+      // What was actually charged. Falling back to the list price is only for
+      // the case where the payment step never reported an amount; a promo code
+      // makes those two numbers different, and the confirmation must not quote
+      // a total the customer was not charged.
+      amountInCents:
+        chargedAmountCents ??
+        (priceDetails ? Math.round(priceDetails.totalPerClean * 100) : null),
     });
     setIsSaving(true);
     setSaveError(null);
@@ -345,6 +352,7 @@ export const ResidentialForm = ({
           <div>
             <R5Payment
               formData={formData}
+              setFormData={setFormData}
               onPaymentSuccess={handlePaymentSuccess}
               paymentFinalizing={isSaving}
             />
@@ -363,6 +371,7 @@ export const ResidentialForm = ({
           <R6Confirmation
             paymentIntentId={paymentData?.paymentIntentId}
             amountInCents={paymentData?.amountInCents}
+            promoCode={formData.promoCode ?? null}
             cleanDate={formData.cleanDate}
             arrivalWindow={formData.arrivalWindow}
             portalInviteEmailSent={portalInviteEmailSent}

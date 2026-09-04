@@ -34,7 +34,7 @@ import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
  *   checklist upload           Item 18's residential checklist is M7's.
  *   home condition             The counterproposal withdrew it; the signal
  *                              lands in `specialNotes` instead (delta).
- *   promo code Client 2B item 3, not 2A (delta).
+ *   (promo code was absent in 2A and is now wired: see promoCode below.)
  *   "areas not to enter"       Item 4: "we do not need areas not to enter in
  *                              Phase 2".
  */
@@ -81,6 +81,12 @@ export const residentialFormSchema = z
     entryInstructions: z.string().trim().max(2000).optional(),
     parkingInstructions: z.string().trim().max(2000).optional(),
     specialNotes: z.string().trim().max(2000).optional(),
+
+    // R5 — checkout. Optional, and never trusted: whatever arrives here is
+    // re-resolved server-side before the PaymentIntent is created, so this
+    // field can change what a customer is SHOWN but never what they are
+    // charged.
+    promoCode: z.string().trim().max(64).optional(),
   })
   .refine((data) => data.email === data.emailConfirm, {
     message: "Emails don't match",

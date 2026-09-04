@@ -52,6 +52,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       clientSecret: result.clientSecret,
       amountInCents: result.amountInCents,
+      promoCode: result.promoCode,
+      promoDiscountCents: result.promoDiscountCents,
+      priceBeforeDiscountCents: result.priceBeforeDiscountCents,
     });
   } catch (error) {
     console.error("[POST /api/residential/create-intent]", error);

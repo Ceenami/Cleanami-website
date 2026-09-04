@@ -2,6 +2,10 @@ import "server-only";
 
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
+import {
+  recordPromoRedemption,
+  resolvePromoCodeForAmount,
+} from "@/lib/services/promo-code.service";
 import Stripe from "stripe";
 
 import { getDbOrNull } from "@/db";
@@ -313,8 +317,13 @@ export async function createResidentialPaymentIntent(input: {
   | {
       ok: true;
       clientSecret: string;
+      /** What the card will be charged, after any promo code. */
       amountInCents: number;
       priceDetails: PriceDetails;
+      promoCode: string | null;
+      promoDiscountCents: number;
+      /** The undiscounted total, so checkout can show what was struck through. */
+      priceBeforeDiscountCents: number;
     }
   | ResidentialRefusal
 > {
@@ -396,6 +405,58 @@ export async function createResidentialPaymentIntent(input: {
     stripeCustomerId
   );
 
+  // The promo code, resolved HERE and nowhere else. The wizard previews a code
+  // for the customer's benefit, but the preview decides nothing: this is the
+  // only place a discount can change what Stripe is asked for.
+  //
+  // Fails LOUD, the same way the portal one-off does. The customer typed a code
+  // moments ago and is about to pay; silently charging them full price because
+  // the code turned out to be expired is the wrong answer. (The recurring
+  // pre-authorize cron makes the opposite choice, correctly — nobody is
+  // watching it, and a stale code must not block a real charge.)
+  let chargeAmountCents = amountCents;
+  let appliedPromo:
+    | { promoCodeId: string; code: string; discountCents: number }
+    | null = null;
+
+  const submittedPromoCode = form.promoCode?.trim() ?? "";
+  if (submittedPromoCode) {
+    let resolved;
+    try {
+      resolved = await resolvePromoCodeForAmount(
+        submittedPromoCode,
+        amountCents,
+        form.email ?? ""
+      );
+    } catch (error) {
+      console.error("[residential-booking] promo code lookup failed", error);
+      return {
+        ok: false,
+        reason: "unavailable",
+        error:
+          "We could not check that promo code. Nothing has been charged — please try again.",
+      };
+    }
+
+    const { evaluation, promoCodeId } = resolved;
+    if (!evaluation.valid || !promoCodeId) {
+      return {
+        ok: false,
+        reason: "validation",
+        error: evaluation.valid
+          ? "That promo code is not valid."
+          : `${evaluation.message} Remove or correct the code to continue.`,
+      };
+    }
+
+    chargeAmountCents = evaluation.finalAmountCents;
+    appliedPromo = {
+      promoCodeId,
+      code: evaluation.code,
+      discountCents: evaluation.discountCents,
+    };
+  }
+
   // Written with the secret key so completion can verify against it — otherwise
   // a succeeded PaymentIntent id could be replayed with attacker-chosen form
   // data.
@@ -414,13 +475,18 @@ export async function createResidentialPaymentIntent(input: {
     clean_date: form.cleanDate ?? "",
     arrival_window: form.arrivalWindow ?? "",
     price_before_discounts_cents: String(amountCents),
+    // Written with the secret key, so completion can verify the charge against
+    // it rather than against anything the browser sends back.
+    promo_code: appliedPromo?.code ?? "",
+    promo_code_id: appliedPromo?.promoCodeId ?? "",
+    promo_discount_cents: String(appliedPromo?.discountCents ?? 0),
   };
 
   let paymentIntent: Stripe.PaymentIntent;
   try {
     paymentIntent = await stripe.paymentIntents.create(
       {
-        amount: amountCents,
+        amount: chargeAmountCents,
         currency: "usd",
         customer: stripeCustomer.id,
         automatic_payment_methods: { enabled: true },
@@ -432,13 +498,20 @@ export async function createResidentialPaymentIntent(input: {
       // collapse different customers' bookings onto one charge.
       input.sessionToken
         ? {
-            idempotencyKey: `res_${input.sessionToken}_${form.cleanDate}_${amountCents}`,
+            idempotencyKey: `res_${input.sessionToken}_${form.cleanDate}_${chargeAmountCents}`,
           }
         : undefined
     );
   } catch (error) {
     console.error("[residential-booking] PaymentIntent create failed", error);
-    if ((error as { code?: string } | null)?.code === "idempotency_error") {
+    // `rawType`, not `code`: the SDK wraps the API's idempotency_error in a
+    // StripeIdempotencyError whose `code` is undefined, so checking `code`
+    // never matched. Verified against the live test API.
+    const stripeError = error as { rawType?: string; type?: string } | null;
+    if (
+      stripeError?.rawType === "idempotency_error" ||
+      stripeError?.type === "StripeIdempotencyError"
+    ) {
       return {
         ok: false,
         reason: "unavailable",
@@ -464,8 +537,13 @@ export async function createResidentialPaymentIntent(input: {
   return {
     ok: true,
     clientSecret: paymentIntent.client_secret,
-    amountInCents: amountCents,
+    // What the card will actually be charged, so the checkout total and the
+    // Stripe amount can never disagree.
+    amountInCents: chargeAmountCents,
     priceDetails,
+    promoCode: appliedPromo?.code ?? null,
+    promoDiscountCents: appliedPromo?.discountCents ?? 0,
+    priceBeforeDiscountCents: amountCents,
   };
 }
 
@@ -606,9 +684,26 @@ export async function completeResidentialBooking(
       };
     }
 
-    // The server re-price wins. Nothing discounts a residential booking yet, so
-    // the charge and the price are the same number and any gap is tampering.
-    if (paymentIntent.amount !== amountCents) {
+    // The server re-price wins, minus whatever discount the intent itself
+    // records. Both halves come from trusted sources — the re-price from this
+    // process, the discount from metadata written with the secret key — so a
+    // browser cannot widen a discount by editing what it posts back.
+    const metadataDiscountCents = Number(
+      paymentIntent.metadata?.promo_discount_cents ?? 0
+    );
+    const promoCodeId = paymentIntent.metadata?.promo_code_id || null;
+    const promoCode = paymentIntent.metadata?.promo_code || null;
+
+    if (!Number.isFinite(metadataDiscountCents) || metadataDiscountCents < 0) {
+      return {
+        success: false,
+        error:
+          "This payment carries an unreadable discount. Please contact support.",
+      };
+    }
+
+    const expectedChargeCents = amountCents - metadataDiscountCents;
+    if (paymentIntent.amount !== expectedChargeCents) {
       return {
         success: false,
         error:
@@ -790,6 +885,10 @@ export async function completeResidentialBooking(
           addonsSnapshot,
           paymentIntentId,
           paymentStatus: "captured",
+          // The audit trail for the discount, on the row the money is attached
+          // to. A discount with no record of which code caused it is
+          // unreconcilable.
+          promoCodeId,
           // No access data here — jobs.notes renders on more surfaces than the
           // job detail view.
           notes: `[System] Residential one-time clean, prepaid. PaymentIntent ${paymentIntentId}.`,
@@ -828,6 +927,33 @@ export async function completeResidentialBooking(
       console.error("[residential-booking] admin notification failed:", err);
     }
 
+    // Burns the customer's single redemption of this code. Best-effort and
+    // deliberately after the job exists: the clean is paid for and scheduled by
+    // now, so a bookkeeping failure must not undo it. It is logged loudly
+    // because a discount that leaves no redemption row is worse than no
+    // discount at all — it cannot be reconciled.
+    if (promoCodeId && promoCode) {
+      try {
+        await recordPromoRedemption({
+          promoCodeId,
+          code: promoCode,
+          customerEmail: form.email ?? "",
+          customerId: result.customer.id,
+          subscriptionId: null,
+          jobId: result.job.id,
+          paymentIntentId,
+          originalAmountCents: amountCents,
+          discountAmountCents: metadataDiscountCents,
+          finalAmountCents: expectedChargeCents,
+        });
+      } catch (err) {
+        console.error(
+          "[residential-booking] promo redemption record failed; the booking stands:",
+          err
+        );
+      }
+    }
+
     // Last, and best-effort: the clean is booked and paid for by now, and Resend
     // being down must not turn that into a refund. Carries the access reminder —
     // the method, never the code — and the cancellation/refund wording.
@@ -838,7 +964,7 @@ export async function completeResidentialBooking(
         propertyAddress: form.address!,
         cleanDate: form.cleanDate!,
         arrivalWindowLabel: quote.window.label,
-        amount: formatUsd(amountCents),
+        amount: formatUsd(expectedChargeCents),
         petsAllowed: form.petsAllowed ?? false,
         petFeeApplied: quote.priceDetails.petFee > 0,
         entryMethod: form.entryMethod ?? null,
