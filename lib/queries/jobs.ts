@@ -76,6 +76,18 @@ export async function getJobsWithDetails({
       calendarEventUid: jobs.calendarEventUid,
       serviceType: jobs.serviceType,
       jobSource: jobs.jobSource,
+      // An admin's manual "this one is a reclean" override. Selected here and
+      // not derived, because the label resolver silently falls back to the
+      // service type when the field is absent - which looks exactly like "the
+      // label works on some screens and not others".
+      jobLabel: jobs.jobLabel,
+      // The arrival-window KEY only, not the whole snapshot. On a residential
+      // job check_out_time is the finish deadline (window end PLUS expected
+      // hours), so the window cannot be reconstructed from the two timestamps;
+      // this key is the only truthful source for what the customer was told.
+      arrivalWindow: sql<string | null>`${jobs.addonsSnapshot} ->> 'arrivalWindow'`.as(
+        'arrival_window'
+      ),
       // Needed so the customer portal knows whether this clean is still open
       // for a promo-code change (only before pre-authorize has run/failed).
       paymentIntentId: jobs.paymentIntentId,

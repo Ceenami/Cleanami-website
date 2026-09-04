@@ -101,6 +101,13 @@ export type CleanerJobDetail = {
   /** 0041. Drives the badge and every label below. */
   serviceType: string;
   /**
+   * 0039 — an admin's manual "this one is a reclean" override, which takes the
+   * badge over the service type. Null on every ordinary job. The TIME labels
+   * below still follow `serviceType`: a reclean of a turnover is still
+   * scheduled like a turnover.
+   */
+  jobLabel: string | null;
+  /**
    * The mistake this exists to prevent: on a residential clean check_out_time is
    * the finish deadline (window end plus expected hours), so rendering it as the
    * end of the arrival window would tell a cleaner to finish a three-hour clean
@@ -219,6 +226,7 @@ export async function getCleanerJobDetail(
     mustFinishBefore: formatDateTime(job.checkOutTime),
     petsAllowed: property?.petsAllowed ?? false,
     serviceType: job.serviceType ?? "vacation_rental_subscription",
+    jobLabel: job.jobLabel ?? null,
     arrivalWindowLabel:
       job.serviceType === "residential_one_time"
         ? getArrivalWindow(job.addonsSnapshot?.arrivalWindow ?? undefined)

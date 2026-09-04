@@ -22,6 +22,8 @@ import {
   getPaymentDisplay,
   type PaymentDisplay,
 } from "@/lib/constants/payment-status";
+import { getJobDisplay, type JobDisplay } from "@/lib/constants/service-type";
+import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 import { getStatusBadge } from "../utils";
 import { CustomerJobCancelButton } from "@/components/customer/CustomerJobCancelButton";
 import { CustomerJobPromoCodeField } from "@/components/customer/CustomerJobPromoCodeField";
@@ -53,6 +55,12 @@ async function fetchJobs({
     nextPage: result.nextPage,
   };
 }
+
+const JOB_TONE_BADGE: Record<JobDisplay["tone"], string> = {
+  vacation_rental: "bg-sky-100 text-sky-800",
+  residential: "bg-violet-100 text-violet-800",
+  labeled: "bg-amber-100 text-amber-900",
+};
 
 const PAYMENT_TONE_BADGE: Record<PaymentDisplay["tone"], string> = {
   positive: "bg-green-100 text-green-800",
@@ -229,6 +237,12 @@ export const RealTimeJobBoard = () => {
                     scope="col"
                     className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                   >
+                    Service
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                  >
                     Cleaners
                   </th>
                   <th
@@ -257,19 +271,19 @@ export const RealTimeJobBoard = () => {
               <tbody className="divide-y divide-gray-200 bg-white">
                 {status === "pending" ? (
                   <tr>
-                    <td colSpan={6} className="p-4 text-center">
+                    <td colSpan={7} className="p-4 text-center">
                       Loading jobs…
                     </td>
                   </tr>
                 ) : status === "error" ? (
                   <tr>
-                    <td colSpan={6} className="p-4 text-center text-red-500">
+                    <td colSpan={7} className="p-4 text-center text-red-500">
                       {error.message}
                     </td>
                   </tr>
                 ) : uniqueJobs.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-gray-500">
+                    <td colSpan={7} className="p-8 text-center text-gray-500">
                       No jobs scheduled yet. Jobs appear here after your
                       property calendar syncs.
                     </td>
@@ -279,6 +293,21 @@ export const RealTimeJobBoard = () => {
                     <tr key={job.id} className="hover:bg-gray-50">
                       <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-900">
                         {job.property?.address ?? "N/A"}
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4">
+                        {(() => {
+                          // A manual reclean/correction label wins over the
+                          // service type; one resolver decides that, here and
+                          // on every other screen that names a job.
+                          const display = getJobDisplay(job);
+                          return (
+                            <span
+                              className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${JOB_TONE_BADGE[display.tone]}`}
+                            >
+                              {display.short}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                         {job.assignedCleaners.length > 0
@@ -324,11 +353,29 @@ export const RealTimeJobBoard = () => {
                         })()}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                        {job.checkInTime ? (
-                          <ClientTime dateString={job.checkInTime} />
-                        ) : (
-                          <span>N/A</span>
-                        )}
+                        {(() => {
+                          if (!job.checkInTime) return <span>N/A</span>;
+                          // On a residential clean check_in_time is the START of
+                          // an arrival window, and check_out_time is the finish
+                          // deadline - neither is the window's end. The window
+                          // exists only as a key on the job's snapshot, so this
+                          // is the one place the real promise can be read from.
+                          const window =
+                            job.serviceType === "residential_one_time"
+                              ? getArrivalWindow(job.arrivalWindow)
+                              : undefined;
+                          if (!window) {
+                            return <ClientTime dateString={job.checkInTime} />;
+                          }
+                          return (
+                            <div>
+                              <ClientTime dateString={job.checkInTime} dateOnly />
+                              <p className="text-xs text-gray-500">
+                                {window.label}
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
                         <div className="flex flex-col items-end gap-2">

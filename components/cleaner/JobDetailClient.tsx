@@ -9,6 +9,8 @@ import { RestockRequestCard } from "@/components/cleaner/RestockRequestCard";
 import type { CleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
 import {
   PETS_CLEANER_NOTE,
+  getJobDisplay,
+  type JobDisplay,
   type ServiceType,
 } from "@/lib/constants/service-type";
 import { cn } from "@/lib/utils";
@@ -20,16 +22,17 @@ const roleLabels: Record<CleanerJobDetail["role"], { label: string; className: s
   backup: { label: "Backup", className: "bg-slate-100 text-slate-600" },
 };
 
-const SERVICE_TYPE_BADGE: Record<ServiceType, string> = {
-  vacation_rental_subscription: "bg-sky-100 text-sky-800",
-  residential_one_time: "bg-violet-100 text-violet-800",
+const JOB_TONE_BADGE: Record<JobDisplay["tone"], string> = {
+  vacation_rental: "bg-sky-100 text-sky-800",
+  residential: "bg-violet-100 text-violet-800",
+  labeled: "bg-amber-100 text-amber-900",
 };
 
-/** Short enough for a badge; the long form is the customer-facing label. */
-const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
-  vacation_rental_subscription: "Turnover",
-  residential_one_time: "Residential",
-};
+/** The two service types, for the time labels below. */
+const SERVICE_TYPES_WITH_LABELS = {
+  vacation_rental_subscription: true,
+  residential_one_time: true,
+} as const;
 
 /**
  * The two timestamps mean the same two things for both service types —
@@ -164,10 +167,15 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
   }
 
   const role = roleLabels[job.role];
-  const serviceType = (job.serviceType as ServiceType) in SERVICE_TYPE_BADGE
-    ? (job.serviceType as ServiceType)
-    : "vacation_rental_subscription";
+  const serviceType =
+    (job.serviceType as ServiceType) in SERVICE_TYPES_WITH_LABELS
+      ? (job.serviceType as ServiceType)
+      : "vacation_rental_subscription";
   const labels = TIME_LABELS[serviceType];
+  // A manual reclean/correction label wins over the service type for the
+  // badge. The time labels above still follow `serviceType`, because a reclean
+  // of a turnover is scheduled exactly like a turnover.
+  const display = getJobDisplay(job);
   const hasAccessInfo = Boolean(
     job.entryMethodLabel || job.entryInstructions || job.parkingInstructions
   );
@@ -203,11 +211,18 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
               <span
                 className={cn(
                   "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                  SERVICE_TYPE_BADGE[serviceType]
+                  JOB_TONE_BADGE[display.tone]
                 )}
               >
-                {SERVICE_TYPE_SHORT[serviceType]}
+                {display.short}
               </span>
+              {/* The badge carries the client's own "Reclean/Correction"
+                  wording; here there is room to say which of the two. */}
+              {display.specific && (
+                <span className="text-xs text-gray-500">
+                  {display.specific}
+                </span>
+              )}
               <span
                 className={cn(
                   "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",

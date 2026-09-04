@@ -117,6 +117,14 @@ export const PRIVATE_USER_NAV_ROUTES = [
     route: "/customer/dashboard",
   },
   {
+    // The dashboard board is a rolling window around today, so a one-time clean
+    // vanishes from it a week after it happens. This is where a customer finds
+    // the clean they had last month.
+    icon: <ClipboardListIcon />,
+    label: "my cleans",
+    route: "/customer/job-oversight",
+  },
+  {
     icon: <House className="h-6 w-6" />,
     label: "properties",
     route: "/customer/properties",

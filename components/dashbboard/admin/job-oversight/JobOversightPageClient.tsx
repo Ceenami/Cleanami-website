@@ -5,12 +5,20 @@ import { JobCalendarView } from "./JobCalendarView";
 import { SwapRequestsView } from "./SwapRequestsView";
 import { CleanerStaffingView } from "./CleanerStaffingView";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 export function JobOversightPageClient({ isAdmin = false }: { isAdmin?: boolean }) {
   const searchParams = useSearchParams();
-  const view = searchParams.get('view') || 'list';
+  const pathname = usePathname();
+
+  // The other two tabs are operations tools, and both would fail rather than
+  // degrade in the customer portal: the calendar reads an admin-only,
+  // deliberately unscoped route, and swap requests are a conversation between
+  // cleaners and the office. A customer gets the list and nothing else - and
+  // gets it even if they type the query string themselves.
+  const isOwnerPortal = pathname.startsWith("/customer");
+  const view = isOwnerPortal ? 'list' : searchParams.get('view') || 'list';
 
   // Pending swaps used to be visible only to someone who already thought to
   // open this tab. The count makes an outstanding request obvious from the
@@ -24,12 +32,14 @@ export function JobOversightPageClient({ isAdmin = false }: { isAdmin?: boolean 
       return Array.isArray(rows) ? rows.length : 0;
     },
     refetchInterval: 60_000,
+    enabled: !isOwnerPortal,
   });
 
   return (
     <div className="space-y-6">
-      <div className="-mx-4 overflow-x-auto border-b border-gray-200 px-4 sm:mx-0 sm:px-0">
-        <nav className="flex min-w-max" aria-label="Job oversight views">
+      {!isOwnerPortal && (
+        <div className="-mx-4 overflow-x-auto border-b border-gray-200 px-4 sm:mx-0 sm:px-0">
+          <nav className="flex min-w-max" aria-label="Job oversight views">
         <Link
           href="?view=list"
           className={`whitespace-nowrap px-4 py-3 text-sm font-medium sm:px-6 ${
@@ -79,6 +89,7 @@ export function JobOversightPageClient({ isAdmin = false }: { isAdmin?: boolean 
         )}
         </nav>
       </div>
+      )}
       <div>
         {view === 'list' && <JobListView />}
         {view === 'calendar' && (

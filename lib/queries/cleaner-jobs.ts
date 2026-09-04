@@ -49,6 +49,13 @@ export type CleanerJobSummary = {
    * screen that exists to be scrolled past.
    */
   serviceType: string;
+  /**
+   * 0039 — an admin's manual "this one is a reclean" override. Null on every
+   * ordinary job. Carried on the LIST as well as the detail: without it the
+   * shared label resolver quietly falls back to the service type here, which
+   * reads as the label working on some screens and not others.
+   */
+  jobLabel: string | null;
   /** True when the property allows pets — the card shows the item 7 note. */
   petsAllowed: boolean;
 };
@@ -110,6 +117,7 @@ export async function getCleanerUpcomingJobs(
       addonsSnapshot: jobs.addonsSnapshot,
       propertyAddress: properties.address,
       serviceType: jobs.serviceType,
+      jobLabel: jobs.jobLabel,
       petsAllowed: properties.petsAllowed,
       role: jobsToCleaners.role,
       isTeamLeader: jobsToCleaners.isTeamLeader,
@@ -189,6 +197,7 @@ export async function getCleanerUpcomingJobs(
       jobId: assignment.jobId,
       propertyAddress: assignment.propertyAddress,
       serviceType: assignment.serviceType ?? "vacation_rental_subscription",
+      jobLabel: assignment.jobLabel ?? null,
       petsAllowed: assignment.petsAllowed ?? false,
       arrivalWindow: formatDateTime(checkInTime),
       mustFinishBefore: formatDateTime(assignment.checkOutTime),

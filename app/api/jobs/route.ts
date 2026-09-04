@@ -44,6 +44,21 @@ export async function GET(request: NextRequest) {
         ? rawServiceType
         : "all";
 
+    // The dashboard board always wants the next clean first. The portal job
+    // list wants that too when it is showing what is coming, and the opposite
+    // when it is showing what has already happened - a customer looking at past
+    // cleans wants the most recent one at the top, not their first ever.
+    //
+    // Validated against the two literals, never cast: an unknown value falls
+    // back to the previous behaviour rather than reaching the order-by.
+    const rawSort = searchParams.get("sortByCheckIn");
+    const sortByCheckIn =
+      rawSort === "asc" || rawSort === "desc"
+        ? rawSort
+        : isDashboard
+          ? "asc"
+          : undefined;
+
     let startDate = searchParams.get("startDate")
       ? new Date(searchParams.get("startDate")!)
       : undefined;
@@ -66,7 +81,7 @@ export async function GET(request: NextRequest) {
       endDate,
       customerId: scope.customerId,
       serviceType,
-      sortByCheckIn: isDashboard ? "asc" : undefined,
+      sortByCheckIn,
     });
 
     return NextResponse.json(result);
