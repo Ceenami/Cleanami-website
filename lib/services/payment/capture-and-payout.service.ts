@@ -272,7 +272,14 @@ export async function captureAndCreatePayouts(
           job.notes,
           billingSkipped
             ? "[System] Billing skipped for this customer – no charge, marked as captured."
-            : "[System] Prepaid during onboarding – marked as captured."
+            : job.jobSource === "manual"
+              ? // A hand-created job was never sold, so it was never prepaid
+                // either. It reaches this branch for the same reason — nothing
+                // to capture — but writing "prepaid during onboarding" onto it
+                // would put a false sentence in the one record anyone reads
+                // when asking why a clean was not charged.
+                "[System] Manual job – no charge was due. Marked as captured so the cleaner is paid."
+              : "[System] Prepaid during onboarding – marked as captured."
         ),
         updatedAt: new Date(),
       })
@@ -283,7 +290,11 @@ export async function captureAndCreatePayouts(
       with: { cleaner: true },
     });
 
-    const captureType = billingSkipped ? "skipped_billing" : "prepaid";
+    const captureType = billingSkipped
+      ? "skipped_billing"
+      : job.jobSource === "manual"
+        ? "manual_no_charge"
+        : "prepaid";
 
     if (assignedCleaners.length === 0) {
       console.warn(`No cleaners assigned to non-charging job ${jobId}`);
@@ -357,7 +368,9 @@ export async function captureAndCreatePayouts(
         type: captureType,
         message: billingSkipped
           ? "Billing skipped for this customer; payouts created"
-          : "Prepaid job marked captured and payouts created",
+          : job.jobSource === "manual"
+            ? "Manual job: no charge was due; payouts created"
+            : "Prepaid job marked captured and payouts created",
         jobId,
         payoutsCreated: workingCleaners.length,
       },

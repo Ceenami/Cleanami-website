@@ -269,6 +269,7 @@ import {
   type PaymentDisplay,
 } from "@/lib/constants/payment-status";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { CreateJobModal } from "./CreateJobModal";
 
 interface AssignedCleaner {
   id: string;
@@ -441,6 +442,7 @@ export const JobListView = () => {
   const [serviceTypeFilter, setServiceTypeFilter] =
     useState<ServiceTypeFilter>("all");
   const [timeframe, setTimeframe] = useState<Timeframe>("upcoming");
+  const [creating, setCreating] = useState(false);
 
   const queryKey = useMemo(
     () =>
@@ -493,6 +495,7 @@ export const JobListView = () => {
 
   return (
     <div className="space-y-6">
+      <CreateJobModal open={creating} onClose={() => setCreating(false)} />
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">
@@ -508,6 +511,17 @@ export const JobListView = () => {
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {/* Until now nothing in the product could create a job by hand.
+              This is the entry point for a reclean or a correction. */}
+          {!isOwnerPortal && (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="w-full sm:w-auto rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+            >
+              Create job
+            </button>
+          )}
           <SearchBar
             onSearch={setSearchTerm}
             placeholder={
