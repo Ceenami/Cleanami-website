@@ -7,6 +7,7 @@ import {
   type ArrivalWindowKey,
 } from '@/lib/scheduling/arrival-windows';
 import { SERVICE_TYPE_LABELS, type ServiceType } from '@/lib/constants/service-type';
+import { getPaymentDisplay, type PaymentDisplay } from '@/lib/constants/payment-status';
 
 const STATUS_STYLES = {
   'unassigned': 'bg-gray-100 text-gray-800',
@@ -17,6 +18,13 @@ const STATUS_STYLES = {
   'completed': 'bg-green-100 text-green-800',
   'canceled': 'bg-red-100 text-red-800',
 } as const;
+
+const PAYMENT_TONE_STYLES: Record<PaymentDisplay['tone'], string> = {
+  positive: 'bg-green-100 text-green-800',
+  negative: 'bg-red-100 text-red-800',
+  pending: 'bg-yellow-100 text-yellow-800',
+  neutral: 'bg-gray-100 text-gray-700',
+};
 
 const SERVICE_TYPE_STYLES: Record<ServiceType, string> = {
   vacation_rental_subscription: 'bg-sky-100 text-sky-800',
@@ -67,6 +75,10 @@ export function JobSummaryHeader({ job }: { job: JobDetails }) {
     job.addonsSnapshot?.arrivalWindow as ArrivalWindowKey | undefined
   );
 
+  // Null for every job that predates payment tracking. Rendering nothing is the
+  // point: those jobs were not "unpaid", nobody ever recorded a status for them.
+  const payment = getPaymentDisplay(job.status, job.paymentStatus);
+
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
       <div className="flex flex-col md:flex-row justify-between items-start">
@@ -86,6 +98,23 @@ export function JobSummaryHeader({ job }: { job: JobDetails }) {
           <p className={`mt-1 px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full ${STATUS_STYLES[job.status || 'unassigned']}`}>
             {job.status}
           </p>
+          {payment && (
+            <div className="mt-2">
+              <span className="text-xs font-medium text-gray-500">PAYMENT</span>
+              <p
+                className={`mt-1 px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full ${PAYMENT_TONE_STYLES[payment.tone]}`}
+              >
+                {payment.admin}
+              </p>
+              {/* The admin's next step is opening this in Stripe, so the id is
+                  shown here and deliberately nowhere on the customer side. */}
+              {job.paymentIntentId && (
+                <p className="mt-1 font-mono text-[11px] text-gray-500">
+                  {job.paymentIntentId}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

@@ -351,13 +351,43 @@ async function finalizeJobCancellation(
     ? `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}. Refunded PaymentIntent ${refundedIntentId}.`
     : `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}`;
 
+  // A cancel used to null BOTH of these, which destroyed three records of the
+  // same refund at once: the status, the link to the charge, and — because
+  // Stripe's charge.refunded webhook finds its job by payment_intent_id —
+  // Stripe's own confirmation, which then matched nothing and was silently
+  // dropped. The money went back and the row said nothing had happened.
+  //
+  // The null-out was not arbitrary: it kept a cancelled job out of anything
+  // reasoning about pending money. That still holds, because every one of those
+  // readers also gates on `status`, and `status` is 'canceled' from here on.
+  //
+  // `refundedIntentId` already distinguishes the three outcomes this function's
+  // own note prefixes name, so it decides the status too rather than a second
+  // predicate. A cancel that released an authorization or took no money at all
+  // has nothing to call refunded, and stays null — that is "canceled, no
+  // charge".
+  //
+  // `alreadyRefunded` matters because cancelling twice is possible: on the
+  // second pass `paymentStatus` is 'refunded', so `refundedIntentId` is null
+  // and this would otherwise erase the very state the first pass recorded.
+  const alreadyRefunded = job.paymentStatus === "refunded";
+
   await db
     .update(jobs)
     .set({
       status: "canceled",
       notes: appendJobNote(job.notes, noteLine),
       updatedAt: new Date(),
-      ...(lateCancel ? {} : { paymentStatus: null, paymentIntentId: null }),
+      // The PaymentIntent id is deliberately NOT cleared. It is the only link
+      // back to the charge that was returned, which is what makes a refund
+      // reconcilable from a Stripe payout report to a job — and what lets the
+      // webhook find this row at all.
+      ...(lateCancel
+        ? {}
+        : {
+            paymentStatus:
+              refundedIntentId || alreadyRefunded ? "refunded" : null,
+          }),
     })
     .where(eq(jobs.id, job.id));
 

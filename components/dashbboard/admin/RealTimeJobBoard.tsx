@@ -18,6 +18,10 @@ import { GetJobStatsResponse } from "@/app/api/jobs/stats/route";
 import { getDashboardJobDateRange, DASHBOARD_FUTURE_DAYS, DASHBOARD_PAST_DAYS } from "@/lib/queries/dashboard-job-window";
 import { KpiCard } from "./ui/KpiCard";
 import { ClientTime } from "./ui/ClientTime";
+import {
+  getPaymentDisplay,
+  type PaymentDisplay,
+} from "@/lib/constants/payment-status";
 import { getStatusBadge } from "../utils";
 import { CustomerJobCancelButton } from "@/components/customer/CustomerJobCancelButton";
 import { CustomerJobPromoCodeField } from "@/components/customer/CustomerJobPromoCodeField";
@@ -49,6 +53,13 @@ async function fetchJobs({
     nextPage: result.nextPage,
   };
 }
+
+const PAYMENT_TONE_BADGE: Record<PaymentDisplay["tone"], string> = {
+  positive: "bg-green-100 text-green-800",
+  negative: "bg-red-100 text-red-800",
+  pending: "bg-yellow-100 text-yellow-800",
+  neutral: "bg-gray-100 text-gray-700",
+};
 
 export const RealTimeJobBoard = () => {
   const pathname = usePathname();
@@ -230,6 +241,12 @@ export const RealTimeJobBoard = () => {
                     scope="col"
                     className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                   >
+                    Payment
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                  >
                     Check-in time
                   </th>
                   <th scope="col" className="relative px-6 py-3">
@@ -240,19 +257,19 @@ export const RealTimeJobBoard = () => {
               <tbody className="divide-y divide-gray-200 bg-white">
                 {status === "pending" ? (
                   <tr>
-                    <td colSpan={5} className="p-4 text-center">
+                    <td colSpan={6} className="p-4 text-center">
                       Loading jobs…
                     </td>
                   </tr>
                 ) : status === "error" ? (
                   <tr>
-                    <td colSpan={5} className="p-4 text-center text-red-500">
+                    <td colSpan={6} className="p-4 text-center text-red-500">
                       {error.message}
                     </td>
                   </tr>
                 ) : uniqueJobs.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="p-8 text-center text-gray-500">
+                    <td colSpan={6} className="p-8 text-center text-gray-500">
                       No jobs scheduled yet. Jobs appear here after your
                       property calendar syncs.
                     </td>
@@ -282,6 +299,29 @@ export const RealTimeJobBoard = () => {
                         >
                           {job.status}
                         </span>
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4">
+                        {(() => {
+                          const payment = getPaymentDisplay(
+                            job.status,
+                            job.paymentStatus ?? null
+                          );
+                          // Null on every job that predates payment tracking.
+                          // An empty cell is the honest answer there — those
+                          // jobs are not unpaid, they simply never recorded a
+                          // status. The PaymentIntent id is admin-only and is
+                          // deliberately absent from this board's owner view.
+                          if (!payment) {
+                            return <span className="text-sm text-gray-400">—</span>;
+                          }
+                          return (
+                            <span
+                              className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${PAYMENT_TONE_BADGE[payment.tone]}`}
+                            >
+                              {showOwnerView ? payment.customer : payment.admin}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                         {job.checkInTime ? (

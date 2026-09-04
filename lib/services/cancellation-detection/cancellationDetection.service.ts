@@ -39,7 +39,14 @@ type ExistingJob = {
   expectedHours: string | null;
   addonsSnapshot: any;
   paymentIntentId: string | null;
-  paymentStatus: "pending" | "authorized" | "captured" | "failed" | "capture_failed" | null;
+  paymentStatus:
+    | "pending"
+    | "authorized"
+    | "captured"
+    | "failed"
+    | "capture_failed"
+    | "refunded"
+    | null;
   paymentFailed: boolean | null;
   notes: string | null;
   createdAt: Date;
