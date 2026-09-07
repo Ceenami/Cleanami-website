@@ -14,7 +14,7 @@ const SESSION_COOKIE = "cleannami_session";
 /**
  * The single money path for a residential booking.
  *
- * Every refusal — under 48 hours, an unstaffable arrival window, a custom-size
+ * Every refusal — under 48 hours, a custom-size
  * home, an out-of-area address — is decided inside
  * `createResidentialPaymentIntent` BEFORE Stripe is touched, so a 400 from here
  * means no PaymentIntent was created and no record of any kind exists. That is

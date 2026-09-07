@@ -106,7 +106,7 @@ export function sendJobCompletionEmail(params: {
 
 /**
  * The residential booking confirmation. The client specified the fields:
- * customer name, address, service type, date and arrival window, price, pet
+ * customer name, address, service type, date and arrival time, price, pet
  * status and fee, entry/access reminder, payment status, support contact.
  *
  * The entry line comes from `entryAccessReminder()` — the method, never the
@@ -124,8 +124,8 @@ export type ResidentialBookingConfirmation = {
   propertyAddress: string;
   /** `YYYY-MM-DD`, as the customer chose it. */
   cleanDate: string;
-  /** e.g. "9:00 AM - 11:00 AM". The window, not a single instant. */
-  arrivalWindowLabel: string;
+  /** e.g. "9:00 AM". */
+  arrivalTimeLabel: string;
   amount: string;
   petsAllowed: boolean;
   petFeeApplied: boolean;
@@ -151,7 +151,7 @@ export function buildResidentialBookingConfirmationEmail(
       bodyLines: [
         `Service: ${SERVICE_TYPE_LABELS.residential_one_time}.`,
         `Address: ${params.propertyAddress}.`,
-        `Date: ${cleanDateLabel}. Your cleaner will arrive between ${params.arrivalWindowLabel}.`,
+        `Date: ${cleanDateLabel}. Your cleaner will arrive at ${params.arrivalTimeLabel}.`,
         `Paid today: ${params.amount}. Your payment is complete — there is nothing to pay on the day.`,
         params.petsAllowed
           ? params.petFeeApplied

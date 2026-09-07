@@ -3,7 +3,7 @@ import { evaluateResidentialBooking } from "@/lib/services/residential-booking.s
 import type { ResidentialFormData } from "@/lib/validations/residential";
 
 /**
- * Live price + refusal for the residential wizard.
+ * Full residential booking eligibility check.
  *
  * The vacation-rental form asks `/api/pricing` for a number and decides for
  * itself whether to show a custom-quote card. Residential cannot work that way:
@@ -34,8 +34,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       refused: false,
       priceDetails: result.priceDetails,
-      expectedHours: result.expectedHours,
-      arrivalWindow: result.window.key,
+      arrivalTime: result.arrivalTime,
     });
   } catch (error) {
     console.error("[POST /api/residential/quote]", error);

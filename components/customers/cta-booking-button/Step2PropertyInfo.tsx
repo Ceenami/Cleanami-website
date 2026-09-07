@@ -224,6 +224,8 @@ export const Step2PropertyInfo = ({
           "address",
           "defaultCheckInTime",
           "defaultCheckOutTime",
+          "entryMethod",
+          "entryInstructions",
         ]}
         message="Fields are required to proceed."
       />

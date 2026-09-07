@@ -43,8 +43,8 @@ const TIME_LABELS: Record<ServiceType, { arrive: string; finish: string }> = {
     finish: "Must finish before",
   },
   residential_one_time: {
-    arrive: "Arrival window",
-    finish: "Must finish before",
+    arrive: "Arrival time",
+    finish: "Estimated finish",
   },
 };
 
@@ -239,16 +239,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
                   so the bounds come from the snapshot's window key instead.
                   `arrivalWindowLabel` is null for a turnover, which has a guest
                   check-out time rather than a window. */}
-              {job.arrivalWindowLabel ? (
-                <>
-                  {job.arrivalWindowLabel}
-                  <span className="block text-xs text-gray-500">
-                    {job.arrivalWindow}
-                  </span>
-                </>
-              ) : (
-                job.arrivalWindow ?? "TBD"
-              )}
+              {job.arrivalWindow ?? "TBD"}
             </dd>
           </div>
           <div className="flex justify-between gap-4">

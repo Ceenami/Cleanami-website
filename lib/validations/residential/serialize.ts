@@ -62,6 +62,8 @@ export function normalizeResidentialFormData(
     bathrooms: Number(data.bathrooms) || 0,
     sqft: Number(data.sqft) || 0,
     petsAllowed: toBooleanish(data.petsAllowed),
+    hasHotTub: toBooleanish(data.hasHotTub),
+    hotTubService: toBooleanish(data.hotTubService),
     isAddressInServiceArea: toBooleanish(data.isAddressInServiceArea),
     entryMethod: data.entryMethod,
     entryInstructions: optionalText(data.entryInstructions),

@@ -12,7 +12,7 @@ const faqs = [
   {
     question: "How does the iCal sync work?",
     answer:
-      "This one is for vacation rentals. You provide the iCal link from your booking platform (like Airbnb or VRBO), our system polls it for new guest check-outs, and a turnover clean is scheduled for that day so the property is ready for the next arrival. One-time home cleans need none of this — you pick a date and an arrival window.",
+      "This one is for vacation rentals. You provide the iCal link from your booking platform (like Airbnb or VRBO), our system polls it for new guest check-outs, and a turnover clean is scheduled for that day so the property is ready for the next arrival. One-time home cleans need none of this — you pick a date and an arrival time.",
   },
   {
     question: "What's included in a clean?",

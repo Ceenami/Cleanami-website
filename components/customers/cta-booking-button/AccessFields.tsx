@@ -8,7 +8,7 @@ import {
 } from "@/lib/constants/service-type";
 
 /**
- * Entry method, access details and parking — counterproposal items 5 and 6.
+ * Entry method, access details and parking â€” counterproposal items 5 and 6.
  *
  * One component, both wizards: items 5, 6, 11, 12 and 13 apply to "both
  * vacation rental and residential clean operations", and M3 is explicit that a
@@ -29,14 +29,13 @@ export type AccessFieldValues = {
   /**
    * Typed as the enum rather than `string`, so a value that could never satisfy
    * either form's schema cannot be put into form state in the first place. The
-   * `<select>` narrows on the way out — an option this component did not render
+   * `<select>` narrows on the way out â€” an option this component did not render
    * can only come from a tampered DOM, and the field is simply cleared.
    */
   entryMethod?: EntryMethod;
   entryInstructions?: string;
   parkingInstructions?: string;
 };
-
 interface Props {
   values: AccessFieldValues;
   onChange: (patch: AccessFieldValues) => void;
@@ -62,7 +61,7 @@ export const AccessFields = ({
         <div>
           <h3 className="text-lg font-medium text-gray-900">{heading}</h3>
           <p className="mt-1 text-sm text-gray-600">
-            All optional — tell us as much or as little as you like.
+            Tell us how the cleaner will get in. Parking details are optional.
           </p>
         </div>
       )}
@@ -72,7 +71,7 @@ export const AccessFields = ({
           htmlFor="entryMethod"
           className="block text-sm font-medium text-gray-700 mb-1"
         >
-          How will the cleaner get in?
+          How will the cleaner get in? <span aria-hidden="true">*</span>
         </label>
         <select
           id="entryMethod"
@@ -90,8 +89,9 @@ export const AccessFields = ({
           className={`${inputClass} ${
             errors.entryMethod ? "border-red-500" : ""
           }`}
+          required
         >
-          <option value="">Select an option (optional)</option>
+          <option value="">Select an option</option>
           {ENTRY_METHODS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -106,7 +106,7 @@ export const AccessFields = ({
             htmlFor="entryInstructions"
             className="block text-sm font-medium text-gray-700 mb-1"
           >
-            {method.prompt}
+            {method.prompt} <span aria-hidden="true">*</span>
           </label>
           <textarea
             id="entryInstructions"
@@ -120,6 +120,7 @@ export const AccessFields = ({
             className={`${inputClass} ${
               errors.entryInstructions ? "border-red-500" : ""
             }`}
+            required
           />
           <div className="mt-2 flex items-start gap-2 text-xs text-gray-500">
             <ShieldCheck className="h-4 w-4 flex-shrink-0 text-teal-600" />
@@ -144,7 +145,7 @@ export const AccessFields = ({
           name="parkingInstructions"
           rows={2}
           maxLength={2000}
-          placeholder="Driveway, guest spot 12, street parking on the north side…"
+          placeholder="Driveway, guest spot 12, street parking on the north sideâ€¦"
           value={values.parkingInstructions ?? ""}
           onChange={(e) => onChange({ parkingInstructions: e.target.value })}
           className={`${inputClass} ${

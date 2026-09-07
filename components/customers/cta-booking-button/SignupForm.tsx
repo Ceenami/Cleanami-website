@@ -314,7 +314,9 @@ export const SignupForm = ({
       return true;
     }
 
-    const result = signupFormSchema.partial().safeParse(formData);
+    // Parse the complete shape, then surface only this step's errors. Required
+    // entry details must block the property step rather than payment setup.
+    const result = signupFormSchema.safeParse(formData);
     if (result.success) {
       setErrors({});
       return true;

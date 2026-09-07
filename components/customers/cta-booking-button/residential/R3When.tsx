@@ -4,19 +4,14 @@ import { useMemo } from "react";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/dist/style.css";
 import { AlertTriangle, CalendarIcon, Clock } from "lucide-react";
+
 import type { ResidentialFormData } from "@/lib/validations/residential";
-import { RadioCard } from "../RadioCard";
 import { StepFeedback } from "../StepFeedback";
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
-import {
-  ARRIVAL_WINDOWS,
-  getAvailableArrivalWindows,
-} from "@/lib/scheduling/arrival-windows";
 import {
   earliestBookableDate,
-  getBookableWindows,
+  formatResidentialArrivalTime,
+  getBookableArrivalTimes,
   RESIDENTIAL_NOTICE_MESSAGE,
-  RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
 
 interface Props {
@@ -25,14 +20,6 @@ interface Props {
   errors: Record<string, string[] | undefined>;
 }
 
-/**
- * `YYYY-MM-DD` from a picker `Date`, using its LOCAL calendar fields.
- *
- * Not `toISOString().slice(0,10)`: that reads the UTC date, so a date picked
- * anywhere west of Greenwich in the evening comes back as the day before. The
- * picker hands us a midnight-local Date representing a calendar day, and a
- * calendar day is what we want.
- */
 function toDateKey(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -40,7 +27,6 @@ function toDateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-/** The inverse, as a local midnight Date the picker can select. */
 function fromDateKey(key: string | undefined): Date | undefined {
   if (!key) return undefined;
   const [y, m, d] = key.split("-").map(Number);
@@ -48,87 +34,27 @@ function fromDateKey(key: string | undefined): Date | undefined {
   return new Date(y, m - 1, d);
 }
 
-/**
- * R3 — when.
- *
- * Two rules meet on this step, and both are enforced again server-side. What
- * happens here is a courtesy, not the rule:
- *
- * The 48-hour rule. Under 48 hours is BLOCKED, not
- * queued. The picker will not offer a date that has no bookable window, and
- * within a date the windows that are under 48 hours out are not offered either
- * — because a date can be partly bookable: at 10am Monday, Wednesday's 9-11am
- * slot is 47 hours away and Wednesday's 1-3pm slot is 51.
- *
- * **The operating day.** Cleaners submit availability for a
- * 9 AM - 4 PM window, so a window is offered only when its LATEST arrival still
- * finishes inside that day. That is why a bigger home sees fewer windows, and
- * why a home whose clean runs long sees none and is told to call — selling a
- * slot nobody has declared themselves available for is the failure this avoids.
- */
+/** Residential appointments use an exact arrival time, not a turnover window. */
 export const R3When = ({ formData, setFormData, errors }: Props) => {
-  const expectedHours = useMemo(() => {
-    if (!formData.bedrooms || !formData.bathrooms) return 0;
-    return calculateJobStaffing({
-      bedCount: formData.bedrooms,
-      bathCount: formData.bathrooms,
-      sqFt: formData.sqft ?? null,
-      laundryType: "none",
-      hotTubServiceLevel: false,
-      hotTubDeepClean: false,
-    }).expectedHoursPerCleaner;
-  }, [formData.bedrooms, formData.bathrooms, formData.sqft]);
-
-  const windowsThatFitTheDay = useMemo(
-    () => getAvailableArrivalWindows(expectedHours),
-    [expectedHours]
-  );
-
-  const earliest = useMemo(
-    () => earliestBookableDate(expectedHours),
-    [expectedHours]
-  );
-
-  const bookableToday = useMemo(
+  const earliest = useMemo(() => earliestBookableDate(), []);
+  const bookableArrivalTimes = useMemo(
     () =>
-      formData.cleanDate
-        ? getBookableWindows(formData.cleanDate, expectedHours)
-        : [],
-    [formData.cleanDate, expectedHours]
+      formData.cleanDate ? getBookableArrivalTimes(formData.cleanDate) : [],
+    [formData.cleanDate]
   );
 
   const selectedDate = fromDateKey(formData.cleanDate);
   const earliestDate = fromDateKey(earliest ?? undefined);
-
-  if (windowsThatFitTheDay.length === 0) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-medium text-gray-900">When suits you?</h3>
-        </div>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
-          <AlertTriangle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-yellow-800">
-            {RESIDENTIAL_NO_WINDOW_MESSAGE}
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-lg font-medium text-gray-900">When suits you?</h3>
         <p className="mt-1 text-sm text-gray-600">
-          Pick a date, then an arrival window. Your cleaner arrives inside that
-          window and works until the clean is finished.
+          Pick a date and the time you would like your cleaner to arrive.
         </p>
       </div>
 
-      {/* The client's sentence, verbatim). It is
-          shown up front rather than only on refusal, so the disabled dates in
-          the picker have a reason attached. */}
       <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 flex items-start gap-3">
         <Clock className="h-5 w-5 text-teal-600 flex-shrink-0 mt-0.5" />
         <div>
@@ -157,11 +83,8 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
             setFormData((prev) => ({
               ...prev,
               cleanDate: date ? toDateKey(date) : undefined,
-              // A date change can invalidate the chosen window (a later date
-              // makes more windows legal, an earlier one fewer), so the window
-              // is cleared rather than silently carried onto a date where it is
-              // under 48 hours out.
-              arrivalWindow: undefined,
+              // A new date may change which times meet the 48-hour notice.
+              arrivalTime: undefined,
             }))
           }
           disabled={earliestDate ? { before: earliestDate } : undefined}
@@ -184,7 +107,7 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
               </span>
             </div>
 
-            {bookableToday.length === 0 ? (
+            {bookableArrivalTimes.length === 0 ? (
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
                 <AlertTriangle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-yellow-800">
@@ -192,38 +115,33 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
                 </p>
               </div>
             ) : (
-              <>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Arrival window
+              <div>
+                <label
+                  htmlFor="residential-arrival-time"
+                  className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                  Arrival time
                 </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {bookableToday.map((window) => (
-                    <RadioCard
-                      key={window.key}
-                      id={`window-${window.key}`}
-                      name="arrivalWindow"
-                      value={window.key}
-                      checked={formData.arrivalWindow === window.key}
-                      title={window.label}
-                      description={`Your cleaner arrives in this window and needs about ${expectedHours.toFixed(
-                        1
-                      )} hours.`}
-                      onChange={() =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          arrivalWindow: window.key,
-                        }))
-                      }
-                    />
+                <select
+                  id="residential-arrival-time"
+                  value={formData.arrivalTime ?? ""}
+                  onChange={(event) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      arrivalTime: event.target.value || undefined,
+                    }))
+                  }
+                  className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                  required
+                >
+                  <option value="">Select an arrival time</option>
+                  {bookableArrivalTimes.map((arrivalTime) => (
+                    <option key={arrivalTime} value={arrivalTime}>
+                      {formatResidentialArrivalTime(arrivalTime)}
+                    </option>
                   ))}
-                </div>
-                {bookableToday.length < ARRIVAL_WINDOWS.length && (
-                  <p className="mt-3 text-xs text-gray-500">
-                    Only windows your clean can finish inside our 9:00 AM -
-                    4:00 PM working day are shown.
-                  </p>
-                )}
-              </>
+                </select>
+              </div>
             )}
           </div>
         )}
@@ -231,8 +149,8 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
 
       <StepFeedback
         errors={errors}
-        fields={["cleanDate", "arrivalWindow"]}
-        message="Please choose a date and an arrival window."
+        fields={["cleanDate", "arrivalTime"]}
+        message="Please choose a date and an arrival time."
       />
     </div>
   );

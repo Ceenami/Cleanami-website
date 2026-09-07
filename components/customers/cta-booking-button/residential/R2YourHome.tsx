@@ -141,6 +141,42 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
         idPrefix="res-pets"
       />
 
+      <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+        <label className="flex items-start gap-3 text-sm text-gray-800">
+          <input
+            type="checkbox"
+            checked={formData.hasHotTub}
+            onChange={(event) =>
+              setFormData((prev) => ({
+                ...prev,
+                hasHotTub: event.target.checked,
+                hotTubService: event.target.checked ? prev.hotTubService : false,
+              }))
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>I have a hot tub at this home.</span>
+        </label>
+        {formData.hasHotTub && (
+          <label className="flex items-start gap-3 text-sm text-gray-800">
+            <input
+              type="checkbox"
+              checked={formData.hotTubService}
+              onChange={(event) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  hotTubService: event.target.checked,
+                }))
+              }
+              className="mt-0.5 h-4 w-4"
+            />
+            <span>
+              Add basic hot-tub service to this clean. The price updates above.
+            </span>
+          </label>
+        )}
+      </div>
+
       <StepFeedback
         errors={errors}
         fields={[

@@ -65,11 +65,10 @@ const RESUME_STEP_NAMES: Record<number, string> = {
 const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
   2: ["address", "isAddressInServiceArea", "sqft", "bedrooms", "bathrooms"],
-  3: ["cleanDate", "arrivalWindow"],
-  // R4 is entirely optional (items 5 and 6 are optional on both flows), so it
-  // has no required fields — a customer who will let the cleaner in themselves
-  // walks straight through.
-  4: [],
+  3: ["cleanDate", "arrivalTime"],
+  // Parking remains optional, but every new booking needs an entry method and
+  // usable entry details before it can advance.
+  4: ["entryMethod", "entryInstructions"],
 };
 
 interface Props {
@@ -95,6 +94,8 @@ export const ResidentialForm = ({
     bedrooms: 3,
     bathrooms: 2,
     petsAllowed: false,
+    hasHotTub: false,
+    hotTubService: false,
     isAddressInServiceArea: false,
   });
   const [errors, setErrors] = useState<Record<string, string[] | undefined>>({});
@@ -140,19 +141,27 @@ export const ResidentialForm = ({
   // The snapshot the quote is fetched for. The residential quote is more than a
   // price — the server answers "can we sell this at all?", because a home can
   // price fine and still be unstaffable.
-  const quoteSnapshot = useMemo(
-    () => JSON.stringify(serializeResidentialFormForServer(formData)),
+  const estimateSnapshot = useMemo(
+    () =>
+      JSON.stringify({
+        bedrooms: formData.bedrooms,
+        bathrooms: formData.bathrooms,
+        sqft: formData.sqft,
+        petsAllowed: formData.petsAllowed,
+        hasHotTub: formData.hasHotTub,
+        hotTubService: formData.hotTubService,
+      }),
     [formData]
   );
 
   useEffect(() => {
     let superseded = false;
-    const snapshot = quoteSnapshot;
+    const snapshot = estimateSnapshot;
 
     const timerId = setTimeout(() => {
       void (async () => {
         try {
-          const res = await fetch("/api/residential/quote", {
+          const res = await fetch("/api/residential/estimate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: snapshot,
@@ -174,8 +183,7 @@ export const ResidentialForm = ({
             // replace the price.
             const isSellability =
               result.reason === "custom_quote" ||
-              result.reason === "pricing_unavailable" ||
-              result.reason === "no_window";
+              result.reason === "pricing_unavailable";
             setQuoteRefusal(isSellability ? (result.message ?? null) : null);
             if (isSellability) setPriceDetails(null);
           } else if (result.priceDetails) {
@@ -193,10 +201,10 @@ export const ResidentialForm = ({
       superseded = true;
       clearTimeout(timerId);
     };
-  }, [quoteSnapshot]);
+  }, [estimateSnapshot]);
 
   const isPriceStale =
-    pricedSnapshot !== null && pricedSnapshot !== quoteSnapshot;
+    pricedSnapshot !== null && pricedSnapshot !== estimateSnapshot;
 
   const handleStepChange = async (newStep: number) => {
     setCurrentStep(newStep);
@@ -210,7 +218,9 @@ export const ResidentialForm = ({
       return true;
     }
 
-    const result = residentialFormSchema.partial().safeParse(formData);
+    // Parse the complete shape, then surface only this step's errors. Using
+    // `.partial()` here makes newly-required fields silently optional.
+    const result = residentialFormSchema.safeParse(formData);
     if (result.success) {
       setErrors({});
       return true;
@@ -364,7 +374,7 @@ export const ResidentialForm = ({
             paymentIntentId={paymentData?.paymentIntentId}
             amountInCents={paymentData?.amountInCents}
             cleanDate={formData.cleanDate}
-            arrivalWindow={formData.arrivalWindow}
+            arrivalTime={formData.arrivalTime}
             portalInviteEmailSent={portalInviteEmailSent}
           />
         );

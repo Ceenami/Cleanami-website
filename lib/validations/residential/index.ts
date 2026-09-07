@@ -1,17 +1,11 @@
 import { z } from "zod";
 import { ENTRY_METHOD_VALUES } from "@/lib/constants/service-type";
 import {
-  ARRIVAL_WINDOW_KEYS,
-  getArrivalWindow,
-  windowFitsOperatingDay,
-} from "@/lib/scheduling/arrival-windows";
-import {
   RESIDENTIAL_NOTICE_MESSAGE,
-  RESIDENTIAL_NO_WINDOW_MESSAGE,
+  isResidentialArrivalTime,
   meetsResidentialNotice,
   toEasternDateKey,
 } from "@/lib/scheduling/residential-notice";
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
 
 /**
  * The residential one-time booking form.
@@ -27,10 +21,9 @@ import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
  *
  *   iCal, subscription term    There is no subscription. Item 4.
  *   guest check-in/check-out   A home has no guests. Item 4.
- *   laundry, hot tub           Not offered in client 2A; the residential input
- *                              builder forces them off, which is what selects
- *                              the in-unit team-size column
- *.
+ *   laundry                    Not offered for residential one-time cleans.
+ *   hot-tub drain cadence      Not offered until a later phase; basic hot-tub
+ *                              service uses the shared pricing and staffing rules.
  *   checklist upload           Item 18's residential checklist is M7's.
  *   home condition             The counterproposal withdrew it; the signal
  *                              lands in `specialNotes` instead (delta).
@@ -68,17 +61,20 @@ export const residentialFormSchema = z
       .min(1, "Must have at least 1 bathroom"),
     /** the client's residential wording is "Are pets normally present in the home?" */
     petsAllowed: z.boolean().default(false),
+    hasHotTub: z.boolean().default(false),
+    hotTubService: z.boolean().default(false),
 
     // R3 — when
     cleanDate: CLEAN_DATE,
-    arrivalWindow: z.enum(ARRIVAL_WINDOW_KEYS),
+    arrivalTime: z.string().refine(isResidentialArrivalTime, {
+      message: "Please choose an arrival time between 9:00 AM and 4:00 PM.",
+    }),
 
-    // R4 — getting in. All three optional: "the customer will let the cleaner
-    // in" is a legitimate answer with no details attached, and item 5's own
-    // list includes it.
-    entryMethod: z.enum(ENTRY_METHOD_VALUES).optional(),
+    // R4 — getting in. An entry method and enough detail to use it are required;
+    // parking is useful but remains optional.
+    entryMethod: z.enum(ENTRY_METHOD_VALUES),
     /** CREDENTIAL. Door/lockbox/gate/garage codes. Read the rules before wiring this anywhere. */
-    entryInstructions: z.string().trim().max(2000).optional(),
+    entryInstructions: z.string().trim().min(3, "Please provide entry details.").max(2000),
     parkingInstructions: z.string().trim().max(2000).optional(),
     specialNotes: z.string().trim().max(2000).optional(),
   })
@@ -91,10 +87,10 @@ export const residentialFormSchema = z
       // Guarded on both halves being present because the form parses with
       // `.partial()` on every step — an unguarded refine would fail R1 and R2,
       // where the date has not been reached yet.
-      if (data.cleanDate === undefined || data.arrivalWindow === undefined) {
+      if (data.cleanDate === undefined || data.arrivalTime === undefined) {
         return true;
       }
-      return meetsResidentialNotice(data.cleanDate, data.arrivalWindow);
+      return meetsResidentialNotice(data.cleanDate, data.arrivalTime);
     },
     {
       // The client's sentence, verbatim (delta). Do not reword it.
@@ -102,36 +98,10 @@ export const residentialFormSchema = z
       path: ["cleanDate"],
     }
   )
-  .refine(
-    (data) => {
-      // Layer 2 of the operating-day rule. The form hides windows
-      // that do not fit; this is what makes hiding them a courtesy rather than
-      // the whole enforcement.
-      if (
-        data.arrivalWindow === undefined ||
-        data.bedrooms === undefined ||
-        data.bathrooms === undefined
-      ) {
-        return true;
-      }
-      const window = getArrivalWindow(data.arrivalWindow);
-      if (!window) return false;
-
-      const staffing = calculateJobStaffing({
-        bedCount: data.bedrooms,
-        bathCount: data.bathrooms,
-        sqFt: data.sqft ?? null,
-        laundryType: "none",
-        hotTubServiceLevel: false,
-        hotTubDeepClean: false,
-      });
-      return windowFitsOperatingDay(window, staffing.expectedHoursPerCleaner);
-    },
-    {
-      message: RESIDENTIAL_NO_WINDOW_MESSAGE,
-      path: ["arrivalWindow"],
-    }
-  );
+  .refine((data) => !data.hotTubService || data.hasHotTub, {
+    message: "Select that your home has a hot tub before adding hot-tub service.",
+    path: ["hasHotTub"],
+  });
 
 export type ResidentialFormData = Partial<z.infer<typeof residentialFormSchema>>;
 

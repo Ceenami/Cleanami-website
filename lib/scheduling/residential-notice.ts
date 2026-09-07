@@ -17,12 +17,6 @@
  *   customer in Los Angeles gets the same answer the server does.
  */
 import { fromZonedTime } from "date-fns-tz";
-import {
-  getArrivalWindow,
-  getAvailableArrivalWindows,
-  minutesToTimeOfDay,
-  type ArrivalWindow,
-} from "./arrival-windows";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -37,15 +31,39 @@ export const RESIDENTIAL_NOTICE_HOURS = 48;
 export const RESIDENTIAL_NOTICE_MESSAGE =
   "One-time house cleanings require at least 48 hours notice so we can properly staff your clean.";
 
-/**
- * Shown when no arrival window can finish inside the 9am-4pm operating day for
- * this home (`arrival-windows.ts`). Selling a window we cannot staff is the
- * failure mode we already know: a booking that prices fine and cannot be worked.
- */
-export const RESIDENTIAL_NO_WINDOW_MESSAGE =
-  "This home needs more time than our standard arrival windows allow, so we cannot schedule it online. Please contact CleanNami support and we will arrange it for you.";
-
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_ONLY = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Residential arrival times are selectable in 15-minute increments, 9 AM–4 PM ET. */
+export const RESIDENTIAL_DAY_START_MINUTES = 9 * 60;
+export const RESIDENTIAL_DAY_END_MINUTES = 16 * 60;
+export const RESIDENTIAL_ARRIVAL_INCREMENT_MINUTES = 15;
+
+export function timeToMinutes(time: string | undefined | null): number | null {
+  if (!time || !TIME_ONLY.test(time)) return null;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+export function isResidentialArrivalTime(time: string | undefined | null): boolean {
+  const minutes = timeToMinutes(time);
+  return (
+    minutes !== null &&
+    minutes >= RESIDENTIAL_DAY_START_MINUTES &&
+    minutes <= RESIDENTIAL_DAY_END_MINUTES &&
+    minutes % RESIDENTIAL_ARRIVAL_INCREMENT_MINUTES === 0
+  );
+}
+
+export function formatResidentialArrivalTime(time: string | undefined | null): string | null {
+  const minutes = timeToMinutes(time);
+  if (minutes === null) return null;
+  const hours = Math.floor(minutes / 60);
+  const minutePart = minutes % 60;
+  return `${hours % 12 || 12}:${String(minutePart).padStart(2, "0")} ${
+    hours >= 12 ? "PM" : "AM"
+  }`;
+}
 
 /** `YYYY-MM-DD` for the Eastern calendar day an instant falls on. */
 export function toEasternDateKey(date: Date): string {
@@ -53,7 +71,7 @@ export function toEasternDateKey(date: Date): string {
 }
 
 /**
- * When the cleaner would arrive: the chosen Eastern date at the window's start,
+ * When the cleaner would arrive: the chosen Eastern date at the selected time,
  * as a real UTC instant.
  *
  * Returns null rather than an Invalid Date. `Invalid Date < earliest` is false,
@@ -62,51 +80,39 @@ export function toEasternDateKey(date: Date): string {
  */
 export function getArrivalInstant(
   cleanDate: string,
-  windowKey: string | undefined | null
+  arrivalTime: string | undefined | null
 ): Date | null {
-  if (!DATE_ONLY.test(cleanDate)) return null;
-
-  const window = getArrivalWindow(windowKey);
-  if (!window) return null;
+  if (!DATE_ONLY.test(cleanDate) || !isResidentialArrivalTime(arrivalTime)) return null;
 
   const instant = fromZonedTime(
-    `${cleanDate}T${minutesToTimeOfDay(window.startMinutes)}`,
+    `${cleanDate}T${arrivalTime}:00`,
     EASTERN_TZ
   );
   return Number.isNaN(instant.getTime()) ? null : instant;
 }
 
 /**
- * The must-finish-before instant: the window END plus the job's expected
- * hours. Same null-on-unusable contract as `getArrivalInstant`.
+ * Internal must-finish-before: selected arrival plus expected hours. It may
+ * fall after 4 PM; 4 PM is a latest arrival, not a turnover deadline.
  */
 export function getDeadlineInstant(
   cleanDate: string,
-  windowKey: string | undefined | null,
+  arrivalTime: string | undefined | null,
   expectedHours: number
 ): Date | null {
-  if (!DATE_ONLY.test(cleanDate)) return null;
   if (!Number.isFinite(expectedHours) || expectedHours <= 0) return null;
-
-  const window = getArrivalWindow(windowKey);
-  if (!window) return null;
-
-  const instant = fromZonedTime(
-    `${cleanDate}T${minutesToTimeOfDay(
-      window.endMinutes + Math.ceil(expectedHours * 60)
-    )}`,
-    EASTERN_TZ
-  );
-  return Number.isNaN(instant.getTime()) ? null : instant;
+  const arrival = getArrivalInstant(cleanDate, arrivalTime);
+  if (!arrival) return null;
+  return new Date(arrival.getTime() + Math.ceil(expectedHours * 60) * 60 * 1000);
 }
 
-/** Does this date + window give us at least 48 hours' notice? */
+/** Does this date + selected arrival time give us at least 48 hours' notice? */
 export function meetsResidentialNotice(
   cleanDate: string,
-  windowKey: string | undefined | null,
+  arrivalTime: string | undefined | null,
   now: Date = new Date()
 ): boolean {
-  const arrival = getArrivalInstant(cleanDate, windowKey);
+  const arrival = getArrivalInstant(cleanDate, arrivalTime);
   if (!arrival) return false;
 
   const earliest = now.getTime() + RESIDENTIAL_NOTICE_HOURS * 60 * 60 * 1000;
@@ -122,14 +128,22 @@ export function meetsResidentialNotice(
  * slot is 51 hours out and fine. Offering the date and then refusing the slot
  * is a worse experience than showing only what can actually be booked.
  */
-export function getBookableWindows(
+export function getBookableArrivalTimes(
   cleanDate: string,
-  expectedHours: number,
   now: Date = new Date()
-): ArrivalWindow[] {
-  return getAvailableArrivalWindows(expectedHours).filter((w) =>
-    meetsResidentialNotice(cleanDate, w.key, now)
-  );
+): string[] {
+  const times: string[] = [];
+  for (
+    let minutes = RESIDENTIAL_DAY_START_MINUTES;
+    minutes <= RESIDENTIAL_DAY_END_MINUTES;
+    minutes += RESIDENTIAL_ARRIVAL_INCREMENT_MINUTES
+  ) {
+    const time = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(
+      minutes % 60
+    ).padStart(2, "0")}`;
+    if (meetsResidentialNotice(cleanDate, time, now)) times.push(time);
+  }
+  return times;
 }
 
 /**
@@ -141,12 +155,9 @@ export function getBookableWindows(
  * which only happens when no window fits the home at all.
  */
 export function earliestBookableDate(
-  expectedHours: number,
   now: Date = new Date(),
   maxDaysAhead = 14
 ): string | null {
-  if (getAvailableArrivalWindows(expectedHours).length === 0) return null;
-
   const startOfSearch = new Date(
     now.getTime() + RESIDENTIAL_NOTICE_HOURS * 60 * 60 * 1000
   );
@@ -155,7 +166,7 @@ export function earliestBookableDate(
     const candidate = toEasternDateKey(
       new Date(startOfSearch.getTime() + offset * 24 * 60 * 60 * 1000)
     );
-    if (getBookableWindows(candidate, expectedHours, now).length > 0) {
+    if (getBookableArrivalTimes(candidate, now).length > 0) {
       return candidate;
     }
   }

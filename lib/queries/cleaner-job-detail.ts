@@ -20,7 +20,6 @@ import {
 import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 import { getEntryMethod } from "@/lib/constants/service-type";
 
 function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
@@ -219,11 +218,7 @@ export async function getCleanerJobDetail(
     mustFinishBefore: formatDateTime(job.checkOutTime),
     petsAllowed: property?.petsAllowed ?? false,
     serviceType: job.serviceType ?? "vacation_rental_subscription",
-    arrivalWindowLabel:
-      job.serviceType === "residential_one_time"
-        ? getArrivalWindow(job.addonsSnapshot?.arrivalWindow ?? undefined)
-            ?.label ?? null
-        : null,
+    arrivalWindowLabel: null,
     entryMethod: property?.entryMethod ?? null,
     entryMethodLabel: getEntryMethod(property?.entryMethod)?.label ?? null,
     entryInstructions: property?.entryInstructions ?? null,
