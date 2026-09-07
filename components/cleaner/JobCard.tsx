@@ -37,6 +37,7 @@ type JobCardProps = {
 
 export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
   const role = roleStyles[job.role];
+  const isResidential = job.serviceType === "residential_one_time";
   const [withdrawing, setWithdrawing] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
 
@@ -109,13 +110,17 @@ export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
 
           <dl className="space-y-2 text-sm text-gray-600">
             <div className="flex justify-between gap-4">
-              <dt className="font-medium text-gray-500">Arrival window</dt>
+              <dt className="font-medium text-gray-500">
+                {isResidential ? "Arrival time" : "Guest check-out"}
+              </dt>
               <dd className="text-right text-gray-900">
                 {job.arrivalWindow ?? "TBD"}
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt className="font-medium text-gray-500">Must finish before</dt>
+              <dt className="font-medium text-gray-500">
+                {isResidential ? "Estimated finish" : "Must finish before"}
+              </dt>
               <dd className="text-right text-gray-900">
                 {job.mustFinishBefore ?? "TBD"}
               </dd>

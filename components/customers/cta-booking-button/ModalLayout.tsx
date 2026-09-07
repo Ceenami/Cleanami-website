@@ -1,4 +1,6 @@
-import React from "react";
+"use client";
+
+import React, { useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 import { PriceSummary } from "./PriceSummary";
 import { PriceDetails } from "@/lib/validations/bookng-modal";
@@ -14,6 +16,7 @@ interface Props {
   /** Passed straight through to `PriceSummary`; see its props for why. */
   priceSummaryTitle?: string;
   priceSummaryCustomQuoteMessage?: string;
+  priceSummaryTotalLabel?: string;
 }
 
 export const ModalLayout = ({
@@ -26,41 +29,86 @@ export const ModalLayout = ({
   isPriceRecalculating = false,
   priceSummaryTitle,
   priceSummaryCustomQuoteMessage,
+  priceSummaryTotalLabel,
 }: Props) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key !== "Tab") return;
+
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable?.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 bg-gray-800 bg-opacity-75 flex justify-center items-center z-50 p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-gray-950/70 p-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex max-h-[calc(100dvh-0.5rem)] w-full max-w-4xl flex-col rounded-t-2xl bg-white shadow-xl outline-none sm:max-h-[90dvh] sm:rounded-lg"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center p-5 border-b">
-          <h2 className="text-xl font-semibold text-gray-800">{title}</h2>
+        <div className="flex shrink-0 items-center justify-between border-b bg-white px-5 py-4 sm:p-5">
+          <h2 id={titleId} className="text-xl font-semibold text-gray-800">{title}</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+            aria-label="Close booking form"
           >
             <X className="h-6 w-6" />
           </button>
         </div>
-        <div className="flex-grow overflow-y-auto">
+        <div className="min-h-0 flex-grow overflow-y-auto overscroll-contain">
           <div
             className={`grid ${
               showPriceSummary ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"
-            } gap-8`}
+            } gap-0 md:gap-8`}
           >
-            <div className="p-6 md:p-8">{children}</div>
+            <div className="p-5 sm:p-6 md:p-8">{children}</div>
             {showPriceSummary && (
-              <div className="p-6 md:p-8 bg-white border-l border-gray-100 hidden md:block">
+              <div className="hidden border-l border-gray-100 bg-white p-6 md:block md:p-8">
                 <PriceSummary
                   priceDetails={priceDetails}
                   isRecalculating={isPriceRecalculating}
                   title={priceSummaryTitle}
                   customQuoteMessage={priceSummaryCustomQuoteMessage}
+                  totalLabel={priceSummaryTotalLabel}
                 />
               </div>
             )}

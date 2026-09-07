@@ -26,6 +26,8 @@ interface Props {
    * `lib/pricing/custom-quote-message.ts`; only the choice is made here.
    */
   customQuoteMessage?: string;
+  /** The final price wording differs between subscriptions and one-time cleans. */
+  totalLabel?: string;
 }
 
 export const PriceSummary = ({
@@ -33,6 +35,7 @@ export const PriceSummary = ({
   isRecalculating = false,
   title = "Price per Clean",
   customQuoteMessage = CUSTOM_QUOTE_BOOKING_MESSAGE,
+  totalLabel = "Total per Clean",
 }: Props) => {
   // Only a genuinely absent quote shows the placeholder. `basePrice === 0` must
   // NOT be used as that signal: the form starts at 2 bed / 1 bath, so a price is
@@ -156,7 +159,7 @@ export const PriceSummary = ({
 
         <div className="pt-2 border-t border-gray-200 mt-2">
           <PriceRow
-            label="Total per Clean"
+            label={totalLabel}
             value={`$${priceDetails.totalPerClean.toFixed(2)}`}
             isBold={true}
           />

@@ -602,9 +602,9 @@ export const SignupForm = ({
         )}
 
         <div>
-          <div className="min-h-[350px]">{renderStep()}</div>
+          <div>{renderStep()}</div>
 
-          <div className="mt-8 pt-5 border-t">
+          <div className="sticky bottom-0 z-10 mt-8 border-t bg-white/95 py-4 backdrop-blur">
             <div className="flex justify-between">
               <button
                 type="button"

@@ -26,10 +26,10 @@ export const Header = () => {
       {/* The header container */}
       <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-sm shadow-sm">
         {/* Main header content */}
-        <div className="container mx-auto flex justify-between items-center p-4 ">
+        <div className="container mx-auto flex items-center justify-between px-4 py-3 sm:py-4">
           <Link
             href="/"
-            className={`text-3xl font-extrabold ${myFont.className} antialiased text-brand/60 tracking-tight flex flex-row my-auto`}
+            className={`flex flex-row items-center text-2xl font-extrabold tracking-tight text-brand/60 antialiased sm:text-3xl ${myFont.className}`}
           >
             {/* className="text-teal-500" */}
             
@@ -63,8 +63,10 @@ export const Header = () => {
           <div className="md:hidden">
             <button
               onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="text-gray-800 hover:text-teal-500 focus:outline-none"
-              aria-label="Toggle menu"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-gray-800 transition-colors hover:text-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+            aria-label="Toggle menu"
+            aria-expanded={isMenuOpen}
+            aria-controls="mobile-navigation"
             >
               {isMenuOpen ? (
                 // Close (X) icon
@@ -106,24 +108,24 @@ export const Header = () => {
         {/* Mobile Dropdown Menu */}
         {/* This div's visibility is controlled by the isMenuOpen state */}
         <div className={`md:hidden ${isMenuOpen ? "block" : "hidden"}`}>
-          <nav className="flex flex-col items-center space-y-4 p-5 bg-white border-t border-gray-200">
+          <nav id="mobile-navigation" className="flex flex-col items-center gap-1 border-t border-gray-200 bg-white p-3">
             <Link
               href="/"
-              className="text-gray-600 hover:text-teal-500 font-medium transition-colors"
+              className="w-full rounded-md px-4 py-3 text-center font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-teal-500"
               onClick={() => setIsMenuOpen(false)} // Close menu on link click
             >
               Home
             </Link>
             <Link
               href="/about"
-              className="text-gray-600 hover:text-teal-500 font-medium transition-colors"
+              className="w-full rounded-md px-4 py-3 text-center font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-teal-500"
               onClick={() => setIsMenuOpen(false)} // Close menu on link click
             >
               About Us
             </Link>
             <Link
               href="/sign-in"
-              className="text-gray-600 hover:text-teal-500 font-medium transition-colors"
+              className="w-full rounded-md px-4 py-3 text-center font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-teal-500"
               onClick={() => setIsMenuOpen(false)} // Close menu on link click
             >
               Sign in
