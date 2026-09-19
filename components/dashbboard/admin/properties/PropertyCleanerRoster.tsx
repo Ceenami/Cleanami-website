@@ -72,6 +72,10 @@ export const PropertyCleanerRoster = ({
   const addEntry = () => {
     if (!addCleanerId) return;
     if (roster.some((r) => r.cleanerId === addCleanerId)) return;
+    if (addTier === "main_primary" && roster.some((r) => r.tier === "main_primary")) {
+      setError("A property can have only one Main Primary Cleaner.");
+      return;
+    }
     const cleaner = cleaners.find((c) => c.id === addCleanerId);
     setRoster([
       ...roster,
@@ -87,10 +91,14 @@ export const PropertyCleanerRoster = ({
   const removeEntry = (cleanerId: string) =>
     setRoster(roster.filter((r) => r.cleanerId !== cleanerId));
 
-  const changeTier = (cleanerId: string, tier: Tier) =>
-    setRoster(
-      roster.map((r) => (r.cleanerId === cleanerId ? { ...r, tier } : r))
-    );
+  const changeTier = (cleanerId: string, tier: Tier) => {
+    if (tier === "main_primary" && roster.some((r) => r.cleanerId !== cleanerId && r.tier === "main_primary")) {
+      setError("A property can have only one Main Primary Cleaner.");
+      return;
+    }
+    setError(null);
+    setRoster(roster.map((r) => (r.cleanerId === cleanerId ? { ...r, tier } : r)));
+  };
 
   const save = async () => {
     setSaving(true);
@@ -132,7 +140,7 @@ export const PropertyCleanerRoster = ({
     <Card icon={<UsersIcon />} title="Cleaner Hierarchy">
       <p className="mb-3 text-sm text-gray-500">
         Preferred cleaners for this property. The assignment engine tries these
-        in order (Main Primary first) before falling back to the nearest
+        in order (one Main Primary Cleaner first) before falling back to the nearest
         reliable cleaner.
       </p>
 

@@ -11,6 +11,7 @@ import {
   type HotTubTimeAdditions,
 } from "@/lib/pricing/staffing-logic";
 import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
+import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 type NewJob = typeof jobs.$inferInsert;
 type DrizzleDb = NodePgDatabase<typeof schema>;
@@ -86,6 +87,8 @@ type PropertyDetails = {
   laundryLoads: number | null;
   hotTubServiceLevel: boolean;
   hotTubDrainCadence: string | null;
+  useDefaultChecklist: boolean;
+  checklistFiles: { id: string; fileName: string; storagePath: string | null; sourceUrl: string | null }[];
 };
 
 type CalculatedJobDetails = ReturnType<typeof calculateJobStaffing>;
@@ -124,6 +127,7 @@ export class ICalService {
 
     const property = await this.db.query.properties.findFirst({
       where: eq(schema.properties.id, propertyId),
+      with: { checklistFiles: true },
     });
 
     if (!property) {
@@ -390,6 +394,7 @@ export class ICalService {
           offSiteLaundryHours: jobDetails.offSiteLaundryHours,
           hotTubHours: jobDetails.hotTubHours,
         },
+        checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
       };
     });
 

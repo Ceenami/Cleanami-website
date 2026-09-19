@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { evidencePackets, jobsToCleaners } from "@/db/schemas";
+import { evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
 import {
   cleanerAuthErrorStatus,
   getCleanerAuth,
@@ -8,12 +8,13 @@ import {
 } from "@/lib/cleaner-auth";
 import {
   flattenRoomPhotos,
-  getExpectedChecklistItems,
+  getExpectedChecklistItemsFromSnapshot,
   getMissingChecklistItems,
   getMissingPhotoRequirements,
   getRoomPhotoRequirements,
   type ChecklistLogPayload,
 } from "@/lib/cleaner/evidence";
+import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import {
   ensureEvidencePacket,
   getCleanerEvidenceFormData,
@@ -139,10 +140,13 @@ export async function PATCH(
     // whatever ids the client submitted — a property with its own uploaded
     // checklist must have every one of its items confirmed, not just any
     // single item marked complete (spec §14.2).
-    const expectedChecklistItems = getExpectedChecklistItems(
-      property,
-      property.checklistFiles
-    );
+    const snapshot = isChecklistSnapshot(assignment.job.checklistSnapshot)
+      ? assignment.job.checklistSnapshot
+      : createChecklistSnapshot(property, property.checklistFiles);
+    if (!assignment.job.checklistSnapshot) {
+      await db.update(jobs).set({ checklistSnapshot: snapshot, updatedAt: new Date() }).where(eq(jobs.id, assignment.job.id));
+    }
+    const expectedChecklistItems = getExpectedChecklistItemsFromSnapshot(snapshot);
     const missingChecklistItems = getMissingChecklistItems(
       expectedChecklistItems,
       checklistLog.items

@@ -3,6 +3,7 @@ import { subscriptions } from "./subscriptions.schema";
 import { properties } from "./properties.schema";
 import { cleaners } from "./cleaners.schema";
 import { promoCodes } from "./promoCodes.schema";
+import type { ChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 export const jobStatusEnum = pgEnum('job_status', [
   'unassigned',
@@ -41,6 +42,8 @@ export const jobs = pgTable('jobs', {
     offSiteLaundryHours?: number;
     hotTubHours?: number;
   }>(),
+  /** 0040: the exact checklist and documents issued with this job. */
+  checklistSnapshot: jsonb('checklist_snapshot').$type<ChecklistSnapshot | null>(),
   
   paymentIntentId: text('payment_intent_id'),
   paymentStatus: paymentStatusEnum('payment_status'), // Use the enum defined above

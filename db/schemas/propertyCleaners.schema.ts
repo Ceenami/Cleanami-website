@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
+import { sql } from "drizzle-orm";
 import { properties } from "./properties.schema";
 import { cleaners } from "./cleaners.schema";
 
@@ -44,6 +45,9 @@ export const propertyCleaners = pgTable(
       table.propertyId,
       table.cleanerId
     ),
+    uniqueIndex("property_cleaners_one_main_primary_per_property")
+      .on(table.propertyId)
+      .where(sql`${table.tier} = 'main_primary'`),
     index("property_cleaners_property_idx").on(table.propertyId),
     index("property_cleaners_cleaner_idx").on(table.cleanerId),
   ]

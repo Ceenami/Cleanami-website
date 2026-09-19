@@ -13,6 +13,7 @@ import {
 } from './EvidencePhotoGallery';
 import { JobHistorySection } from './JobHistorySeciont';
 import { PropertyDetailsCard } from './PropertyDetailsCard';
+import { PropertyChecklistCard } from './PropertyChecklistCard';
 import { CleanerCard } from './CleanerCard';
 import { IssuesCard } from './IssuesCard';
 import { AdminActionsCard, type AdminConfirmAction } from './AdminActionsCard';
@@ -145,6 +146,7 @@ export function JobDetailsClient({
               showInternals={isAdmin}
             />
             <PropertyDetailsCard property={job.property} />
+            {isAdmin && <PropertyChecklistCard jobId={jobId} />}
             {/* Evidence-workflow states ("pending admin review", "packet
                 incomplete") are internal process language. */}
             {isAdmin && <IssuesCard evidencePacket={job.evidencePacket} />}

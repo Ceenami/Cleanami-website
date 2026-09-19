@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getAdminAuth } from "@/lib/admin-auth";
 import {
   getPropertyRoster,
+  MainPrimaryConflictError,
   setPropertyRoster,
 } from "@/lib/queries/property-cleaners";
 
@@ -36,6 +37,9 @@ export async function GET(
     const roster = await getPropertyRoster(id);
     return NextResponse.json({ roster });
   } catch (err) {
+    if (err instanceof MainPrimaryConflictError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     console.error("[GET /api/properties/[id]/cleaners]", err);
     return NextResponse.json({ error: "Failed to load roster" }, { status: 500 });
   }
@@ -62,6 +66,9 @@ export async function PUT(
     const result = await setPropertyRoster(id, parsed.data.entries);
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
+    if (err instanceof MainPrimaryConflictError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     console.error("[PUT /api/properties/[id]/cleaners]", err);
     return NextResponse.json(
       { error: "Failed to save roster" },

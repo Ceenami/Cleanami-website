@@ -14,9 +14,10 @@ import {
 } from "@/lib/storage/signed-url";
 import { buildPayBreakdown } from "@/lib/cleaner/pay-breakdown";
 import {
-  getExpectedChecklistItems,
+  getExpectedChecklistItemsFromSnapshot,
   mergeChecklistItems,
 } from "@/lib/cleaner/evidence";
+import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
@@ -217,16 +218,19 @@ export async function getCleanerEvidenceFormData(
     | { items?: { id: string; task: string; completed: boolean }[]; roomPhotos?: Record<string, string[]> }
     | null;
 
-  const checklistFiles = await signChecklistFiles(property.checklistFiles);
+  const snapshot = isChecklistSnapshot(assignment.job.checklistSnapshot)
+    ? assignment.job.checklistSnapshot
+    : createChecklistSnapshot(property, property.checklistFiles);
+  if (!assignment.job.checklistSnapshot) {
+    await db.update(jobs).set({ checklistSnapshot: snapshot, updatedAt: new Date() }).where(eq(jobs.id, assignment.job.id));
+  }
+  const checklistFiles = await signChecklistFiles(snapshot.files);
 
   // roomPhotos stores object paths (for submit); previews are signed for <img>.
   const roomPhotos = existingLog?.roomPhotos ?? {};
   const roomPhotoPreviews = await signRoomPhotos(roomPhotos);
 
-  const expectedChecklistItems = getExpectedChecklistItems(
-    property,
-    property.checklistFiles
-  );
+  const expectedChecklistItems = getExpectedChecklistItemsFromSnapshot(snapshot);
 
   return {
     jobId,
