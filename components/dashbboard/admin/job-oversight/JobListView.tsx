@@ -273,7 +273,7 @@ interface JobRecord {
   assignedCleaners: AssignedCleaner[];
   status: string;
   checkInTime?: string | null;
-  /** 0035. Older rows all default to the vacation-rental literal. */
+  /** 0041. Older rows all default to the vacation-rental literal. */
   serviceType?: ServiceType | null;
 }
 

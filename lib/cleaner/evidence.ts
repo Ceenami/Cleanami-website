@@ -203,9 +203,9 @@ export type ExpectedChecklistItem = { id: string; task: string; section?: string
 export function getExpectedChecklistItems(
   property: Pick<Property, "useDefaultChecklist"> & {
     /**
-     * 0035. Optional so the ~half-dozen existing call sites keep compiling and
+     * 0041. Optional so the ~half-dozen existing call sites keep compiling and
      * keep behaving exactly as before — an omitted service type is a
-     * vacation-rental turnover, which is what every property was until 0035.
+     * vacation-rental turnover, which is what every property was until 0041.
      */
     serviceType?: string | null;
   },

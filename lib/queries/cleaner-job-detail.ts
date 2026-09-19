@@ -98,7 +98,7 @@ export type CleanerJobDetail = {
    * property after the job was created — exactly the case worth telling them.
    */
   petsAllowed: boolean;
-  /** 0035. Drives the badge and every label below. */
+  /** 0041. Drives the badge and every label below. */
   serviceType: string;
   /**
    * The mistake this exists to prevent: on a residential clean check_out_time is

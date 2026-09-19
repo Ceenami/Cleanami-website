@@ -115,7 +115,7 @@ export const SignupForm = ({
     // Items 5, 6, 7. `petsAllowed` is seeded false so the price the customer
     // first sees is the no-pet price; the three access fields start undefined
     // because a property with no entry information must not acquire a false one
-    // (the same reason migration 0035 leaves those columns nullable).
+    // (the same reason migration 0041 leaves those columns nullable).
     petsAllowed: false,
     entryMethod: undefined,
     entryInstructions: undefined,

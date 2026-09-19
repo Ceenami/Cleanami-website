@@ -52,7 +52,7 @@ export const properties = pgTable(
     defaultCheckInTime: text('default_check_in_time').default('16:00:00'),
     defaultCheckOutTime: text('default_check_out_time').default('09:00:00'),
     /**
-     * 0035 — varchar + CHECK rather than a pgEnum, because a value added by
+     * 0041 — varchar + CHECK rather than a pgEnum, because a value added by
      * ALTER TYPE cannot be used until its transaction commits. The two literals
      * are the client's own, from the 2026-08-27 counterproposal; the display
      * labels ("Vacation Rental Turnover", "One-Time Residential Clean") live in
@@ -63,10 +63,10 @@ export const properties = pgTable(
     })
       .default("vacation_rental_subscription")
       .notNull(),
-    /** 0035 — drives the $10/clean pet fee and the cleaner's pet note. Both service types. */
+    /** 0041 — drives the $10/clean pet fee and the cleaner's pet note. Both service types. */
     petsAllowed: boolean("pets_allowed").default(false).notNull(),
     /**
-     * 0035 — how the cleaner gets in. NULL means "not recorded", which is every
+     * 0041 — how the cleaner gets in. NULL means "not recorded", which is every
      * property predating the migration; it is deliberately not defaulted,
      * because inventing an entry method is a lie a cleaner acts on at 9am.
      */
@@ -77,16 +77,16 @@ export const properties = pgTable(
       ],
     }),
     /**
-     * 0035 — CREDENTIAL STORE. Holds door, lockbox, gate and garage codes.
+     * 0041 — CREDENTIAL STORE. Holds door, lockbox, gate and garage codes.
      * Never put this in an email, an SMS, a push payload, a `notifications`
      * row, `jobs.notes`, `jobs.addons_snapshot` or Stripe metadata. Return it
      * only to an admin or to the ASSIGNED cleaner.
      */
     entryInstructions: text("entry_instructions"),
-    /** 0035 — free text, both service types. Not a credential, unlike entryInstructions. */
+    /** 0041 — free text, both service types. Not a credential, unlike entryInstructions. */
     parkingInstructions: text("parking_instructions"),
     /**
-     * 0035 — the customer's own notes about the clean (item 4's "Special
+     * 0041 — the customer's own notes about the clean (item 4's "Special
      * notes"). **Not a credential**: "the dog is friendly but barks" is not a
      * door code, so unlike `entryInstructions` this may be shown beside the
      * access details rather than locked behind them — but it is still customer

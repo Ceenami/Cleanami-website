@@ -41,7 +41,7 @@ export type CleanerJobSummary = {
   urgentBonus: boolean;
   teammates: CleanerJobTeammate[];
   /**
-   * 0035 — drives the Residential / Turnover badge on the job card.
+   * 0041 — drives the Residential / Turnover badge on the job card.
    *
    * The badge is all this list gets. Entry method, access details and parking
    * stay on the DETAIL view only: the list is every job a cleaner can

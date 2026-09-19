@@ -375,7 +375,7 @@ export class ICalService {
         checkOutTime: jobDeadline,
         calendarEventUid: compositeUid,
         status: "unassigned" as const,
-        // 0035 — both already default to exactly these values, so this changes
+        // 0041 — both already default to exactly these values, so this changes
         // no behaviour. Stated explicitly because the client's document
         // asks every insert path to pass `job_source` rather than lean on
         // the default: a default is a guess about the past, and a job's origin

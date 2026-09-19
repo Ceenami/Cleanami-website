@@ -48,7 +48,7 @@ export async function PATCH(
     patch.hasLaundryLeadCert = body.hasLaundryLeadCert;
   }
 
-  // 0035 gave both columns a `true` default — opt-out, not
+  // 0041 gave both columns a `true` default — opt-out, not
   // opt-in, because defaulting false ships residential with an empty assignable
   // pool that presents as a broken engine rather than as a policy. M5 made the
   // assignment engine read them; without a writer, "admin-editable per cleaner"

@@ -54,7 +54,7 @@ export const cleaners = pgTable("cleaners", {
   /** Period start (Monday) for which the one-time late catch-up override was consumed */
   availabilityLateOverridePeriodStart: date("availability_late_override_period_start"),
   /**
-   * 0035 — residential eligibility. Both default TRUE on purpose: opt-out, not
+   * 0041 — residential eligibility. Both default TRUE on purpose: opt-out, not
    * opt-in. Defaulting FALSE would ship residential with an empty assignable
    * pool, which presents as a broken assignment engine rather than as a
    * policy. Admin-editable per cleaner.

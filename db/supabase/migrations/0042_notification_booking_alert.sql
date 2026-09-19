@@ -1,4 +1,4 @@
--- 0036 — add 'booking_alert' to notification_type.
+-- 0042 — add 'booking_alert' to notification_type.
 --
 -- NOT YET APPLIED TO PRODUCTION. Test project only; production migrations are
 -- applied by hand after review. Safe to re-run.
@@ -16,11 +16,11 @@
 --
 -- If this is not applied before the code deploys, notifyAdmins catches its own
 -- insert failure and returns 0, so the booking still completes — you just lose
--- the admin bell. Apply 0035 first, then this.
+-- the admin bell. Apply 0041 first, then this.
 
 ALTER TYPE "notification_type" ADD VALUE IF NOT EXISTS 'booking_alert';
 
 -- Check:  SELECT unnest(enum_range(NULL::notification_type));   -- 12 values
 --
 -- Apply with (hand this to a human, do not run it):
---   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0036_notification_booking_alert.sql
+--   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0042_notification_booking_alert.sql

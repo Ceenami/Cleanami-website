@@ -151,7 +151,7 @@ function AssignmentEligibilityToggle({ cleaner }: { cleaner: Cleaner }) {
  * Who may be auto-assigned a one-time residential clean, and who may be
  * auto-assigned one at a home with pets.
  *
- * Both default TRUE (0035), so this control is for taking a cleaner OUT of the
+ * Both default TRUE (0041), so this control is for taking a cleaner OUT of the
  * residential pool rather than opting them in. That direction matters: turning
  * `residentialQualified` off is how an admin acts on "this cleaner only wants
  * turnovers", and turning `petComfortable` off is how they act on an allergy —

@@ -18,7 +18,7 @@ export type AvailableCleanerWithDistance = {
   /** Laundry-lead eligible — preferred for the off-site $5/load Laundry Lead role. */
   hasLaundryLeadCert: boolean;
   /**
-   * 0035. Surfaced here so the assignment engine can narrow the pool for
+   * 0041. Surfaced here so the assignment engine can narrow the pool for
    * a residential job **without a second query per candidate**. Purely additive:
    * nothing in this file reads them, so the ranking and the returned order are
    * byte-identical to before (invariant #2).

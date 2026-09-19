@@ -15,7 +15,7 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'assignment',
   'availability_reminder',
   /**
-   * 0036 — "a new residential booking arrived, staff it". Admin-facing.
+   * 0042 — "a new residential booking arrived, staff it". Admin-facing.
    *
    * Deliberately NOT folded into `assignment`: M5 already emits an `assignment`
    * alert when the engine *fails* to staff a residential job, and sharing the

@@ -814,8 +814,8 @@ export async function completeResidentialBooking(
     // job-oversight, and the assignment engine will try to staff it before
     // anyone needs to act. The engine *failing* is what escalates by email.
     //
-    // booking_alert needs migration 0036, but notifyAdmins swallows its own
-    // errors, so an unapplied 0036 costs the bell and not the booking.
+    // booking_alert needs migration 0042, but notifyAdmins swallows its own
+    // errors, so an unapplied 0042 costs the bell and not the booking.
     try {
       await notifyAdmins({
         type: "booking_alert",

@@ -199,7 +199,7 @@ async function getPropertyRosterCandidates(
       // Both columns are NOT NULL defaulting true — opt-out, not opt-in.
       // Defaulting false would ship residential with an empty assignable pool,
       // which reads as a broken engine rather than a policy. The `?? true`
-      // covers a row read before 0035 is applied.
+      // covers a row read before 0041 is applied.
       residentialQualified: r.residentialQualified ?? true,
       petComfortable: r.petComfortable ?? true,
     }));
@@ -273,7 +273,7 @@ export async function assignJob(job: {
   checkInTime: Date | null;
   /** Used to size this job's window when checking for schedule clashes. */
   expectedHours?: string | number | null;
-  /** 0035. Residential jobs narrow the pool; a VR job must not be narrowed. */
+  /** 0041. Residential jobs narrow the pool; a VR job must not be narrowed. */
   serviceType?: string | null;
   /** Drives the required-skills gate + team size. Read from the job's snapshot. */
   addonsSnapshot?: {

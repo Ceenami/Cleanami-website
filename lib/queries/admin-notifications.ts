@@ -9,7 +9,7 @@ type AdminNotificationType =
   | "swap_requested"
   | "dispute_update"
   | "assignment"
-  /** 0036 — a new residential booking. Needs that migration applied first. */
+  /** 0042 — a new residential booking. Needs that migration applied first. */
   | "booking_alert";
 
 /**
