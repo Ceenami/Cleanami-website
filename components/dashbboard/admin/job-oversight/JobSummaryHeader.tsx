@@ -2,6 +2,10 @@
 
 import type { JobDetails } from '@/lib/queries/jobs';
 import { ClientTime } from '../ui/ClientTime';
+import {
+  getArrivalWindow,
+  type ArrivalWindowKey,
+} from '@/lib/scheduling/arrival-windows';
 import { SERVICE_TYPE_LABELS, type ServiceType } from '@/lib/constants/service-type';
 
 const STATUS_STYLES = {
@@ -42,9 +46,9 @@ const TIME_LABELS: Record<
     checkOutHint: 'Next guest check-in',
   },
   residential_one_time: {
-    checkIn: 'Arrival time',
-    checkInHint: 'Customer-selected cleaner arrival time',
-    checkOut: 'Estimated finish',
+    checkIn: 'Arrival window opens',
+    checkInHint: 'Earliest the cleaner may arrive',
+    checkOut: 'Must finish before',
     checkOutHint: 'Window end plus the expected hours — not the window end',
   },
 };
@@ -59,6 +63,10 @@ export function JobSummaryHeader({ job }: { job: JobDetails }) {
   // end PLUS the job's expected hours, so the window cannot be reconstructed
   // from the two columns. Rendering it from the key is the only truthful
   // version.
+  const arrivalWindow = getArrivalWindow(
+    job.addonsSnapshot?.arrivalWindow as ArrivalWindowKey | undefined
+  );
+
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
       <div className="flex flex-col md:flex-row justify-between items-start">
@@ -90,7 +98,9 @@ export function JobSummaryHeader({ job }: { job: JobDetails }) {
             {job.checkInTime ? <ClientTime dateString={job.checkInTime} /> : 'Not set'}
           </p>
           <p className="text-xs text-gray-500">
-            {labels.checkInHint}
+            {arrivalWindow
+              ? `Arrival window: ${arrivalWindow.label}`
+              : labels.checkInHint}
           </p>
         </div>
         <div>

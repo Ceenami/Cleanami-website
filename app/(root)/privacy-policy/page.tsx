@@ -149,7 +149,7 @@ export default function PrivacyPolicyPage() {
               "Provide, operate, maintain, and improve the CleanNami Services.",
               "Create customer accounts, cleaner accounts, jobs, assignments, checklists, calendar syncs, invoices, and payouts.",
               "Calculate pricing, expected cleaning time, team size, cleaner pay, labor cost, and job profitability.",
-              "Schedule vacation rental turnover cleans based on customer calendars and cleaner availability, and one-time residential cleans based on the date and arrival time a customer selects.",
+              "Schedule vacation rental turnover cleans based on customer calendars and cleaner availability, and one-time residential cleans based on the date and arrival window a customer selects.",
               "Verify cleaner arrival, departure, location, completion, proof-of-work, and job accountability.",
               "Send operational messages such as booking confirmations, subscription confirmations, job assignments, reminders, cancellation notices, failed payment notices, issue updates, and support messages.",
               "Review completed work, resolve customer issues, handle disputes, approve payouts, and maintain audit records.",

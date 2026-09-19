@@ -34,15 +34,15 @@ export const signupFormSchema = z
      * live on step 2.
      *
      * All three optional on purpose: an existing customer adding a second
-     * Every new booking needs a usable access method before a cleaner can be
-     * assigned; parking remains optional.
+     * property shouldn't be blocked by a field that didn't exist last week, and
+     * "the customer will let the cleaner in" is a complete answer on its own.
      *
      * entryInstructions is a credential — door, lockbox, gate and garage codes.
      * It must never reach an email, SMS, push payload, notifications row,
      * jobs.notes, addons_snapshot or Stripe metadata.
      */
-    entryMethod: z.enum(ENTRY_METHOD_VALUES),
-    entryInstructions: z.string().trim().min(3).max(2000),
+    entryMethod: z.enum(ENTRY_METHOD_VALUES).optional(),
+    entryInstructions: z.string().trim().max(2000).optional(),
     parkingInstructions: z.string().trim().max(2000).optional(),
     /**
      * Which wizard this session belongs to. Routing only — not the value written

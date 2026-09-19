@@ -28,12 +28,19 @@ import {
 } from "@/lib/validations/residential";
 import { normalizeResidentialFormData } from "@/lib/validations/residential/serialize";
 import {
+  getArrivalWindow,
+  minutesToTimeOfDay,
+  mustFinishBeforeMinutes,
+  windowFitsOperatingDay,
+  type ArrivalWindow,
+} from "@/lib/scheduling/arrival-windows";
+import {
   earliestBookableDate,
-  formatResidentialArrivalTime,
   getArrivalInstant,
   getDeadlineInstant,
   meetsResidentialNotice,
   RESIDENTIAL_NOTICE_MESSAGE,
+  RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
 import type { PriceDetails } from "@/lib/validations/bookng-modal";
 
@@ -55,6 +62,7 @@ const pricingService = new PricingService();
 export type ResidentialRefusalReason =
   | "validation"
   | "notice"
+  | "no_window"
   | "custom_quote"
   | "pricing_unavailable"
   | "out_of_area"
@@ -64,12 +72,12 @@ export type ResidentialQuote = {
   ok: true;
   form: ResidentialFormData;
   priceDetails: PriceDetails;
-  arrivalTime: string;
+  window: ArrivalWindow;
   /** Per-cleaner expected hours; the wall-clock length of the clean. */
   expectedHours: number;
-  /** Selected arrival time. Becomes jobs.check_in_time. */
+  /** Window start. Becomes jobs.check_in_time. */
   arrival: Date;
-  /** Internal estimated finish: arrival + expected hours. Becomes jobs.check_out_time. */
+  /** Must finish before: window end + expected hours. Becomes jobs.check_out_time. */
   deadline: Date;
   amountCents: number;
 };
@@ -101,20 +109,44 @@ export async function evaluateResidentialBooking(
   //
   // Guarded on the inputs being usable so a half-filled form still gets proper
   // field errors from the parse below instead of an answer computed from zeroes.
-  // 48 hours, Eastern, measured from the selected arrival time — not
+  const hasSizing =
+    Number.isFinite(form.bedrooms) &&
+    (form.bedrooms ?? 0) > 0 &&
+    Number.isFinite(form.bathrooms) &&
+    (form.bathrooms ?? 0) > 0;
+  const preWindow = getArrivalWindow(form.arrivalWindow);
+
+  if (hasSizing && preWindow && form.cleanDate) {
+    const preHours = calculateJobStaffing({
+      bedCount: form.bedrooms!,
+      bathCount: form.bathrooms!,
+      sqFt: form.sqft ?? null,
+      laundryType: "none",
+      hotTubServiceLevel: false,
+      hotTubDeepClean: false,
+    }).expectedHoursPerCleaner;
+
+    // Re-checked server-side: the form only hides windows that don't fit, and a
+    // hidden control isn't an enforced one.
+    if (!windowFitsOperatingDay(preWindow, preHours)) {
+      return {
+        ok: false,
+        reason: "no_window",
+        error: RESIDENTIAL_NO_WINDOW_MESSAGE,
+      };
+    }
+
+    // 48 hours, Eastern, measured from the START of the arrival window — not
     // midnight of the chosen date, and not the browser clock. Runs before any
     // PaymentIntent exists, so a refused booking leaves no record at all.
-  if (
-    form.cleanDate &&
-    form.arrivalTime &&
-    !meetsResidentialNotice(form.cleanDate, form.arrivalTime, now)
-  ) {
-    return {
-      ok: false,
-      reason: "notice",
-      error: RESIDENTIAL_NOTICE_MESSAGE,
-      earliestBookableDate: earliestBookableDate(now) ?? undefined,
-    };
+    if (!meetsResidentialNotice(form.cleanDate, form.arrivalWindow, now)) {
+      return {
+        ok: false,
+        reason: "notice",
+        error: RESIDENTIAL_NOTICE_MESSAGE,
+        earliestBookableDate: earliestBookableDate(preHours, now) ?? undefined,
+      };
+    }
   }
 
   // Shape, including the same two rules again as refinements, so a direct API
@@ -137,24 +169,33 @@ export async function evaluateResidentialBooking(
     bathCount: data.bathrooms,
     sqFt: data.sqft,
     laundryType: "none",
-    hotTubServiceLevel: data.hasHotTub && data.hotTubService,
+    hotTubServiceLevel: false,
     hotTubDeepClean: false,
   });
   const expectedHours = staffing.expectedHoursPerCleaner;
 
+  const window = getArrivalWindow(data.arrivalWindow);
+  if (!window) {
+    return {
+      ok: false,
+      reason: "validation",
+      error: "Please choose an arrival window.",
+    };
+  }
+
   // These return null rather than an Invalid Date. `Invalid Date < earliest` is
   // false, so a malformed time would sail past a buffer check and only be
   // rejected by Postgres after the card was charged.
-  const arrival = getArrivalInstant(data.cleanDate, data.arrivalTime);
+  const arrival = getArrivalInstant(data.cleanDate, data.arrivalWindow);
   const deadline = getDeadlineInstant(
     data.cleanDate,
-    data.arrivalTime,
+    data.arrivalWindow,
     expectedHours
   );
   if (!arrival || !deadline) {
-    console.error("[residential-booking] unusable clean date/arrival time", {
+    console.error("[residential-booking] unusable clean date/window", {
       cleanDate: data.cleanDate,
-      arrivalTime: data.arrivalTime,
+      arrivalWindow: data.arrivalWindow,
       expectedHours,
     });
     return {
@@ -171,8 +212,6 @@ export async function evaluateResidentialBooking(
     bathCount: data.bathrooms,
     sqFt: data.sqft,
     petsAllowed: data.petsAllowed,
-    hasHotTub: data.hasHotTub,
-    hotTubService: data.hotTubService,
   });
   // calculatePrice is typed against the vacation-rental form, where laundryLoads
   // is `number | undefined`; we pass an explicit null. The engine reads both as
@@ -191,8 +230,6 @@ export async function evaluateResidentialBooking(
     bathCount: data.bathrooms,
     sqFt: data.sqft,
     petsAllowed: data.petsAllowed,
-    hasHotTub: data.hasHotTub,
-    hotTubService: data.hotTubService,
   });
   if (refusal) {
     return { ok: false, reason: refusal.reason, error: refusal.message };
@@ -212,70 +249,12 @@ export async function evaluateResidentialBooking(
     ok: true,
     form: data,
     priceDetails,
-    arrivalTime: data.arrivalTime,
+    window,
     expectedHours,
     arrival,
     deadline,
     amountCents,
   };
-}
-
-/**
- * Price-only residential estimate. This deliberately does not validate contact,
- * address, access, or appointment fields so the visible estimate can respond as
- * soon as the home details change. Full eligibility remains in
- * evaluateResidentialBooking before payment is created.
- */
-export async function estimateResidentialBooking(input: {
-  bedrooms: number;
-  bathrooms: number;
-  sqft: number;
-  petsAllowed: boolean;
-  hasHotTub: boolean;
-  hotTubService: boolean;
-}): Promise<
-  | { ok: true; priceDetails: PriceDetails }
-  | Pick<ResidentialRefusal, "ok" | "reason" | "error">
-> {
-  if (
-    !Number.isFinite(input.bedrooms) ||
-    !Number.isFinite(input.bathrooms) ||
-    !Number.isFinite(input.sqft) ||
-    input.bedrooms < 0 ||
-    input.bathrooms < 0 ||
-    input.sqft < 0
-  ) {
-    return {
-      ok: false,
-      reason: "validation",
-      error: "Please enter valid home details to see your estimate.",
-    };
-  }
-
-  const pricingInput = buildResidentialPricingInput({
-    bedCount: input.bedrooms,
-    bathCount: input.bathrooms,
-    sqFt: input.sqft,
-    petsAllowed: input.petsAllowed,
-    hasHotTub: input.hasHotTub,
-    hotTubService: input.hotTubService,
-  });
-  const priceDetails = await pricingService.calculatePrice(
-    pricingInput as unknown as Parameters<typeof pricingService.calculatePrice>[0]
-  );
-  const refusal = residentialQuoteRefusal(priceDetails, {
-    bedCount: input.bedrooms,
-    bathCount: input.bathrooms,
-    sqFt: input.sqft,
-    petsAllowed: input.petsAllowed,
-    hasHotTub: input.hasHotTub,
-    hotTubService: input.hotTubService,
-  });
-  if (refusal) {
-    return { ok: false, reason: refusal.reason, error: refusal.message };
-  }
-
-  return { ok: true, priceDetails };
 }
 
 async function resolveStripeCustomer(
@@ -433,7 +412,7 @@ export async function createResidentialPaymentIntent(input: {
     property_details: `${form.bedrooms} bed, ${form.bathrooms} bath, ${form.sqft ?? "N/A"} sqft`,
     pets_allowed: form.petsAllowed ? "yes" : "no",
     clean_date: form.cleanDate ?? "",
-    arrival_time: form.arrivalTime ?? "",
+    arrival_window: form.arrivalWindow ?? "",
     price_before_discounts_cents: String(amountCents),
   };
 
@@ -505,18 +484,6 @@ export type CompleteResidentialResult =
 
 function formatUsd(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
-}
-
-/** Time-only property defaults are interpreted in the operating timezone. */
-function timeOfDayEastern(instant: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(instant);
-  const part = (type: string) => parts.find((item) => item.type === type)?.value;
-  return `${part("hour") ?? "00"}:${part("minute") ?? "00"}`;
 }
 
 /**
@@ -686,16 +653,18 @@ export async function completeResidentialBooking(
     // must-finish-before. On a rental those names mean guest check-out and
     // check-in; on a home they are the same two roles under different words, and
     // each surface picks its wording from service_type.
-    const arrivalTime = quote.arrivalTime;
-    const estimatedFinishTime = timeOfDayEastern(quote.deadline);
+    const windowStartTime = minutesToTimeOfDay(quote.window.startMinutes);
+    const mustFinishBeforeTime = minutesToTimeOfDay(
+      mustFinishBeforeMinutes(quote.window, quote.expectedHours)
+    );
 
     // Staffed before the first write, so a failure here has no half-written
     // booking to undo.
     //
     // buildJobStaffingUpdate wants a subscriptionStart and there is no
     // subscription. The arrival instant is safe to pass: it only reaches
-    // isHotTubDeepCleanDue, which has no effect because residential has no
-    // recurring drain cadence.
+    // isHotTubDeepCleanDue, and only when hotTubServiceLevel is true, which
+    // residential never sets.
     const hotTubTimeAdditions = await loadHotTubTimeAdditions();
     const staffing = buildJobStaffingUpdate({
       property: {
@@ -703,7 +672,7 @@ export async function completeResidentialBooking(
         bathCount: String(form.bathrooms!),
         sqFt: form.sqft ?? null,
         laundryType: "none",
-        hotTubServiceLevel: Boolean(form.hasHotTub && form.hotTubService),
+        hotTubServiceLevel: false,
         hotTubDrainCadence: null,
         petsAllowed: form.petsAllowed ?? false,
       },
@@ -714,8 +683,10 @@ export async function completeResidentialBooking(
 
     const addonsSnapshot = {
       ...staffing.addonsSnapshot,
-       // Display only. The real bounds are check_in_time and check_out_time.
-       arrivalTime: quote.arrivalTime,
+      // Display only. The real bounds are check_in_time and check_out_time;
+      // this is so a cleaner surface can say "arrive between 9:00 and 11:00"
+      // instead of inferring a window from the two timestamps.
+      arrivalWindow: quote.window.key,
     };
 
     // The snapshot is read by the native app and travels across surfaces that
@@ -766,8 +737,8 @@ export async function completeResidentialBooking(
         // 'none' is what makes getTeamSize return the in-unit column.
         laundryType: "none",
         laundryLoads: null,
-        hasHotTub: form.hasHotTub ?? false,
-        hotTubServiceLevel: Boolean(form.hasHotTub && form.hotTubService),
+        hasHotTub: false,
+        hotTubServiceLevel: false,
         hotTubDrain: false,
         hotTubDrainCadence: null,
         useDefaultChecklist: true,
@@ -784,8 +755,8 @@ export async function completeResidentialBooking(
         // it renders to the cleaner beside the access details rather than
         // inside them.
         specialInstructions: form.specialNotes ?? null,
-        defaultCheckOutTime: arrivalTime,
-        defaultCheckInTime: estimatedFinishTime,
+        defaultCheckOutTime: windowStartTime,
+        defaultCheckInTime: mustFinishBeforeTime,
       };
 
       if (coordinates) {
@@ -849,7 +820,7 @@ export async function completeResidentialBooking(
       await notifyAdmins({
         type: "booking_alert",
         title: "New one-time residential booking",
-        message: `${form.name} booked a one-time clean at ${form.address} for ${form.cleanDate} (${formatResidentialArrivalTime(quote.arrivalTime)}). Paid ${formatUsd(amountCents)}.`,
+        message: `${form.name} booked a one-time clean at ${form.address} for ${form.cleanDate} (${quote.window.label}). Paid ${formatUsd(amountCents)}.`,
         jobId: result.job.id,
         url: `/admin/job-oversight/${result.job.id}`,
       });
@@ -866,7 +837,7 @@ export async function completeResidentialBooking(
         name: form.name,
         propertyAddress: form.address!,
         cleanDate: form.cleanDate!,
-        arrivalTimeLabel: formatResidentialArrivalTime(quote.arrivalTime) ?? quote.arrivalTime,
+        arrivalWindowLabel: quote.window.label,
         amount: formatUsd(amountCents),
         petsAllowed: form.petsAllowed ?? false,
         petFeeApplied: quote.priceDetails.petFee > 0,

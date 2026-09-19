@@ -50,7 +50,7 @@ const CHOICES: Array<{
     blurb: "A single deep clean of your own home, on a date you choose.",
     bullets: [
       "One clean, one price, paid up front",
-      "Pick your arrival time",
+      "Pick your arrival window",
       "At least 48 hours' notice",
     ],
   },

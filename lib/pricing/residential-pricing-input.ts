@@ -19,8 +19,8 @@ import {
  *   laundryLoads null      No service, so no load count. Keeps
  *                          laundryLoadsMissing false, which would otherwise
  *                          refuse the booking.
- *   hot tub                Basic service is optional and uses the same shared
- *                          pricing and staffing rules as vacation rentals.
+ *   hasHotTub false        Not offered. The engine supports it; exposing it
+ *                          later is a form control, not a pricing change.
  *   subscriptionMonths 1   No term, so no term discount — the discount tiers
  *                          start at 3 months.
  *
@@ -34,8 +34,6 @@ export type ResidentialPricingInput = {
   sqFt: number | null;
   /** "Are pets normally present in the home?" */
   petsAllowed: boolean;
-  hasHotTub: boolean;
-  hotTubService: boolean;
 };
 
 export function buildResidentialPricingInput(property: ResidentialPricingInput) {
@@ -45,8 +43,8 @@ export function buildResidentialPricingInput(property: ResidentialPricingInput) 
     sqft: property.sqFt || 0,
     laundryService: "none" as const,
     laundryLoads: null,
-    hasHotTub: Boolean(property.hasHotTub),
-    hotTubService: Boolean(property.hasHotTub && property.hotTubService),
+    hasHotTub: false,
+    hotTubService: false,
     hotTubDrain: false,
     hotTubDrainCadence: null,
     petsAllowed: Boolean(property.petsAllowed),
@@ -109,7 +107,7 @@ export function residentialQuoteRefusal(
     bathCount: property.bathCount,
     sqFt: property.sqFt,
     laundryType: "none",
-    hotTubServiceLevel: property.hasHotTub && property.hotTubService,
+    hotTubServiceLevel: false,
     hotTubDeepClean: false,
   });
   if (staffing.requiresManualStaffing || staffing.teamSize === null) {

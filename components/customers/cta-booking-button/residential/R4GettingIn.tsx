@@ -2,7 +2,6 @@
 
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { AccessFields, type AccessFieldValues } from "../AccessFields";
-import { StepFeedback } from "../StepFeedback";
 
 interface Props {
   formData: ResidentialFormData;
@@ -62,11 +61,5 @@ export const R4GettingIn = ({ formData, setFormData, errors }: Props) => (
         }`}
       />
     </div>
-
-    <StepFeedback
-      errors={errors}
-      fields={["entryMethod", "entryInstructions"]}
-      message="Please tell us how the cleaner will get in."
-    />
   </div>
 );

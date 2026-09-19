@@ -58,7 +58,7 @@ export const ENTRY_METHODS = [
   {
     value: "customer_present",
     label: "I will let the cleaner in",
-    prompt: "Please confirm you will be there when the cleaner arrives.",
+    prompt: "Anything the cleaner should know when they arrive? (optional)",
   },
   {
     value: "front_desk",

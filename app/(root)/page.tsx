@@ -54,7 +54,7 @@ export default function Home() {
                 <p className="text-gray-600">
                   Renting it out? Connect your Airbnb, VRBO or iCal link and we
                   schedule a turnover after every guest, automatically. Cleaning
-                  your own home? Just choose a date and an arrival time.
+                  your own home? Just choose a date and an arrival window.
                 </p>
               </div>
               <div className="flex flex-col items-center">

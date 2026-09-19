@@ -1,20 +1,20 @@
 "use client";
 
 import { CheckCircle, Mail, ShieldCheck } from "lucide-react";
-import { formatResidentialArrivalTime } from "@/lib/scheduling/residential-notice";
+import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 
 interface Props {
   paymentIntentId?: string;
   amountInCents?: number | null;
   cleanDate?: string;
-  arrivalTime?: string;
+  arrivalWindow?: string;
   portalInviteEmailSent?: boolean;
 }
 
 /**
  * R6 — what happens next.
  *
- * The arrival time is named back to the customer because it is the thing they
+ * The arrival window is named back to the customer because it is the thing they
  * will plan their day around. The access details are deliberately NOT echoed:
  * the box they typed them into holds door codes, and those stay off every
  * surface but the property row.
@@ -23,10 +23,10 @@ export const R6Confirmation = ({
   paymentIntentId,
   amountInCents,
   cleanDate,
-  arrivalTime,
+  arrivalWindow,
   portalInviteEmailSent = true,
 }: Props) => {
-  const formattedArrivalTime = formatResidentialArrivalTime(arrivalTime);
+  const window = getArrivalWindow(arrivalWindow);
 
   return (
     <div className="text-center py-6">
@@ -52,10 +52,10 @@ export const R6Confirmation = ({
             </span>
           </div>
         )}
-        {formattedArrivalTime && (
+        {window && (
           <div className="flex justify-between">
-            <span className="text-gray-600">Arrival time</span>
-            <span className="font-medium text-gray-900">{formattedArrivalTime}</span>
+            <span className="text-gray-600">Arrival window</span>
+            <span className="font-medium text-gray-900">{window.label}</span>
           </div>
         )}
         {typeof amountInCents === "number" && (
