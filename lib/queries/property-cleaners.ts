@@ -18,6 +18,13 @@ export type RosterInput = {
   sortOrder?: number;
 };
 
+export class MainPrimaryConflictError extends Error {
+  constructor() {
+    super("A property can have only one Main Primary Cleaner.");
+    this.name = "MainPrimaryConflictError";
+  }
+}
+
 export async function getPropertyRoster(
   propertyId: string
 ): Promise<RosterEntry[]> {
@@ -53,6 +60,9 @@ export async function setPropertyRoster(
     seen.add(e.cleanerId);
     return true;
   });
+  if (deduped.filter((entry) => entry.tier === "main_primary").length > 1) {
+    throw new MainPrimaryConflictError();
+  }
 
   await db.transaction(async (tx) => {
     await tx

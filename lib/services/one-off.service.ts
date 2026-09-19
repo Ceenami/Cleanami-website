@@ -20,6 +20,7 @@ import {
 import { fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
 import { and, eq } from "drizzle-orm";
+import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 const EASTERN_TZ = "America/New_York";
 /** Sensible default lead time for a one-off so it can be staffed/assigned. */
@@ -104,6 +105,7 @@ async function loadOwnedProperty(customerId: string, propertyId: string) {
       eq(properties.id, propertyId),
       eq(properties.customerId, customerId)
     ),
+    with: { checklistFiles: true },
   });
 }
 
@@ -422,6 +424,7 @@ export async function bookOneOffClean(
         status: "unassigned",
         expectedHours: staffing.expectedHours,
         addonsSnapshot: staffing.addonsSnapshot,
+        checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
         promoCodeId: appliedPromo?.promoCodeId ?? null,
         notes: skipPayment
           ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`

@@ -76,6 +76,15 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
   const allChecklistChecked = checklistItems.every((item) => item.completed);
 
+  const checklistSections = useMemo(() => {
+    const grouped = new Map<string, ChecklistItem[]>();
+    for (const item of checklistItems) {
+      const section = item.section ?? "Property checklist";
+      grouped.set(section, [...(grouped.get(section) ?? []), item]);
+    }
+    return [...grouped.entries()];
+  }, [checklistItems]);
+
   const allPhotoMinimumsMet = roomRequirements.every(
     (req) => (roomPhotos[req.roomKey]?.length ?? 0) >= req.minPhotos
   );
@@ -227,30 +236,23 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
           </p>
         )}
 
-        <ul className="divide-y divide-gray-100">
-          {checklistItems.map((item) => (
-            <li key={item.id}>
-              <label className="flex cursor-pointer items-start gap-3 py-3">
-                <input
-                  type="checkbox"
-                  checked={item.completed}
-                  onChange={() => toggleChecklistItem(item.id)}
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-brand focus:ring-brand"
-                />
-                <span
-                  className={cn(
-                    "text-sm",
-                    item.completed
-                      ? "text-gray-500 line-through"
-                      : "text-gray-800"
-                  )}
-                >
-                  {item.task}
-                </span>
-              </label>
-            </li>
+        <div className="space-y-5">
+          {checklistSections.map(([section, items]) => (
+            <fieldset key={section}>
+              <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{section}</legend>
+              <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 px-3">
+                {items.map((item) => (
+                  <li key={item.id}>
+                    <label className="flex cursor-pointer items-start gap-3 py-3">
+                      <input type="checkbox" checked={item.completed} onChange={() => toggleChecklistItem(item.id)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-brand focus:ring-brand" />
+                      <span className={cn("text-sm", item.completed ? "text-gray-500 line-through" : "text-gray-800")}>{item.task}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </fieldset>
           ))}
-        </ul>
+        </div>
       </section>
 
       {/* Photos */}

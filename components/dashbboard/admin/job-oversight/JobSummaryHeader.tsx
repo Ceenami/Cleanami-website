@@ -42,6 +42,21 @@ export function JobSummaryHeader({ job }: { job: JobDetails }) {
             <ClientTime dateString={job.checkInTime!} />
           </p>
 
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="rounded bg-gray-50 px-3 py-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Actual check-in</p>
+          <p className="text-sm font-medium text-gray-900">
+            {job.evidencePacket?.gpsCheckInTimestamp ? <ClientTime dateString={job.evidencePacket.gpsCheckInTimestamp} /> : 'Not recorded'}
+          </p>
+        </div>
+        <div className="rounded bg-gray-50 px-3 py-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Actual check-out</p>
+          <p className="text-sm font-medium text-gray-900">
+            {job.evidencePacket?.gpsCheckOutTimestamp ? <ClientTime dateString={job.evidencePacket.gpsCheckOutTimestamp} /> : 'Not recorded'}
+          </p>
+        </div>
+      </div>
+
       
     </div>
   );

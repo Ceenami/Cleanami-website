@@ -1,5 +1,6 @@
 import type { Property } from "@/db/schemas/properties.schema";
 import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/constants/default-checklist";
+import type { ChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 export type RoomPhotoRequirement = {
   roomKey: string;
@@ -100,7 +101,7 @@ export function getRoomPhotoRequirements(property: {
 export type RoomPhotosMap = Record<string, string[]>;
 
 export type ChecklistLogPayload = {
-  items: { id: string; task: string; completed: boolean }[];
+  items: { id: string; task: string; completed: boolean; section?: string }[];
   roomPhotos?: RoomPhotosMap;
 };
 
@@ -185,7 +186,7 @@ export function flattenRoomPhotos(roomPhotos: RoomPhotosMap): string[] {
   return Object.values(roomPhotos).flat();
 }
 
-export type ExpectedChecklistItem = { id: string; task: string };
+export type ExpectedChecklistItem = { id: string; task: string; section?: string };
 
 /**
  * Spec §14.1/§14.2: a property with its own uploaded checklist
@@ -206,14 +207,18 @@ export function getExpectedChecklistItems(
       task: `Reviewed & completed: ${file.fileName}`,
     }));
   }
-  return DEFAULT_CHECKLIST_ITEMS.map(({ id, task }) => ({ id, task }));
+  return DEFAULT_CHECKLIST_ITEMS.map(({ id, task, section }) => ({ id, task, section }));
+}
+
+export function getExpectedChecklistItemsFromSnapshot(snapshot: ChecklistSnapshot): ExpectedChecklistItem[] {
+  return snapshot.items.map(({ id, task, section }) => ({ id, task, section }));
 }
 
 /** Recomputes the expected items and overlays any prior completion state by id. */
 export function mergeChecklistItems(
   expected: ExpectedChecklistItem[],
   existing: { id: string; completed: boolean }[]
-): { id: string; task: string; completed: boolean }[] {
+): { id: string; task: string; completed: boolean; section?: string }[] {
   const completedById = new Map(existing.map((item) => [item.id, item.completed]));
   return expected.map((item) => ({
     ...item,
