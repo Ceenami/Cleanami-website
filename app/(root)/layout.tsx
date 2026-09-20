@@ -13,9 +13,9 @@ export default function Layout({
       <Header />
       {children}
 
-      <footer className="bg-gray-50 border-t border-gray-100 pt-16 pb-8">
+      <footer className="border-t border-gray-100 bg-gray-50 pt-12 pb-6">
         <div className="container mx-auto px-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 border-b border-gray-200 pb-12">
+          <div className="grid grid-cols-1 gap-8 border-b border-gray-200 pb-8 md:grid-cols-3 md:pb-12">
             <div className="space-y-4">
               <h3 className="text-2xl font-bold text-brand">CleanNami</h3>
               <p className="text-gray-600 text-sm">
@@ -94,13 +94,13 @@ export default function Layout({
             </div>
 
             {/* Column 3: Newsletter/Social (Placeholder) */}
-            <div className="m-auto">
+            <div className="m-auto hidden md:block">
               <Image
                 src={Logo}
-                width={400}
-                height={400}
+                width={192}
+                height={192}
                 alt="cleannami logo"
-                className="bg-brand  rounded-t-full overflow-hidden"
+                className="w-40 bg-brand rounded-t-full overflow-hidden lg:w-48"
               />
               {/* <h4 className="text-lg font-semibold text-gray-900 mb-4">Stay Connected</h4>
                 <p className="text-sm text-gray-600">Follow us on social media for updates and offers!</p>
@@ -118,8 +118,8 @@ export default function Layout({
           {/* Copyright and Credits */}
           <div className="pt-6 flex flex-col md:flex-row justify-between items-center text-sm text-gray-500">
             <p className="order-2 md:order-1 mt-4 md:mt-0">
-              &copy; {new Date().getFullYear()} **CleanNami**. All rights
-              reserved.
+              &copy; {new Date().getFullYear()} <strong>CleanNami</strong>. All
+              rights reserved.
             </p>
             <p className="order-1 md:order-2">
               Built by{" "}

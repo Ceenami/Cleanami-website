@@ -22,6 +22,9 @@ import {
 
 type JobStatus = 'unassigned' | 'assigned' | 'in-progress' | 'completed' | 'canceled';
 
+/** the admin job list filters by service type. */
+type JobServiceType = 'vacation_rental_subscription' | 'residential_one_time';
+
 interface GetJobsParams extends PaginationParams, SearchParams {
   status?: JobStatus | 'all';
   startDate?: Date;
@@ -29,6 +32,7 @@ interface GetJobsParams extends PaginationParams, SearchParams {
   propertyId?: string;
   cleanerId?: string;
   customerId?: string;
+  serviceType?: JobServiceType | 'all';
   /** When set, orders by check-in time instead of created-at. */
   sortByCheckIn?: 'asc' | 'desc';
 }
@@ -43,6 +47,7 @@ export async function getJobsWithDetails({
   propertyId,
   cleanerId,
   customerId,
+  serviceType = 'all',
   sortByCheckIn,
 }: GetJobsParams) {
   const offset = getPaginationOffset(page, limit);
@@ -52,6 +57,11 @@ export async function getJobsWithDetails({
     filters.byDateRange(jobs.checkInTime, startDate, endDate),
     propertyId ? eq(jobs.propertyId, propertyId) : undefined,
     customerId ? eq(properties.customerId, customerId) : undefined,
+    // Read off the JOB, not the property. `jobs.service_type` is frozen at
+    // creation, so a filtered list stays truthful even if a property is
+    // later reclassified — and it needs no join, which is the reason the column
+    // is denormalised in the first place.
+    serviceType !== 'all' ? eq(jobs.serviceType, serviceType) : undefined,
   ].filter(Boolean);
 
   const data = await db
@@ -64,6 +74,8 @@ export async function getJobsWithDetails({
       checkOutTime: jobs.checkOutTime,
       // isUrgentBonus: jobsToCleaners.urgentBonus,
       calendarEventUid: jobs.calendarEventUid,
+      serviceType: jobs.serviceType,
+      jobSource: jobs.jobSource,
       // Needed so the customer portal knows whether this clean is still open
       // for a promo-code change (only before pre-authorize has run/failed).
       paymentIntentId: jobs.paymentIntentId,

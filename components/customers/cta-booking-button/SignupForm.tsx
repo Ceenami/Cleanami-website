@@ -31,7 +31,23 @@ import { CallBookedConfirmation } from "@/components/CallBookedConfirmation";
 
 const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
-  2: ["address", "bedrooms", "sqft", "bathrooms", "isAddressInServiceArea", "defaultCheckInTime", "defaultCheckOutTime"],
+  // `petsAllowed`, `entryMethod`, `entryInstructions` and `parkingInstructions`
+  // are counterproposal items 5, 6 and 7, added here in M3. Listing them makes
+  // their errors surface on this step; none of them can currently fail, because
+  // pets is defaulted and the three access fields are optional by design.
+  2: [
+    "address",
+    "bedrooms",
+    "sqft",
+    "bathrooms",
+    "isAddressInServiceArea",
+    "defaultCheckInTime",
+    "defaultCheckOutTime",
+    "petsAllowed",
+    "entryMethod",
+    "entryInstructions",
+    "parkingInstructions",
+  ],
   5: ["subscriptionMonths", "firstCleanDate"],
   6: ["iCalUrl"],
 };
@@ -56,11 +72,22 @@ interface Props {
     currentStep: number;
     priceDetails: PriceDetails | null;
   };
+  /**
+   * Go back to the service-type question. Absent when the question is turned
+   * off by `NEXT_PUBLIC_SERVICE_TYPE_CHOICE`, which is what makes the flag
+   * restore today's product exactly — no link, no question, no new behaviour.
+   */
+  onChangeServiceType?: () => void;
 }
 
 const TOTAL_STEPS = 8;
 
-export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
+export const SignupForm = ({
+  isOpen,
+  onClose,
+  initialData,
+  onChangeServiceType,
+}: Props) => {
   const [paymentData, setPaymentData] = useState<{
     paymentIntentId: string;
     amount: number;
@@ -85,6 +112,15 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     hotTubService: false,
     hotTubDrain: false,
     hotTubDrainCadence: undefined,
+    // Items 5, 6, 7. `petsAllowed` is seeded false so the price the customer
+    // first sees is the no-pet price; the three access fields start undefined
+    // because a property with no entry information must not acquire a false one
+    // (the same reason migration 0041 leaves those columns nullable).
+    petsAllowed: false,
+    entryMethod: undefined,
+    entryInstructions: undefined,
+    parkingInstructions: undefined,
+    serviceType: "vacation_rental_subscription",
     subscriptionMonths: 1,
     iCalUrl: "",
     defaultCheckInTime: '16:00:00',
@@ -413,11 +449,30 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
     switch (currentStep) {
       case 1:
         return (
-          <Step1CustomerInfo
-            formData={formData}
-            setFormData={setFormData}
-            errors={errors}
-          />
+          <>
+            <Step1CustomerInfo
+              formData={formData}
+              setFormData={setFormData}
+              errors={errors}
+            />
+            {/* The service-type choice is one-way inside a session: switching
+                resets the form rather than carrying vacation-rental answers
+                into the residential branch. Say so, rather than doing it
+                silently. */}
+            {onChangeServiceType && (
+              <p className="mt-6 text-sm text-gray-500">
+                Booking a one-time clean for your own home instead?{" "}
+                <button
+                  type="button"
+                  onClick={onChangeServiceType}
+                  className="font-medium text-brand underline hover:no-underline"
+                >
+                  Change cleaning type
+                </button>{" "}
+                — this starts the form again.
+              </p>
+            )}
+          </>
         );
       case 2:
         return (
@@ -547,9 +602,9 @@ export const SignupForm = ({ isOpen, onClose, initialData }: Props) => {
         )}
 
         <div>
-          <div className="min-h-[350px]">{renderStep()}</div>
+          <div>{renderStep()}</div>
 
-          <div className="mt-8 pt-5 border-t">
+          <div className="sticky bottom-0 z-10 mt-8 border-t bg-white/95 py-4 backdrop-blur">
             <div className="flex justify-between">
               <button
                 type="button"

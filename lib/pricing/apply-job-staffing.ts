@@ -11,6 +11,17 @@ export type JobStaffingProperty = {
   laundryType: string;
   hotTubServiceLevel: boolean;
   hotTubDrainCadence: string | null;
+  /**
+   * A pricing input that does not reach `addons_snapshot` makes a
+   * historical job silently re-price. The pet fee is a pricing input, so the
+   * frozen copy travels with the job even though it changes no staffing.
+   *
+   * REQUIRED, not optional: this value is written into the snapshot on every
+   * call, including `recalculateJobStaffing`, which passes an existing snapshot
+   * back in. A caller that omitted it would quietly overwrite a frozen `true`
+   * with `false` and stop billing the fee. Required means the compiler asks.
+   */
+  petsAllowed: boolean;
 };
 
 export function isHotTubDeepCleanDue(
@@ -43,7 +54,7 @@ export function buildJobStaffingUpdate(input: {
   checkInTime: Date;
   subscriptionStart: Date;
   existingSnapshot?: Record<string, unknown> | null;
-  /** From `loadHotTubTimeAdditions()`; omit to use the spec defaults. */
+  /** From `loadHotTubTimeAdditions()`; omit to use the built-in defaults. */
   hotTubTimeAdditions?: HotTubTimeAdditions | null;
 }) {
   const staffing = calculateJobStaffing({
@@ -78,6 +89,10 @@ export function buildJobStaffingUpdate(input: {
           : "basic"
         : "none",
       hotTubDrainCadence: input.property.hotTubDrainCadence,
+      // Frozen per job. Deliberately NOT fed into calculateJobStaffing
+      // above: the pet fee is customer revenue only and must not move hours,
+      // team size or pay. Counterproposal item 9.
+      petsAllowed: Boolean(input.property.petsAllowed),
       teamSize: staffing.teamSize,
       propertySize: staffing.propertySize,
       requiresManualStaffing: staffing.requiresManualStaffing,

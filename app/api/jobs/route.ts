@@ -33,6 +33,17 @@ export async function GET(request: NextRequest) {
       | "all";
     const query = searchParams.get("query") || "";
 
+    // Counterproposal item 12. Validated against the two literals rather than
+    // cast, so an arbitrary string from the query string can never reach the
+    // where-clause — an unknown value falls back to "all" and shows everything,
+    // which is the safe direction for an admin list.
+    const rawServiceType = searchParams.get("serviceType");
+    const serviceType =
+      rawServiceType === "vacation_rental_subscription" ||
+      rawServiceType === "residential_one_time"
+        ? rawServiceType
+        : "all";
+
     let startDate = searchParams.get("startDate")
       ? new Date(searchParams.get("startDate")!)
       : undefined;
@@ -54,6 +65,7 @@ export async function GET(request: NextRequest) {
       startDate,
       endDate,
       customerId: scope.customerId,
+      serviceType,
       sortByCheckIn: isDashboard ? "asc" : undefined,
     });
 

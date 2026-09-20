@@ -24,6 +24,7 @@ import { getStripe } from "@/lib/stripe/get-stripe";
 import { voidCharge } from "@/lib/services/payment/void-charge";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
 import { sendCancellationEmail } from "@/lib/services/email.service";
+import { appendJobNote } from "@/lib/jobs/job-notes";
 import { and, eq, gt, inArray, ne } from "drizzle-orm";
 
 const pricingService = new PricingService();
@@ -127,6 +128,8 @@ async function chargeCustomerForLateCancel(
     hotTubServiceLevel: boolean;
     hotTubDrain: boolean;
     hotTubDrainCadence: string | null;
+    /** a late-cancel charge must match what the clean would have cost. */
+    petsAllowed: boolean;
     priceOverrideCents?: number | null;
   },
   stripeCustomerId: string | null,
@@ -224,7 +227,15 @@ export async function cancelJobForCustomer(
 
 export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> {
   const job = await loadJobContext(jobId);
-  if (!job?.subscription) {
+
+  // The subscription is optional here, and that is the whole point of the
+  // change (M4). This used to require one, so a residential one-time job — and
+  // the customer portal's one-off, which has never had a subscription either —
+  // failed with "Job not found" and an admin had **no way at all** to cancel or
+  // refund a clean the customer had already paid for in full. Under prepay that
+  // is not a missing convenience; the spec says a job that is not completed
+  // does not get charged, and this is the only mechanism that honours it.
+  if (!job) {
     throw new Error("Job not found");
   }
 
@@ -237,7 +248,13 @@ export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> 
     job,
     late,
     "admin",
-    job.subscription.durationMonths
+    // A one-time clean has no subscription term, so there is no term discount
+    // to reapply — 1 means "a single clean at full price". The value reaches
+    // exactly one place, `chargeCustomerForLateCancel`'s re-price, and a
+    // prepaid job returns from that function before the re-price runs
+    // (`paymentStatus === "captured"`). It is inert for residential, and it is
+    // the honest number if that branch ever changes.
+    job.subscription?.durationMonths ?? 1
   );
 }
 
@@ -247,6 +264,8 @@ async function finalizeJobCancellation(
     expectedHours: string | null;
     paymentIntentId: string | null;
     paymentStatus: string | null;
+    /** Read so the cancellation line can be APPENDED rather than clobber it. */
+    notes: string | null;
     addonsSnapshot: unknown;
     cleaners: {
       role: string;
@@ -263,6 +282,7 @@ async function finalizeJobCancellation(
       hotTubServiceLevel: boolean;
       hotTubDrain: boolean;
       hotTubDrainCadence: string | null;
+      petsAllowed: boolean;
       priceOverrideCents?: number | null;
       address?: string;
       customer: {
@@ -280,6 +300,22 @@ async function finalizeJobCancellation(
   const assignments = job.cleaners;
   let customerCharged = false;
   let cleanerPaid = false;
+
+  /**
+   * A prepaid clean that is cancelled on time is REFUNDED, not merely
+   * un-authorized — `voidCharge` branches on `paymentStatus` and issues a real
+   * `refunds.create` for a captured charge. That is the mechanism behind M4's
+   * "an admin can cancel and refund a prepaid residential clean", and it is
+   * worth naming in the record because the two outcomes look identical in the
+   * job row once the columns below are cleared.
+   */
+  const refundedIntentId =
+    !lateCancel &&
+    job.paymentStatus === "captured" &&
+    job.paymentIntentId &&
+    !isSkippedPaymentIntent(job.paymentIntentId)
+      ? job.paymentIntentId
+      : null;
 
   if (lateCancel) {
     if (!job.property) {
@@ -303,13 +339,23 @@ async function finalizeJobCancellation(
 
   const notePrefix = lateCancel
     ? `[Late cancel – cleaner paid]`
-    : `[On-time cancel – no charge]`;
+    : refundedIntentId
+      ? `[On-time cancel – refunded]`
+      : `[On-time cancel – no charge]`;
+
+  // Appended, not assigned. This used to overwrite `jobs.notes` wholesale,
+  // which is the exact bug `appendJobNote` exists to prevent — and on a prepaid
+  // job it destroyed the only record of which PaymentIntent paid for the clean,
+  // moments before the columns holding it are nulled out below.
+  const noteLine = refundedIntentId
+    ? `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}. Refunded PaymentIntent ${refundedIntentId}.`
+    : `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}`;
 
   await db
     .update(jobs)
     .set({
       status: "canceled",
-      notes: `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}`,
+      notes: appendJobNote(job.notes, noteLine),
       updatedAt: new Date(),
       ...(lateCancel ? {} : { paymentStatus: null, paymentIntentId: null }),
     })
@@ -324,7 +370,9 @@ async function finalizeJobCancellation(
         propertyAddress: job.property.address ?? "your property",
         detail: lateCancel
           ? "This was a late cancellation, so the assigned cleaner will still be paid."
-          : "No charge applies for this on-time cancellation.",
+          : refundedIntentId
+            ? "Your payment for this clean has been refunded in full. It can take a few business days to appear on your statement."
+            : "No charge applies for this on-time cancellation.",
       });
     } catch (err) {
       console.error("[cancellation] email failed:", err);
@@ -339,7 +387,9 @@ async function finalizeJobCancellation(
     cleanerPaid,
     message: lateCancel
       ? "Clean canceled. Your assigned cleaner will still be paid for this late cancellation."
-      : "Clean canceled. No charge and no cleaner pay for this job.",
+      : refundedIntentId
+        ? "Clean canceled and the prepaid charge refunded in full. No cleaner pay for this job."
+        : "Clean canceled. No charge and no cleaner pay for this job.",
   };
 }
 

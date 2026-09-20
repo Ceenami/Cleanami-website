@@ -4,6 +4,9 @@ import { AddressAutocomplete } from "./AddressAutoComplete";
 import { CheckCircle, XCircle } from "lucide-react";
 import { FounderCard } from "../../FounderCard";
 import { toTimeInputValue, toTimeOfDay } from "@/lib/time-of-day";
+import { PetsField } from "./PetsField";
+import { AccessFields, type AccessFieldValues } from "./AccessFields";
+import { PETS_QUESTION_VACATION_RENTAL } from "@/lib/constants/service-type";
 
 interface Step2Props extends StepsProps {
   /** Whether to show the Founder Card (show after price is calculated) */
@@ -182,6 +185,34 @@ export const Step2PropertyInfo = ({
             required
           />
         </div>
+      </div>
+
+      {/* Item 7. The client's vacation-rental wording, verbatim. */}
+      <PetsField
+        question={PETS_QUESTION_VACATION_RENTAL}
+        value={formData.petsAllowed}
+        onChange={(petsAllowed) =>
+          setFormData((prev) => ({ ...prev, petsAllowed }))
+        }
+        idPrefix="vr-pets"
+      />
+
+      {/* Items 5 and 6 — property facts, so they belong on this step rather
+          than with the booking's add-ons. All three optional; the access box
+          holds credentials. */}
+      <div className="pt-2 border-t border-gray-200">
+        <AccessFields
+          heading="Getting in"
+          values={{
+            entryMethod: formData.entryMethod,
+            entryInstructions: formData.entryInstructions,
+            parkingInstructions: formData.parkingInstructions,
+          }}
+          errors={errors}
+          onChange={(patch: AccessFieldValues) =>
+            setFormData((prev) => ({ ...prev, ...patch }))
+          }
+        />
       </div>
 
       <StepFeedback

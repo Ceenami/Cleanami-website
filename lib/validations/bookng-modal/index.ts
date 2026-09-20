@@ -3,6 +3,7 @@ import {
   LAUNDRY_LOADS_REQUIRED_MESSAGE,
   laundryLoadsMissing,
 } from "@/lib/validations/laundry-loads";
+import { ENTRY_METHOD_VALUES, SERVICE_TYPES } from "@/lib/constants/service-type";
 
 export const signupFormSchema = z
   .object({
@@ -16,8 +17,7 @@ export const signupFormSchema = z
     }),
     sqft: z.number().positive(),
     bedrooms: z.number().int("Please enter a whole number of bedrooms").min(1, "Must have at least 1 bedroom"),
-    // Only full bathrooms are priced (the base-price matrix and v12 use whole
-    // bath counts); half baths are not a supported concept.
+    // Only full bathrooms are priced; half baths aren't a supported concept.
     bathrooms: z.number().int("Please enter a whole number of bathrooms").min(1, "Must have at least 1 bathroom"),
     checklistFile: z
       .array(z.instanceof(File))
@@ -27,6 +27,29 @@ export const signupFormSchema = z
     checklistSheetUrl: z.string().trim().url().optional().or(z.literal("")),
     laundryService: z.enum(["in_unit", "off_site", "none"]),
     laundryLoads: z.coerce.number().int().min(1).optional(),
+    /** Asked on both flows. Adds $10/clean to revenue, nothing to cleaner pay. */
+    petsAllowed: z.boolean().default(false),
+    /**
+     * Asked on both flows. Property facts rather than booking facts, so they
+     * live on step 2.
+     *
+     * All three optional on purpose: an existing customer adding a second
+     * property shouldn't be blocked by a field that didn't exist last week, and
+     * "the customer will let the cleaner in" is a complete answer on its own.
+     *
+     * entryInstructions is a credential — door, lockbox, gate and garage codes.
+     * It must never reach an email, SMS, push payload, notifications row,
+     * jobs.notes, addons_snapshot or Stripe metadata.
+     */
+    entryMethod: z.enum(ENTRY_METHOD_VALUES).optional(),
+    entryInstructions: z.string().trim().max(2000).optional(),
+    parkingInstructions: z.string().trim().max(2000).optional(),
+    /**
+     * Which wizard this session belongs to. Routing only — not the value written
+     * to properties.service_type, which the completion path sets itself. A form
+     * field that could re-label a property is one an attacker can flip.
+     */
+    serviceType: z.enum(SERVICE_TYPES).optional(),
     hasHotTub: z.boolean().default(false),
     hotTubService: z.boolean(),
     hotTubDrain: z.boolean(),
@@ -117,6 +140,13 @@ export interface PriceDetails {
   largePropertySurcharge: number;
   laundryCost: number;
   hotTubCost: number;
+  /**
+   * Item 7's flat pet fee, $10 when the property allows pets and 0 otherwise.
+   * Its own field because item 7 requires it to appear as its own line in the
+   * customer's price breakdown. Included in `subtotalPerClean`, so the term
+   * discount applies to it; 0 whenever an admin price override is in force.
+   */
+  petFee: number;
   /** Per-clean price before the subscription-term discount. */
   subtotalPerClean: number;
   /** Fractional discount applied for the chosen term (0, 0.10, or 0.15). */

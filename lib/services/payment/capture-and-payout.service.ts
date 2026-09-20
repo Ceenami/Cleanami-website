@@ -66,7 +66,15 @@ export async function captureAndCreatePayouts(
     where: eq(jobs.id, jobId),
     with: {
       subscription: { with: { customer: true } },
-      property: true,
+      // The completion email used to be addressed from
+      // `job.subscription.customer` alone, and `emailCompletion` early-returns
+      // on a falsy address — silently. Every subscription-less job (residential
+      // one-time, and the customer portal's one-off) therefore charged the card
+      // and never told the customer their clean was finished.
+      //
+      // `properties.customer_id` is NOT NULL, so this path always resolves.
+      // A residential job reaches its customer through its property.
+      property: { with: { customer: true } },
     },
   });
 
@@ -296,40 +304,47 @@ export async function captureAndCreatePayouts(
       PAID_ROLES.has(a.role)
     );
 
-    await Promise.all(
-      workingCleaners.map((assignment) => {
-        const pay = computeCleanerPay({
-          expectedHours,
-          hourlyRateCents: assignment.cleaner?.hourlyRateCents,
-          role: assignment.role,
-          laundryLoads: job.addonsSnapshot?.laundryLoads,
-          urgentBonus: assignment.urgentBonus,
-          arrivalDelayMinutes,
-        });
+    // This was `Promise.all` over the payout inserts — a pipelined batch inside
+    // the function that pays contractors. It survived
+    // because a team size of 1 pipelines nothing; a large residential home
+    // staffs TWO, which is exactly the shape that hangs forever against the
+    // transaction pooler, and only in a production build. One insert at a
+    // time. See `sequentialQueries` in db/index.ts.
+    for (const assignment of workingCleaners) {
+      const pay = computeCleanerPay({
+        expectedHours,
+        hourlyRateCents: assignment.cleaner?.hourlyRateCents,
+        role: assignment.role,
+        laundryLoads: job.addonsSnapshot?.laundryLoads,
+        urgentBonus: assignment.urgentBonus,
+        arrivalDelayMinutes,
+      });
 
-        return db
-          .insert(payouts)
-          .values({
-            jobId,
-            cleanerId: assignment.cleanerId,
-            amount: pay.total.toFixed(2),
-            urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
-            laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
-            lateDeductionAmount: pay.lateDeduction
-              ? pay.lateDeduction.toFixed(2)
-              : null,
-            status: "pending",
-          })
-          // Never duplicate a payout for the same (job, cleaner) (2.2).
-          .onConflictDoNothing({
-            target: [payouts.jobId, payouts.cleanerId],
-          });
-      })
-    );
+      await db
+        .insert(payouts)
+        .values({
+          jobId,
+          cleanerId: assignment.cleanerId,
+          amount: pay.total.toFixed(2),
+          urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
+          laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+          lateDeductionAmount: pay.lateDeduction
+            ? pay.lateDeduction.toFixed(2)
+            : null,
+          status: "pending",
+        })
+        // Never duplicate a payout for the same (job, cleaner) (2.2).
+        .onConflictDoNothing({
+          target: [payouts.jobId, payouts.cleanerId],
+        });
+    }
 
     await emailCompletion(
-      job.subscription?.customer?.email,
-      job.subscription?.customer?.name,
+      // A subscription-less job resolves its customer through the
+      // property. `??` and not `||`, so the property's customer is only
+      // consulted when there is genuinely no subscription customer.
+      job.subscription?.customer?.email ?? job.property?.customer?.email,
+      job.subscription?.customer?.name ?? job.property?.customer?.name,
       job.property?.address
     );
 
@@ -400,7 +415,7 @@ export async function captureAndCreatePayouts(
   // charged at booking, and it keeps the reserve math honest either way.
   const capturedAmount = paymentIntent.amount_received || paymentIntent.amount;
   // Reserve is normally 2%, auto-escalating to 5% when the 30-day dispute rate
-  // exceeds 0.5% (spec §5/§20).
+  // exceeds 0.5%.
   const reserveRate = await computeReserveRate();
   const reserveAmount = Math.round(capturedAmount * reserveRate);
   const netAmount = capturedAmount - reserveAmount;
@@ -462,40 +477,47 @@ export async function captureAndCreatePayouts(
     PAID_ROLES.has(a.role)
   );
 
-  await Promise.all(
-    workingCleaners.map((assignment) => {
-      const pay = computeCleanerPay({
-        expectedHours,
-        hourlyRateCents: assignment.cleaner?.hourlyRateCents,
-        role: assignment.role,
-        laundryLoads: job.addonsSnapshot?.laundryLoads,
-        urgentBonus: assignment.urgentBonus,
-        arrivalDelayMinutes,
-      });
+  // This was `Promise.all` over the payout inserts — a pipelined batch inside
+  // the function that pays contractors. It survived
+  // because a team size of 1 pipelines nothing; a large residential home
+  // staffs TWO, which is exactly the shape that hangs forever against the
+  // transaction pooler, and only in a production build. One insert at a
+  // time. See `sequentialQueries` in db/index.ts.
+  for (const assignment of workingCleaners) {
+    const pay = computeCleanerPay({
+      expectedHours,
+      hourlyRateCents: assignment.cleaner?.hourlyRateCents,
+      role: assignment.role,
+      laundryLoads: job.addonsSnapshot?.laundryLoads,
+      urgentBonus: assignment.urgentBonus,
+      arrivalDelayMinutes,
+    });
 
-      return db
-        .insert(payouts)
-        .values({
-          jobId,
-          cleanerId: assignment.cleanerId,
-          amount: pay.total.toFixed(2),
-          urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
-          laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
-          lateDeductionAmount: pay.lateDeduction
-            ? pay.lateDeduction.toFixed(2)
-            : null,
-          status: "pending",
-        })
-        // Never duplicate a payout for the same (job, cleaner) (2.2).
-        .onConflictDoNothing({
-          target: [payouts.jobId, payouts.cleanerId],
-        });
-    })
-  );
+    await db
+      .insert(payouts)
+      .values({
+        jobId,
+        cleanerId: assignment.cleanerId,
+        amount: pay.total.toFixed(2),
+        urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
+        laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+        lateDeductionAmount: pay.lateDeduction
+          ? pay.lateDeduction.toFixed(2)
+          : null,
+        status: "pending",
+      })
+      // Never duplicate a payout for the same (job, cleaner) (2.2).
+      .onConflictDoNothing({
+        target: [payouts.jobId, payouts.cleanerId],
+      });
+  }
 
   await emailCompletion(
-    job.subscription?.customer?.email,
-    job.subscription?.customer?.name,
+    // A subscription-less job resolves its customer through the
+    // property. `??` and not `||`, so the property's customer is only
+    // consulted when there is genuinely no subscription customer.
+    job.subscription?.customer?.email ?? job.property?.customer?.email,
+    job.subscription?.customer?.name ?? job.property?.customer?.name,
     job.property?.address
   );
 

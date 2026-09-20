@@ -76,6 +76,10 @@ async function priceOneOffCents(
     hotTubService: property.hotTubServiceLevel,
     hotTubDrain: property.hotTubDrain,
     hotTubDrainCadence: property.hotTubDrainCadence,
+    // Item 7. The `as any` below means the compiler cannot ask for this, so it
+    // is here by hand: omitting it under-charges every pet property by $10 on
+    // a path that actually takes the customer's money.
+    petsAllowed: property.petsAllowed,
     subscriptionMonths: 1,
     priceOverrideCents: property.priceOverrideCents,
   } as any);
@@ -335,6 +339,7 @@ export async function bookOneOffClean(
         laundryType: property.laundryType,
         hotTubServiceLevel: property.hotTubServiceLevel,
         hotTubDrainCadence: property.hotTubDrainCadence,
+        petsAllowed: property.petsAllowed,
       },
       checkInTime: arrival,
       subscriptionStart: arrival,
@@ -422,6 +427,13 @@ export async function bookOneOffClean(
         checkOutTime: deadline,
         calendarEventUid: `oneoff_${randomUUID()}`,
         status: "unassigned",
+        // A one-off is booked by a
+        // vacation-rental customer against their existing property, so the
+        // SERVICE is unchanged — what differs is where the job came from, which
+        // is the question `job_source` answers. Without it, telling this apart
+        // from a synced clean means reverse-engineering `calendar_event_uid`.
+        serviceType: "vacation_rental_subscription",
+        jobSource: "customer_one_off",
         expectedHours: staffing.expectedHours,
         addonsSnapshot: staffing.addonsSnapshot,
         checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),

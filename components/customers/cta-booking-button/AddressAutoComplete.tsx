@@ -1,17 +1,33 @@
 import React, { useState } from 'react';
 import { Autocomplete, useLoadScript } from '@react-google-maps/api';
 import { serviceAreaPolygons } from '@/lib/google-maps/serviceArea/index.ts';
-import { SignupFormData } from '@/lib/validations/bookng-modal';
 
-interface Props {
-  formData: SignupFormData;
-  setFormData: React.Dispatch<React.SetStateAction<SignupFormData>>;
+/**
+ * Generic over the form it edits, so the residential wizard reuses it rather
+ * than forking a second autocomplete. The only fields it touches are `address`
+ * and `isAddressInServiceArea`, which both forms carry — and the boolean it
+ * writes is a CLIENT-side convenience only: every charging path re-validates
+ * the address against the geocoder server-side, because this value can be set
+ * to anything from the browser.
+ */
+interface Props<T extends AddressFormShape> {
+  formData: T;
+  setFormData: React.Dispatch<React.SetStateAction<T>>;
   errors: Record<string, string[] | undefined>;
 }
 
+type AddressFormShape = {
+  address?: string;
+  isAddressInServiceArea?: boolean;
+};
+
 const libraries: ("places" | "geometry")[] = ['places', 'geometry'];
 
-export const AddressAutocomplete = ({ formData, setFormData, errors }: Props) => {
+export const AddressAutocomplete = <T extends AddressFormShape>({
+  formData,
+  setFormData,
+  errors,
+}: Props<T>) => {
   const { isLoaded, loadError } = useLoadScript({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY!,
     libraries,

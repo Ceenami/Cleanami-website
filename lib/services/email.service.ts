@@ -4,6 +4,31 @@ import ResumeSetupEmail from "../emails/ResumeSetupEmail";
 import TransactionalEmail, {
   type TransactionalEmailProps,
 } from "../emails/TransactionalEmail";
+import { SUPPORT_EMAIL } from "@/lib/constants/contact";
+import {
+  entryAccessReminder,
+  RESIDENTIAL_CANCELLATION_POLICY,
+  SERVICE_TYPE_LABELS,
+} from "@/lib/constants/service-type";
+
+/**
+ * `YYYY-MM-DD` is a calendar date, not an instant. Parsing it with `new Date()`
+ * reads it as UTC midnight, which renders as the PREVIOUS day for every reader
+ * east of Greenwich and for anyone whose runtime is not UTC — so a customer in
+ * Florida is told their clean is a day earlier than it is. Split the fields and
+ * build the label from them.
+ */
+function formatEasternDateLabel(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return isoDate;
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 type SendResult = { success: boolean; error?: string };
 
@@ -76,6 +101,101 @@ export function sendJobCompletionEmail(params: {
     ],
     ctaLabel: "View details",
     ctaUrl: `${APP_URL}/customer/dashboard`,
+  });
+}
+
+/**
+ * The residential booking confirmation. The client specified the fields:
+ * customer name, address, service type, date and arrival window, price, pet
+ * status and fee, entry/access reminder, payment status, support contact.
+ *
+ * The entry line comes from `entryAccessReminder()` — the method, never the
+ * code. `entry_instructions` is a credential store and email is exactly the
+ * surface it must never reach, so there is deliberately no parameter here that
+ * could carry one.
+ *
+ * The cancellation sentence is not decoration: charging at booking creates an
+ * obligation the hold model does not, so the customer has to be told the refund
+ * path exists. Behind it is `cancelJobAsAdmin()` -> `voidCharge()`.
+ */
+export type ResidentialBookingConfirmation = {
+  to: string;
+  name?: string;
+  propertyAddress: string;
+  /** `YYYY-MM-DD`, as the customer chose it. */
+  cleanDate: string;
+  /** e.g. "9:00 AM - 11:00 AM". The window, not a single instant. */
+  arrivalWindowLabel: string;
+  amount: string;
+  petsAllowed: boolean;
+  petFeeApplied: boolean;
+  entryMethod: string | null;
+};
+
+/**
+ * The email's content, separated from sending it, so both the field list and
+ * the no-door-code rule can actually be asserted. `sendTransactionalEmail`
+ * returns `{ success, error }` and nothing about what it sent.
+ */
+export function buildResidentialBookingConfirmationEmail(
+  params: ResidentialBookingConfirmation
+): { subject: string; props: TransactionalEmailProps } {
+  const cleanDateLabel = formatEasternDateLabel(params.cleanDate);
+
+  return {
+    subject: "Your CleanNami house cleaning is booked",
+    props: {
+      previewText: "Your one-time house cleaning is confirmed.",
+      heading: "Your clean is booked 🎉",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `Service: ${SERVICE_TYPE_LABELS.residential_one_time}.`,
+        `Address: ${params.propertyAddress}.`,
+        `Date: ${cleanDateLabel}. Your cleaner will arrive between ${params.arrivalWindowLabel}.`,
+        `Paid today: ${params.amount}. Your payment is complete — there is nothing to pay on the day.`,
+        params.petsAllowed
+          ? params.petFeeApplied
+            ? "Pets: yes. A $10 pet fee is included in the total above."
+            : "Pets: yes."
+          : "Pets: none reported.",
+        entryAccessReminder(params.entryMethod),
+        RESIDENTIAL_CANCELLATION_POLICY,
+        `Questions? Reply to this email or contact us at ${SUPPORT_EMAIL}.`,
+      ],
+      ctaLabel: "Open your portal",
+      ctaUrl: `${APP_URL}/customer/dashboard`,
+    },
+  };
+}
+
+export function sendResidentialBookingConfirmationEmail(
+  params: ResidentialBookingConfirmation
+): Promise<SendResult> {
+  const { subject, props } = buildResidentialBookingConfirmationEmail(params);
+  return sendTransactionalEmail(params.to, subject, props);
+}
+
+/**
+ * Admin alert by email, alongside the in-app row `notifyAdmins` always writes.
+ *
+ * The spec says email is "also used for admin alerts"; it never was. Reserved
+ * for time-sensitive triggers — see `notifyAdmins`'s
+ * `email` flag for why this is not the default.
+ */
+export function sendAdminAlertEmail(params: {
+  to: string;
+  name?: string;
+  subject: string;
+  message: string;
+  url?: string;
+}): Promise<SendResult> {
+  return sendTransactionalEmail(params.to, `[CleanNami admin] ${params.subject}`, {
+    previewText: params.subject,
+    heading: params.subject,
+    greeting: params.name ? `Hi ${params.name},` : "Hi,",
+    bodyLines: [params.message],
+    ctaLabel: params.url ? "Open in the dashboard" : undefined,
+    ctaUrl: params.url ? `${APP_URL}${params.url}` : undefined,
   });
 }
 

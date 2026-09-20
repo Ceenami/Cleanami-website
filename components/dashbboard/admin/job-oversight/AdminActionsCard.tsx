@@ -28,14 +28,23 @@ type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]['value'];
 export function AdminActionsCard({
   job,
   onAction,
+  /**
+   * Overriding the one-job-per-day rule is a Super Admin action, and
+   * `isAdmin` is true for a plain admin too. The route enforces this on its own
+   * (a client cannot be trusted with an authorization decision) — this only
+   * decides whether the override affordance is worth showing.
+   */
+  isSuperAdmin = false,
 }: {
   job: JobDetails;
   onAction: (action: AdminConfirmAction) => void;
+  isSuperAdmin?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [selectedCleanerId, setSelectedCleanerId] = useState('');
   const [selectedRole, setSelectedRole] = useState<AssignableRole>('primary');
   const [replaceCleanerId, setReplaceCleanerId] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
   const [newDeadline, setNewDeadline] = useState(
     job.checkInTime ? new Date(job.checkInTime).toISOString().substring(0, 16) : ''
   );
@@ -59,6 +68,18 @@ export function AdminActionsCard({
 
   const roleLabel =
     ASSIGNABLE_ROLES.find((r) => r.value === selectedRole)?.label ?? 'Primary';
+
+  const selected = availableCleaners.find((c) => c.id === selectedCleanerId);
+
+  // Three states, not two. `overlapping` means the working hours genuinely
+  // collide and no override can help; `same_day` means the rule blocks it but
+  // the hours are free, which is exactly what a Super Admin override is for.
+  const blockedSameDay = selected?.conflictState === 'same_day';
+  const blockedOverlapping = selected?.conflictState === 'overlapping';
+  const needsReason = blockedSameDay && isSuperAdmin;
+  const assignBlocked =
+    blockedOverlapping ||
+    (blockedSameDay && (!isSuperAdmin || !overrideReason.trim()));
 
   const handleAssign = () => {
     if (!selectedCleanerId) return;
@@ -86,17 +107,25 @@ export function AdminActionsCard({
             cleanerId: selectedCleanerId,
             role: selectedRole,
             replaceCleanerId: replaceCleanerId || undefined,
+            // Only ever sent when the admin has actually been shown the
+            // conflict and typed a reason — never a default, never a
+            // pre-ticked box.
+            ...(blockedSameDay && overrideReason.trim()
+              ? { override: true, overrideReason: overrideReason.trim() }
+              : {}),
           }),
         });
         const data = (await response.json()) as {
           error?: string;
           urgentBonus?: boolean;
+          overrideApplied?: boolean;
         };
         if (!response.ok) {
           throw new Error(data.error ?? 'Failed to assign cleaner');
         }
         setSelectedCleanerId('');
         setReplaceCleanerId('');
+        setOverrideReason('');
         await queryClient.invalidateQueries({ queryKey: ['job-details', job.id] });
         await queryClient.invalidateQueries({
           queryKey: ['available-cleaners', job.id],
@@ -256,6 +285,13 @@ export function AdminActionsCard({
                       ? ` - ${cleaner.distance} mi`
                       : ' - distance n/a'}
                     {cleaner.onCallStatus === 'on_job' && ' - On Job'}
+                    {/* Kept in the list, not filtered out: an admin covering an
+                        emergency needs to see everyone and be told what it
+                        would cost, rather than watch candidates disappear. */}
+                    {cleaner.conflictState === 'overlapping' &&
+                      ' - ⛔ hours overlap'}
+                    {cleaner.conflictState === 'same_day' &&
+                      ' - ⚠ already works this day'}
                   </option>
                 ))}
               </select>
@@ -298,12 +334,62 @@ export function AdminActionsCard({
                 </select>
               </div>
 
+              {blockedOverlapping && (
+                <div className="rounded-md bg-red-50 p-2 text-xs text-red-800">
+                  <p className="font-semibold">
+                    This cleaner&apos;s hours overlap another job
+                    {selected?.conflictDate ? ` on ${selected.conflictDate}` : ''}.
+                  </p>
+                  <p className="mt-1">
+                    No override applies — one person cannot work two cleans at
+                    the same time. Pick someone else, or move one of the jobs.
+                  </p>
+                </div>
+              )}
+
+              {blockedSameDay && (
+                <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-900">
+                  <p className="font-semibold">
+                    This cleaner already has a job on{' '}
+                    {selected?.conflictDate ?? 'this date'}.
+                  </p>
+                  <p className="mt-1">
+                    CleanNami assigns one job per cleaner per day. Their hours
+                    are free, so a Super Admin may override this deliberately.
+                  </p>
+                  {isSuperAdmin ? (
+                    <label className="mt-2 block">
+                      <span className="font-medium">
+                        Reason for the override (recorded on the job)
+                      </span>
+                      <textarea
+                        value={overrideReason}
+                        onChange={(e) => setOverrideReason(e.target.value)}
+                        rows={2}
+                        placeholder="e.g. Cleaner requested the double; both cleans are on the same street."
+                        className="mt-1 block w-full rounded-md border-amber-300 text-xs focus:border-amber-500 focus:ring-amber-500"
+                      />
+                    </label>
+                  ) : (
+                    <p className="mt-2 font-medium">
+                      Only a Super Admin can override this.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <button
                 onClick={handleAssign}
-                disabled={isDisabled || !selectedCleanerId}
-                className="w-full text-center py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isDisabled || !selectedCleanerId || assignBlocked}
+                className={`w-full text-center py-2 px-4 border rounded-md text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
+                  needsReason
+                    ? 'border-transparent bg-amber-600 text-white hover:bg-amber-700'
+                    : 'border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100'
+                }`}
               >
-                Assign as {roleLabel}
+                {needsReason
+                  ? `Override and assign as ${roleLabel}`
+                  : `Assign as ${roleLabel}`}
               </button>
             </div>
           )}

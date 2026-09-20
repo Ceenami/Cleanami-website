@@ -43,6 +43,9 @@ export async function getCleaners({
       reliabilityScore: cleaners.reliabilityScore,
       hasHotTubCert: cleaners.hasHotTubCert,
       hasLaundryLeadCert: cleaners.hasLaundryLeadCert,
+      // Surfaced so the admin table can toggle them. Both default TRUE.
+      residentialQualified: cleaners.residentialQualified,
+      petComfortable: cleaners.petComfortable,
       accountStatus: cleaners.accountStatus,
       onboardingCompleted: cleaners.onboardingCompleted,
       onboardingStarted: cleaners.onboardingStarted,

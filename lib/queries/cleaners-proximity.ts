@@ -17,6 +17,14 @@ export type AvailableCleanerWithDistance = {
   hasHotTubCert: boolean;
   /** Laundry-lead eligible — preferred for the off-site $5/load Laundry Lead role. */
   hasLaundryLeadCert: boolean;
+  /**
+   * 0041. Surfaced here so the assignment engine can narrow the pool for
+   * a residential job **without a second query per candidate**. Purely additive:
+   * nothing in this file reads them, so the ranking and the returned order are
+   * byte-identical to before (invariant #2).
+   */
+  residentialQualified: boolean;
+  petComfortable: boolean;
 };
 
 type CleanerProximityOptions = {
@@ -66,6 +74,8 @@ export async function getAvailableCleanersForProperty(
       stripeChargesEnabled: true,
       stripeOnboardingComplete: true,
       eligibleForAssignments: true,
+      residentialQualified: true,
+      petComfortable: true,
     },
   });
 
@@ -97,6 +107,8 @@ export async function getAvailableCleanersForProperty(
         distance,
         hasHotTubCert: cleaner.hasHotTubCert ?? false,
         hasLaundryLeadCert: cleaner.hasLaundryLeadCert ?? false,
+        residentialQualified: cleaner.residentialQualified ?? true,
+        petComfortable: cleaner.petComfortable ?? true,
       };
     })
     .filter((c) => {
@@ -114,7 +126,7 @@ export async function getAvailableCleanersForProperty(
       return true;
     })
     .sort((a, b) => {
-      // Distance-first dispatch (spec §13.4 "Order of consideration: 1.
+      // Distance-first dispatch ("Order of consideration: 1.
       // Location/distance, 2. Reliability"): the nearest cleaner wins, with
       // reliability as the tie-breaker. Reliability is still enforced as the
       // eligibility gate/tier by the assignment engine (min 80; primaries prefer

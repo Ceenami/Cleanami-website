@@ -13,7 +13,19 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'swap_requested',
   'dispute_update',
   'assignment',
-  'availability_reminder'
+  'availability_reminder',
+  /**
+   * 0042 — "a new residential booking arrived, staff it". Admin-facing.
+   *
+   * Deliberately NOT folded into `assignment`: M5 already emits an `assignment`
+   * alert when the engine *fails* to staff a residential job, and sharing the
+   * value would put two different facts on the same `(type, job_id)` pair —
+   * which is exactly what M6's "no event fires twice" check counts.
+   *
+   * Added by its own migration, applied before any code uses it. Postgres
+   * forbids using a value added in the current transaction.
+   */
+  'booking_alert'
 ]);
 
 export const notifications = pgTable('notifications', {

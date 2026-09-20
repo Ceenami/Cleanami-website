@@ -375,6 +375,13 @@ export class ICalService {
         checkOutTime: jobDeadline,
         calendarEventUid: compositeUid,
         status: "unassigned" as const,
+        // 0041 — both already default to exactly these values, so this changes
+        // no behaviour. Stated explicitly because the client's document
+        // asks every insert path to pass `job_source` rather than lean on
+        // the default: a default is a guess about the past, and a job's origin
+        // should not depend on which column someone remembered to set.
+        serviceType: "vacation_rental_subscription" as const,
+        jobSource: "ical" as const,
         expectedHours: jobDetails.expectedHoursPerCleaner.toString(),
         addonsSnapshot: {
           laundryType: property.laundryType,

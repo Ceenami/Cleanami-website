@@ -1,6 +1,11 @@
-import { CogIcon, CreditCardIcon, HouseHeart } from "lucide-react";
+import { CogIcon, CreditCardIcon, HouseHeart, KeyRound } from "lucide-react";
 import { Card } from "./Card";
 import { PropertyDetails } from "@/lib/queries/properties";
+import { AccessDetailsPanel } from "../AccessDetailsPanel";
+import {
+  SERVICE_TYPE_LABELS,
+  type ServiceType,
+} from "@/lib/constants/service-type";
 
 interface LeftColumnProps {
   property: PropertyDetails;
@@ -44,6 +49,17 @@ export default function PropertyDetailsLeftColumn({
 
       <Card icon={<CogIcon className="h-6 w-6" />} title="Service Settings">
         <p className="text-sm">
+          Service Type:{" "}
+          <span className="font-semibold">
+            {
+              SERVICE_TYPE_LABELS[
+                (property.serviceType as ServiceType | null) ??
+                  "vacation_rental_subscription"
+              ]
+            }
+          </span>
+        </p>
+        <p className="text-sm">
           Hot Tub Service:{" "}
           <span className="font-semibold">
             {property.hasHotTub ? "Yes" : "No"}
@@ -66,6 +82,21 @@ export default function PropertyDetailsLeftColumn({
           </p>
         )}
       </Card>
+
+      {/* The admin property view shows entry, access and parking for both
+          service types. Admin only — and this page also serves
+          /customer/properties/[id] off the same component, so the gate is
+          `isAdmin`, derived from the role AND the slug. */}
+      {isAdmin && (
+        <Card icon={<KeyRound className="h-6 w-6" />} title="Access & Entry">
+          <AccessDetailsPanel
+            entryMethod={property.entryMethod}
+            entryInstructions={property.entryInstructions}
+            parkingInstructions={property.parkingInstructions}
+            petsAllowed={property.petsAllowed}
+          />
+        </Card>
+      )}
 
       <Card icon={<CreditCardIcon />} title="Subscription">
         {subscription ? (

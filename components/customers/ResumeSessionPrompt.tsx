@@ -8,9 +8,16 @@ interface ResumeSessionPromptProps {
   onContinue: () => void;
   onStartFresh: () => void;
   isLoading?: boolean;
+  /**
+   * Step labels for the flow being resumed. Defaults to the vacation-rental
+   * wizard's, which is what every existing caller means; the residential wizard
+   * passes its own five, so a resumed residential session is not told it left
+   * off at "Calendar Sync".
+   */
+  stepNames?: Record<number, string>;
 }
 
-const stepNames: Record<number, string> = {
+const VACATION_RENTAL_STEP_NAMES: Record<number, string> = {
   1: "Customer Info",
   2: "Property Details",
   3: "Cleaning Checklist",
@@ -26,6 +33,7 @@ export function ResumeSessionPrompt({
   onContinue,
   onStartFresh,
   isLoading = false,
+  stepNames = VACATION_RENTAL_STEP_NAMES,
 }: ResumeSessionPromptProps) {
   const stepName = stepNames[currentStep] || `Step ${currentStep}`;
 

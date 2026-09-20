@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { CleanerJobSummary } from "@/lib/queries/cleaner-jobs";
+import { PETS_CLEANER_NOTE } from "@/lib/constants/service-type";
 import { cn } from "@/lib/utils";
 
 const roleStyles: Record<
@@ -36,6 +37,7 @@ type JobCardProps = {
 
 export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
   const role = roleStyles[job.role];
+  const isResidential = job.serviceType === "residential_one_time";
   const [withdrawing, setWithdrawing] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
 
@@ -80,6 +82,18 @@ export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
               </h2>
               <span
                 className={cn(
+                  "mt-1 mr-1.5 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                  job.serviceType === "residential_one_time"
+                    ? "bg-violet-100 text-violet-800"
+                    : "bg-sky-100 text-sky-800"
+                )}
+              >
+                {job.serviceType === "residential_one_time"
+                  ? "Residential"
+                  : "Turnover"}
+              </span>
+              <span
+                className={cn(
                   "mt-1 inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold",
                   role.className
                 )}
@@ -96,13 +110,17 @@ export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
 
           <dl className="space-y-2 text-sm text-gray-600">
             <div className="flex justify-between gap-4">
-              <dt className="font-medium text-gray-500">Arrival window</dt>
+              <dt className="font-medium text-gray-500">
+                {isResidential ? "Arrival time" : "Guest check-out"}
+              </dt>
               <dd className="text-right text-gray-900">
                 {job.arrivalWindow ?? "TBD"}
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt className="font-medium text-gray-500">Must finish before</dt>
+              <dt className="font-medium text-gray-500">
+                {isResidential ? "Estimated finish" : "Must finish before"}
+              </dt>
               <dd className="text-right text-gray-900">
                 {job.mustFinishBefore ?? "TBD"}
               </dd>
@@ -122,6 +140,17 @@ export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
               </div>
             )}
           </dl>
+
+          {/* Item 7, from the shared constant. On the card as well as the
+              detail: a cleaner planning their day should know before they open
+              the job. Access details deliberately do NOT appear here — the list
+              is every job a cleaner can see, and a door code has no business on
+              a screen that exists to be scrolled past. */}
+          {job.petsAllowed && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-800">
+              🐾 {PETS_CLEANER_NOTE}
+            </p>
+          )}
         </article>
       </Link>
 

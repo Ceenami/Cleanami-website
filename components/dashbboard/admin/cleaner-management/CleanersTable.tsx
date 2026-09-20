@@ -8,6 +8,7 @@ import { CleanersResponse } from "@/lib/queries/cleaners";
 import { formatContactValue } from "@/components/dashbboard/admin/ui/formatContact";
 import { formatDate } from "date-fns";
 import { cn } from "@/lib/utils";
+import { CleanerDocumentsModal } from './CleanerDocumentsModal';
 
 type Cleaner = CleanersResponse['data'][number];
 
@@ -60,7 +61,12 @@ function CleanerFlagToggle({
   size = 'md',
 }: {
   cleaner: Cleaner;
-  field: 'eligibleForAssignments' | 'hasHotTubCert' | 'hasLaundryLeadCert';
+  field:
+    | 'eligibleForAssignments'
+    | 'hasHotTubCert'
+    | 'hasLaundryLeadCert'
+    | 'residentialQualified'
+    | 'petComfortable';
   enabled: boolean;
   label: string;
   onMessage: (next: boolean) => string;
@@ -142,6 +148,56 @@ function AssignmentEligibilityToggle({ cleaner }: { cleaner: Cleaner }) {
 }
 
 /**
+ * Who may be auto-assigned a one-time residential clean, and who may be
+ * auto-assigned one at a home with pets.
+ *
+ * Both default TRUE (0041), so this control is for taking a cleaner OUT of the
+ * residential pool rather than opting them in. That direction matters: turning
+ * `residentialQualified` off is how an admin acts on "this cleaner only wants
+ * turnovers", and turning `petComfortable` off is how they act on an allergy —
+ * neither of which the engine can infer.
+ *
+ * The pets flag only ever narrows a job at a property with `pets_allowed`;
+ * a vacation-rental pool is never touched by either (invariant #2).
+ */
+function ResidentialEligibilityCell({ cleaner }: { cleaner: Cleaner }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <CleanerFlagToggle
+          cleaner={cleaner}
+          field="residentialQualified"
+          enabled={cleaner.residentialQualified !== false}
+          label="Residential qualified"
+          size="sm"
+          onMessage={(next) =>
+            next
+              ? `${cleaner.fullName} can be assigned residential cleans`
+              : `${cleaner.fullName} removed from residential cleans`
+          }
+        />
+        <span className="text-xs text-gray-600">Residential</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <CleanerFlagToggle
+          cleaner={cleaner}
+          field="petComfortable"
+          enabled={cleaner.petComfortable !== false}
+          label="Comfortable with pets"
+          size="sm"
+          onMessage={(next) =>
+            next
+              ? `${cleaner.fullName} can be assigned homes with pets`
+              : `${cleaner.fullName} will not be assigned homes with pets`
+          }
+        />
+        <span className="text-xs text-gray-600">Pets OK</span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Hot tub + Laundry Lead certifications. Both gate the assignment engine:
  * a hot-tub job will not be offered to a cleaner without the hot-tub cert, and
  * the off-site Laundry Lead role prefers a laundry-lead-certified team member,
@@ -185,6 +241,7 @@ function CertificationsCell({ cleaner }: { cleaner: Cleaner }) {
 }
 
 export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTableProps) => {
+  const [documentsFor, setDocumentsFor] = useState<Cleaner | null>(null);
   const headers: { key: SortableKey; label: string }[] = [
     { key: 'fullName', label: 'Name' },
     { key: 'email', label: 'Email' },
@@ -229,6 +286,9 @@ export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTablePro
               </th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Certifications
+              </th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Residential
               </th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Onboarding
@@ -280,8 +340,23 @@ export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTablePro
                 <td className="px-6 py-4 whitespace-nowrap">
                   <CertificationsCell cleaner={cleaner} />
                 </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <ResidentialEligibilityCell cleaner={cleaner} />
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                  {cleaner.onboardingCompleted ? 'Complete' : cleaner.onboardingStarted ? 'In progress' : 'Not started'}
+                  <div>
+                    {cleaner.onboardingCompleted ? 'Complete' : cleaner.onboardingStarted ? 'In progress' : 'Not started'}
+                  </div>
+                  {/* Item 17. The panel's real content is usually the
+                      "acknowledged, no file" explanation rather than a list of
+                      downloads — see CleanerDocumentsModal. */}
+                  <button
+                    type="button"
+                    onClick={() => setDocumentsFor(cleaner)}
+                    className="mt-1 text-xs font-medium text-teal-600 hover:text-teal-800"
+                  >
+                    Documents
+                  </button>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-600">
                   <div>Payouts: {cleaner.stripePayoutsEnabled ? 'Yes' : 'No'}</div>
@@ -297,6 +372,14 @@ export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTablePro
           </tbody>
         </table>
       </div>
+
+      {documentsFor && (
+        <CleanerDocumentsModal
+          cleanerId={documentsFor.id}
+          cleanerName={documentsFor.fullName}
+          onClose={() => setDocumentsFor(null)}
+        />
+      )}
     </div>
   );
 };

@@ -53,7 +53,15 @@ export const cleaners = pgTable("cleaners", {
   eligibleForAssignments: boolean("eligible_for_assignments").default(false).notNull(),
   /** Period start (Monday) for which the one-time late catch-up override was consumed */
   availabilityLateOverridePeriodStart: date("availability_late_override_period_start"),
-  /** Per-cleaner hourly pay rate in cents. Starts at $17.00; raised via §7/§8 rule. */
+  /**
+   * 0041 — residential eligibility. Both default TRUE on purpose: opt-out, not
+   * opt-in. Defaulting FALSE would ship residential with an empty assignable
+   * pool, which presents as a broken assignment engine rather than as a
+   * policy. Admin-editable per cleaner.
+   */
+  residentialQualified: boolean("residential_qualified").default(true).notNull(),
+  petComfortable: boolean("pet_comfortable").default(true).notNull(),
+  /** Per-cleaner hourly pay rate in cents. Starts at $17.00; raised via/ rule. */
   hourlyRateCents: integer("hourly_rate_cents").default(1700).notNull(),
   /** Used to compute annual raise eligibility (anniversary). */
   hireDate: date("hire_date"),

@@ -25,8 +25,15 @@ import { useRealtimeCleanerCard } from '@/hooks/useRealtimeCleanerCard';
 export function JobDetailsClient({
   jobId,
   isAdmin,
+  isSuperAdmin = false,
 }: {
   jobId: string;
+  /**
+   * Overriding the one-job-per-day rule is Super Admin only, and
+   * `isAdmin` is true for a plain admin too. Server-resolved from `users.role`;
+   * `/api/jobs/[id]/reassign` enforces it independently.
+   */
+  isSuperAdmin?: boolean;
   /**
    * Resolved on the server from `users.role`, and passed in.
    *
@@ -145,7 +152,10 @@ export function JobDetailsClient({
               readOnly={!isAdmin}
               showInternals={isAdmin}
             />
-            <PropertyDetailsCard property={job.property} />
+            <PropertyDetailsCard
+              property={job.property}
+              showAccessDetails={isAdmin}
+            />
             {isAdmin && <PropertyChecklistCard jobId={jobId} />}
             {/* Evidence-workflow states ("pending admin review", "packet
                 incomplete") are internal process language. */}
@@ -154,6 +164,7 @@ export function JobDetailsClient({
               <AdminActionsCard
                 job={job}
                 onAction={(action) => setConfirmAction(action)}
+                isSuperAdmin={isSuperAdmin}
               />
             )}
           </div>

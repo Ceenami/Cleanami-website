@@ -74,6 +74,7 @@ export async function recalculateJobStaffing(options?: {
         laundryType: property.laundryType,
         hotTubServiceLevel: property.hotTubServiceLevel,
         hotTubDrainCadence: property.hotTubDrainCadence,
+        petsAllowed: property.petsAllowed,
       },
       checkInTime,
       subscriptionStart: new Date(subscriptionStart),

@@ -16,29 +16,29 @@ export const Features = () => {
             icon={<CalendarDaysIcon className="h-8 w-8 text-white" />}
             title="Seamless Booking & Automation"
             description="Set up your property preferences once, and CleanNami takes care
-                of the rest. Every booking is automatically scheduled, with all
-                add-ons and customer checklists integrated into the clean."
+                of the rest. Rental turnovers schedule themselves off your
+                calendar; one-time home cleans book in a couple of minutes."
           />
           <FeatureCard
             icon={<DollarSign className="h-8 w-8 text-white"/>}
             title="Consistent & Transparent Pricing"
             description="No haggling, no hidden fees. You see the exact price upfront —
-                based on your property details, laundry needs, and hot tub
-                options — and it stays the same every clean."
+                based on your property's size and the options you choose — and
+                it stays the same every clean."
           />
           <FeatureCard
             icon={<SparklesIcon className="h-8 w-8 text-white"/>}
-            title="Turnkey Turnovers, Not Just Cleaning"
-            description="Our cleaners don’t just scrub — they stage beds, restock
-                essentials already in your unit, reset hot tubs, and prepare
-                your property so guests feel like the very first check-in."
+            title="More Than Just Cleaning"
+            description="Rentals get the full turnover — beds staged, essentials
+                restocked, hot tubs reset, ready for the next check-in. Homes get
+                a thorough top-to-bottom clean to the same standard."
           />
           <FeatureCard
             icon={<ShieldCheckIcon className="h-8 w-8 text-white"/>}
             title="Reliability You Can Trust"
             description="Cleaners are GPS-verified at check-in and check-out. With
                 performance tracking and a dedicated on-call backup pool, your
-                turnovers get done on time, every time."
+                clean gets done on time, every time."
           />
         </div>
       </div>

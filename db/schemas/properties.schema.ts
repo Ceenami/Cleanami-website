@@ -51,6 +51,51 @@ export const properties = pgTable(
     priceOverrideCents: integer('price_override_cents'),
     defaultCheckInTime: text('default_check_in_time').default('16:00:00'),
     defaultCheckOutTime: text('default_check_out_time').default('09:00:00'),
+    /**
+     * 0041 — varchar + CHECK rather than a pgEnum, because a value added by
+     * ALTER TYPE cannot be used until its transaction commits. The two literals
+     * are the client's own, from the 2026-08-27 counterproposal; the display
+     * labels ("Vacation Rental Turnover", "One-Time Residential Clean") live in
+     * the application.
+     */
+    serviceType: varchar("service_type", {
+      enum: ["vacation_rental_subscription", "residential_one_time"],
+    })
+      .default("vacation_rental_subscription")
+      .notNull(),
+    /** 0041 — drives the $10/clean pet fee and the cleaner's pet note. Both service types. */
+    petsAllowed: boolean("pets_allowed").default(false).notNull(),
+    /**
+     * 0041 — how the cleaner gets in. NULL means "not recorded", which is every
+     * property predating the migration; it is deliberately not defaulted,
+     * because inventing an entry method is a lie a cleaner acts on at 9am.
+     */
+    entryMethod: varchar("entry_method", {
+      enum: [
+        "smart_lock", "lockbox", "hidden_key", "customer_present",
+        "front_desk", "garage_code", "gate_code", "other",
+      ],
+    }),
+    /**
+     * 0041 — CREDENTIAL STORE. Holds door, lockbox, gate and garage codes.
+     * Never put this in an email, an SMS, a push payload, a `notifications`
+     * row, `jobs.notes`, `jobs.addons_snapshot` or Stripe metadata. Return it
+     * only to an admin or to the ASSIGNED cleaner.
+     */
+    entryInstructions: text("entry_instructions"),
+    /** 0041 — free text, both service types. Not a credential, unlike entryInstructions. */
+    parkingInstructions: text("parking_instructions"),
+    /**
+     * 0041 — the customer's own notes about the clean (item 4's "Special
+     * notes"). **Not a credential**: "the dog is friendly but barks" is not a
+     * door code, so unlike `entryInstructions` this may be shown beside the
+     * access details rather than locked behind them — but it is still customer
+     * content and stays off emails and snapshots by default.
+     *
+     * It is also where a "the house is in rough shape" signal lands now that
+     * the Heavy-condition question was dropped.
+     */
+    specialInstructions: text("special_instructions"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
