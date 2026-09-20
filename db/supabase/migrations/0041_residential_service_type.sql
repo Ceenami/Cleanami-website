@@ -143,7 +143,10 @@ UPDATE "jobs" SET "job_source" = 'customer_one_off'
 
 UPDATE "jobs" SET "job_source" = 'manual'
  WHERE "subscription_id" IS NULL
-   AND "calendar_event_uid" NOT LIKE 'oneoff_%';
+   AND (
+     "calendar_event_uid" IS NULL
+     OR "calendar_event_uid" NOT LIKE 'oneoff_%'
+   );
 
 -- ---------------------------------------------------------------------------
 -- 5. Column comments — the only place this reasoning reaches someone who has
@@ -188,7 +191,8 @@ COMMENT ON COLUMN "cleaners"."pet_comfortable" IS
 --      OR special_instructions IS NOT NULL;                                                -- 0
 --   SELECT job_source, count(*) FROM jobs GROUP BY 1;
 --     -- customer_one_off must equal the number of UIDs starting 'oneoff_'
---     -- manual must equal the number of subscription-less jobs that are not oneoff_
+--     -- manual must equal the number of subscription-less jobs whose UID is
+--     -- NULL or does not start oneoff_
 --     -- nothing should sit on the 'ical' default by accident
 --
 -- On production, run the job_source counts before and after. The test project's
