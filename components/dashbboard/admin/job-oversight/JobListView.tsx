@@ -284,7 +284,7 @@ interface JobRecord {
   checkInTime?: string | null;
   /** 0041. Older rows all default to the vacation-rental literal. */
   serviceType?: ServiceType | null;
-  /** 0039. Null on every ordinary job; wins over the service type when set. */
+  /** 0045. Null on every ordinary job; wins over the service type when set. */
   jobLabel?: string | null;
   /** 0035, from the job's frozen snapshot. Null on a vacation-rental job. */
   arrivalWindow?: string | null;

@@ -17,7 +17,7 @@ export const jobStatusEnum = pgEnum('job_status', [
 
 export const jobCleanerRoleEnum = pgEnum('job_cleaner_role', ['primary', 'backup', 'on-call', 'laundry_lead']);
 
-/** 'refunded' added by 0038, in its own file: Postgres forbids using an enum
+/** 'refunded' added by 0044, in its own file: Postgres forbids using an enum
  *  value in the transaction that adds it. It is written when an on-time
  *  cancellation returns the charge, and payment_intent_id is deliberately KEPT
  *  alongside it so the row still says which charge was returned. */
@@ -84,7 +84,7 @@ export const jobs = pgTable('jobs', {
     enum: ['ical', 'manual', 'customer_one_off', 'public_residential_booking'],
   }).default('ical').notNull(),
   /**
-   * 0039 — why this job exists, which is a different question from what kind of
+   * 0045 — why this job exists, which is a different question from what kind of
    * clean it is. A reclean of a vacation-rental turnover is still a
    * vacation-rental job. NULL for every ordinary job; displayed in place of the
    * service-type label when set.

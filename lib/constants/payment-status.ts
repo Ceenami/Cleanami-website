@@ -10,7 +10,7 @@
  * Two rules that keep it honest.
  *
  * **`canceled` comes from `jobs.status`, never from the payment enum.** One
- * fact, one column. That is why migration 0038 added only `refunded`: a second
+ * fact, one column. That is why migration 0044 added only `refunded`: a second
  * column that can disagree with `jobs.status` about whether a job is cancelled
  * is a reconciliation bug waiting to be filed. "Refunded/canceled" is one
  * display concept over two facts, and this is where they are combined.

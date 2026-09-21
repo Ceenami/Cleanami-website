@@ -101,7 +101,7 @@ export type CleanerJobDetail = {
   /** 0041. Drives the badge and every label below. */
   serviceType: string;
   /**
-   * 0039 — an admin's manual "this one is a reclean" override, which takes the
+   * 0045 — an admin's manual "this one is a reclean" override, which takes the
    * badge over the service type. Null on every ordinary job. The TIME labels
    * below still follow `serviceType`: a reclean of a turnover is still
    * scheduled like a turnover.

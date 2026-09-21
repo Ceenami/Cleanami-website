@@ -1,4 +1,4 @@
--- SUPERSEDED BY 0037_cleaner_disputes_rebuild.sql. DO NOT APPLY THIS FILE.
+-- SUPERSEDED BY 0043_cleaner_disputes_rebuild.sql. DO NOT APPLY THIS FILE.
 --
 -- This migration was written but never applied — not to production, and not to
 -- any test database. Confirmed 2026-09-04 against both.
@@ -8,7 +8,7 @@
 -- where either type already exists this file aborts — and the CREATE TABLE
 -- comes after both of them, leaving the types without the table.
 --
--- 0037 re-issues the same shape with guarded DDL, adds the nullable job_id, and
+-- 0043 re-issues the same shape with guarded DDL, adds the nullable job_id, and
 -- carries the row-level security this file never had. Apply that instead.
 --
 -- Kept, not deleted: a migration file is a record, and the next person to

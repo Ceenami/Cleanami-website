@@ -50,7 +50,7 @@ export type CleanerJobSummary = {
    */
   serviceType: string;
   /**
-   * 0039 — an admin's manual "this one is a reclean" override. Null on every
+   * 0045 — an admin's manual "this one is a reclean" override. Null on every
    * ordinary job. Carried on the LIST as well as the detail: without it the
    * shared label resolver quietly falls back to the service type here, which
    * reads as the label working on some screens and not others.

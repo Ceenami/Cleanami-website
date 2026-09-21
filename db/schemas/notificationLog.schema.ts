@@ -14,7 +14,7 @@ export const NOTIFICATION_CHANNELS = ["email", "sms", "push", "in_app"] as const
 export const NOTIFICATION_SEND_STATUSES = ["sent", "failed", "skipped"] as const;
 
 /**
- * One row per notification ATTEMPT (migration 0039).
+ * One row per notification ATTEMPT (migration 0045).
  *
  * Written inside the channel services themselves — not at the call sites —
  * because a call site can be added without a log and nothing would notice. The

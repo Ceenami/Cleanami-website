@@ -1,4 +1,4 @@
--- 0037 — cleaner disputes: the storage the application has always assumed.
+-- 0043 — cleaner disputes: the storage the application has always assumed.
 --
 -- NOT YET APPLIED TO PRODUCTION. Test project only; production migrations are
 -- applied by hand after review, never by an agent. Safe to re-run — every
@@ -158,4 +158,4 @@ COMMENT ON COLUMN "disputes"."job_id" IS
 --   SELECT count(*) FROM disputes;                               -- 0, and it must not error
 --
 -- Apply with (hand this to a human, do not run it):
---   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0037_cleaner_disputes_rebuild.sql
+--   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0043_cleaner_disputes_rebuild.sql

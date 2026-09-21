@@ -1,4 +1,4 @@
--- 0039 — jobs.job_label, and the notification send log.
+-- 0045 — jobs.job_label, and the notification send log.
 --
 -- NOT YET APPLIED TO PRODUCTION. Test project only; production migrations are
 -- applied by hand after review, never by an agent. Safe to re-run — every
@@ -7,7 +7,7 @@
 --
 -- WHY THESE TWO TOGETHER
 -- They are the two additive objects in this phase that nothing else depends
--- on. Neither references the enum value added in 0038, so this file has no
+-- on. Neither references the enum value added in 0044, so this file has no
 -- ordering hazard of its own; it is numbered after it only to keep the applied
 -- sequence readable.
 --
@@ -22,15 +22,15 @@
 -- An admin creating a make-good clean needs to mark it as one. A reclean of a
 -- vacation-rental turnover is still a vacation-rental job: its TYPE and its
 -- REASON are different facts, and collapsing them into service_type would
--- corrupt the service-type filter that shipped in 0035.
+-- corrupt the service-type filter that shipped in 0041.
 --
 -- Rendering rule, everywhere a service type is displayed: show the job_label's
 -- display text when set, otherwise the service_type's. The three customer-
 -- facing literals are the client's own wording — "Vacation Rental Turnover",
--- "One-Time Residential Clean", "Reclean/Correction" — and, as with 0035, the
+-- "One-Time Residential Clean", "Reclean/Correction" — and, as with 0041, the
 -- display labels live in the application and only the stored literals are here.
 --
--- varchar + CHECK rather than a pgEnum, for the same reason as 0035's
+-- varchar + CHECK rather than a pgEnum, for the same reason as 0041's
 -- service_type: a value added by ALTER TYPE cannot be used until its
 -- transaction commits, which makes add-then-backfill impossible in one file.
 --
@@ -154,4 +154,4 @@ COMMENT ON COLUMN "notification_log"."provider_message_id" IS
 --   SELECT relrowsecurity FROM pg_class WHERE relname='notification_log';  -- t
 --
 -- Apply with (hand this to a human, do not run it):
---   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0039_job_label_and_notification_log.sql
+--   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0045_job_label_and_notification_log.sql
