@@ -26,6 +26,7 @@ import {
   JOB_LABEL_VALUES,
   isJobLabel,
 } from "@/lib/constants/service-type";
+import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -198,6 +199,7 @@ export async function POST(request: NextRequest) {
 
   const property = await db.query.properties.findFirst({
     where: eq(properties.id, propertyId),
+    with: { checklistFiles: true },
   });
   if (!property) {
     return NextResponse.json({ error: "Property not found." }, { status: 404 });
@@ -315,6 +317,10 @@ export async function POST(request: NextRequest) {
         addonsSnapshot: isResidential
           ? { ...staffing.addonsSnapshot, arrivalWindow }
           : staffing.addonsSnapshot,
+        // Manual jobs are still jobs issued to cleaners, so preserve the
+        // feedback checklist at creation instead of letting a later property
+        // edit rewrite what the cleaner was asked to do.
+        checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
         // The admin's reason goes under the system line rather than over it.
         // "Tied to the customer/property in notes or job details" is the whole
         // of the link back to the original clean — there is no reclean_of

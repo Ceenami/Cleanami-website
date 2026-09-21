@@ -118,7 +118,12 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const processingPromises = jobsToProcess.map(async (job) => {
+    // Each iteration performs database work. The production transaction
+    // pooler drops pipelined queries, so this must stay sequential even though
+    // Stripe calls could otherwise fan out in parallel.
+    const results = [];
+    for (const job of jobsToProcess) {
+      const result = await (async () => {
       try {
         // Transform property data to match pricing service's expected format
         const pricingInput = buildRecurringPricingInput(
@@ -305,9 +310,9 @@ export async function POST(req: NextRequest) {
 
         return { jobId: job.jobId, status: "failed", error: error.message };
       }
-    });
-
-    const results = await Promise.all(processingPromises);
+      })();
+      results.push(result);
+    }
 
     return NextResponse.json({
       message: "Pre-authorization process completed.",

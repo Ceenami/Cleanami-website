@@ -366,6 +366,12 @@ export async function sendCustomerPortalEmail({
     return { success: true };
   } catch (error) {
     console.error("Failed to send customer portal email:", error);
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "failed",
+      error,
+      meta: { trigger: "customer_portal_invite", recipient: to },
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",
@@ -417,6 +423,12 @@ export async function sendResumeEmail({
     return { success: true };
   } catch (error) {
     console.error("Failed to send resume email:", error);
+    await recordNotificationAttempt({
+      channel: "email",
+      status: "failed",
+      error,
+      meta: { trigger: "resume_setup", recipient: to },
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",

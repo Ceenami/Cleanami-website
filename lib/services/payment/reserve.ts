@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/db";
+import { db, sequentialQueries } from "@/db";
 import { reserveTransactions, stripeDisputes } from "@/db/schemas";
 import { count, gte } from "drizzle-orm";
 
@@ -20,16 +20,18 @@ const WINDOW_DAYS = 30;
 export async function computeReserveRate(now: Date = new Date()): Promise<number> {
   const since = new Date(now.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
-  const [captureRows, disputeRows] = await Promise.all([
-    db
+  const [captureRows, disputeRows] = await sequentialQueries(
+    () =>
+      db
       .select({ c: count() })
       .from(reserveTransactions)
       .where(gte(reserveTransactions.createdAt, since)),
-    db
+    () =>
+      db
       .select({ c: count() })
       .from(stripeDisputes)
       .where(gte(stripeDisputes.createdAt, since)),
-  ]);
+  );
 
   const captures = Number(captureRows[0]?.c ?? 0);
   const disputes = Number(disputeRows[0]?.c ?? 0);
