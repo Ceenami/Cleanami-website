@@ -89,7 +89,21 @@ export async function updateSession(request: NextRequest) {
   const bearerToken = bearerTokenFromHeader(
     request.headers.get("authorization")
   );
-  const { data } = await supabase.auth.getClaims(bearerToken ?? undefined);
+  // `getClaims` only turns Supabase's own AuthErrors into a returned `error`;
+  // every other failure it rethrows. On the Bearer path that includes the plain
+  // `Error("JWT has expired")` / `Error("Missing exp claim")` from its own `exp`
+  // check, `Error("Invalid alg claim")`, and a WebCrypto throw on a malformed
+  // signing key. None of those are AuthErrors, so unhandled they escape the
+  // middleware and crash the Edge Function.
+  //
+  // The cookie path can't hit this — `getClaims()` with no argument refreshes
+  // via `getSession()` first, so `exp` is always fresh. A Bearer token is held
+  // by the client with nothing to refresh from, so the native app presenting a
+  // stale one is routine, not exceptional. Treat any failure as "no
+  // authenticated user" and let the guards below answer 401/redirect.
+  const { data } = await supabase.auth
+    .getClaims(bearerToken ?? undefined)
+    .catch(() => ({ data: null }));
   const user = data?.claims;
   // Authoritative-at-the-edge role: `app_metadata.role` is set only by the
   // service role and cannot be self-edited by the client (unlike
