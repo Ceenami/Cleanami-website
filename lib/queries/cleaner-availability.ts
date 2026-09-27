@@ -1,7 +1,11 @@
 import "server-only";
 
 import { db } from "@/db";
-import { availability, cleaners } from "@/db/schemas";
+import {
+  availability,
+  cleanerAvailabilitySubmissions,
+  cleaners,
+} from "@/db/schemas";
 import {
   formatDayLabel,
   getAvailabilityWindow,
@@ -190,31 +194,58 @@ export async function saveCleanerAvailability(
   const { period } = getAvailabilityWindow();
   const now = new Date();
 
-  for (const day of days) {
-    await db
-      .delete(availability)
-      .where(
-        and(
-          eq(availability.cleanerId, cleanerId),
-          eq(availability.date, day.date)
-        )
-      );
+  // A submission is meaningful only when both its acknowledgement and its
+  // current day rows succeed. Keep these DB writes sequential in one
+  // transaction; the production transaction pooler cannot pipeline them.
+  await db.transaction(async (tx) => {
+    for (const day of days) {
+      await tx
+        .delete(availability)
+        .where(
+          and(
+            eq(availability.cleanerId, cleanerId),
+            eq(availability.date, day.date)
+          )
+        );
 
-    if (day.isAvailable) {
-      await db.insert(availability).values({
-        cleanerId,
-        date: day.date,
-        availabilityType: "vacation_rental",
-        startTime: DEFAULT_START,
-        endTime: DEFAULT_END,
-        onCallEligible: day.onCallEligible,
-        openPoolEligible: day.openPoolEligible ?? false,
-        isGracePeriod: false,
-        submissionStatus: "on_time",
-        submittedAt: now,
-      });
+      if (day.isAvailable) {
+        await tx.insert(availability).values({
+          cleanerId,
+          date: day.date,
+          availabilityType: "vacation_rental",
+          startTime: DEFAULT_START,
+          endTime: DEFAULT_END,
+          onCallEligible: day.onCallEligible,
+          openPoolEligible: day.openPoolEligible ?? false,
+          isGracePeriod: false,
+          submissionStatus: "on_time",
+          submittedAt: now,
+        });
+      }
     }
-  }
+
+    await tx
+      .insert(cleanerAvailabilitySubmissions)
+      .values({
+        cleanerId,
+        periodStart: period.start,
+        periodEnd: period.end,
+        submissionMode: "full",
+        firstSubmittedAt: now,
+        lastUpdatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          cleanerAvailabilitySubmissions.cleanerId,
+          cleanerAvailabilitySubmissions.periodStart,
+        ],
+        set: {
+          periodEnd: period.end,
+          submissionMode: "full",
+          lastUpdatedAt: now,
+        },
+      });
+  });
 
   return { period };
 }
@@ -258,6 +289,19 @@ export async function saveCleanerAvailabilityPreferences(
       );
   }
 
+  // Do not create a period acknowledgement from a preference-only edit: a
+  // legacy availability row cannot prove the cleaner submitted the full block.
+  // When an acknowledgement exists, this is the durable "last changed" time.
+  await db
+    .update(cleanerAvailabilitySubmissions)
+    .set({ lastUpdatedAt: new Date() })
+    .where(
+      and(
+        eq(cleanerAvailabilitySubmissions.cleanerId, cleanerId),
+        eq(cleanerAvailabilitySubmissions.periodStart, period.start)
+      )
+    );
+
   return { period };
 }
 
@@ -268,43 +312,65 @@ export async function saveCleanerLateOverrideAvailability(
 ): Promise<{ period: AvailabilityPeriod }> {
   const now = new Date();
 
-  for (const day of days) {
-    if (!period.dates.includes(day.date)) {
-      continue;
+  await db.transaction(async (tx) => {
+    for (const day of days) {
+      if (!period.dates.includes(day.date)) continue;
+
+      await tx
+        .delete(availability)
+        .where(
+          and(
+            eq(availability.cleanerId, cleanerId),
+            eq(availability.date, day.date)
+          )
+        );
+
+      if (day.isAvailable) {
+        await tx.insert(availability).values({
+          cleanerId,
+          date: day.date,
+          availabilityType: "vacation_rental",
+          startTime: DEFAULT_START,
+          endTime: DEFAULT_END,
+          onCallEligible: day.onCallEligible,
+          openPoolEligible: day.openPoolEligible ?? false,
+          isGracePeriod: true,
+          submissionStatus: "late_accepted",
+          submittedAt: now,
+        });
+      }
     }
 
-    await db
-      .delete(availability)
-      .where(
-        and(
-          eq(availability.cleanerId, cleanerId),
-          eq(availability.date, day.date)
-        )
-      );
-
-    if (day.isAvailable) {
-      await db.insert(availability).values({
+    await tx
+      .insert(cleanerAvailabilitySubmissions)
+      .values({
         cleanerId,
-        date: day.date,
-        availabilityType: "vacation_rental",
-        startTime: DEFAULT_START,
-        endTime: DEFAULT_END,
-        onCallEligible: day.onCallEligible,
-        openPoolEligible: day.openPoolEligible ?? false,
-        isGracePeriod: false,
-        submissionStatus: "on_time",
-        submittedAt: now,
+        periodStart: period.start,
+        periodEnd: period.end,
+        submissionMode: "override",
+        firstSubmittedAt: now,
+        lastUpdatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          cleanerAvailabilitySubmissions.cleanerId,
+          cleanerAvailabilitySubmissions.periodStart,
+        ],
+        set: {
+          periodEnd: period.end,
+          submissionMode: "override",
+          lastUpdatedAt: now,
+        },
       });
-    }
-  }
 
-  await db
-    .update(cleaners)
-    .set({
-      availabilityLateOverridePeriodStart: period.start,
-      updatedAt: new Date(),
-    })
-    .where(eq(cleaners.id, cleanerId));
+    await tx
+      .update(cleaners)
+      .set({
+        availabilityLateOverridePeriodStart: period.start,
+        updatedAt: now,
+      })
+      .where(eq(cleaners.id, cleanerId));
+  });
 
   return { period };
 }

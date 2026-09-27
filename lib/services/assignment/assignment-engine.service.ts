@@ -14,6 +14,7 @@ import { getAvailableCleanersForProperty } from "@/lib/queries/cleaners-proximit
 import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { sendCleanerAssignmentEmail } from "@/lib/services/email.service";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
+import { filterCandidatesBySubmittedAvailability } from "@/lib/services/assignment/submitted-availability";
 import { notifyAdmins } from "@/lib/queries/admin-notifications";
 import {
   PETS_CLEANER_NOTE,
@@ -298,10 +299,14 @@ export async function assignJob(job: {
       : null;
 
   const candidates = await buildCandidates(job.propertyId, residentialFilter);
+  const availabilityGate = await filterCandidatesBySubmittedAvailability(
+    candidates,
+    job.checkInTime
+  );
 
   // Filter to reliability-eligible candidates with no schedule clash.
   const eligible: Candidate[] = [];
-  for (const c of candidates) {
+  for (const c of availabilityGate.candidates) {
     if (c.score < RELIABILITY_MIN_ELIGIBLE) continue;
     if (
       await hasScheduleConflict({
@@ -325,6 +330,13 @@ export async function assignJob(job: {
         reason: residentialFilter.requirePetComfortable
           ? "no residential-qualified, pet-comfortable cleaner"
           : "no residential-qualified cleaner",
+      };
+    }
+    if (availabilityGate.filteredOut > 0 && availabilityGate.candidates.length === 0) {
+      return {
+        jobId: job.id,
+        status: "skipped",
+        reason: "no submitted cleaner marked available for that day",
       };
     }
     return { jobId: job.id, status: "skipped", reason: "no eligible cleaner" };
