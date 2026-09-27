@@ -8,6 +8,10 @@ import { and, eq } from "drizzle-orm";
 
 export type CleanerAuthResult = {
   cleanerId: string | null;
+  /** Internal public.users key. Never accept this from a client. */
+  userId: string | null;
+  /** Verified auth subject, used only by server-side admin operations. */
+  supabaseUserId: string | null;
   error: string | null;
 };
 
@@ -33,28 +37,28 @@ export async function getCleanerAuth(): Promise<CleanerAuthResult> {
   const claims = data?.claims;
 
   if (!claims?.sub) {
-    return { cleanerId: null, error: "Unauthorized" };
+    return { cleanerId: null, userId: null, supabaseUserId: null, error: "Unauthorized" };
   }
 
   const database = getDbOrNull();
   if (!database) {
-    return { cleanerId: null, error: SERVICE_UNAVAILABLE.database };
+    return { cleanerId: null, userId: null, supabaseUserId: null, error: SERVICE_UNAVAILABLE.database };
   }
 
   try {
     const dbUser = await database.query.users.findFirst({
       where: eq(users.supabaseUserId, claims.sub),
-      columns: { id: true, role: true },
+      columns: { id: true, role: true, supabaseUserId: true },
     });
 
     if (!dbUser) {
-      return { cleanerId: null, error: PROFILE_NOT_FOUND_MESSAGE };
+      return { cleanerId: null, userId: null, supabaseUserId: null, error: PROFILE_NOT_FOUND_MESSAGE };
     }
 
     // Authoritative role check against the DB, not the self-editable
     // `user_metadata.role` claim.
     if (dbUser.role !== "cleaner") {
-      return { cleanerId: null, error: "Forbidden" };
+      return { cleanerId: null, userId: null, supabaseUserId: null, error: "Forbidden" };
     }
 
     const cleaner = await database.query.cleaners.findFirst({
@@ -67,19 +71,24 @@ export async function getCleanerAuth(): Promise<CleanerAuthResult> {
     });
 
     if (!cleaner) {
-      return { cleanerId: null, error: PROFILE_NOT_FOUND_MESSAGE };
+      return { cleanerId: null, userId: null, supabaseUserId: null, error: PROFILE_NOT_FOUND_MESSAGE };
     }
 
     // New signups must come through an approved invitation. Legacy cleaners who
     // finished onboarding before invitation tracking may not have invitation_id.
     if (!cleaner.invitationId && !cleaner.onboardingCompleted) {
-      return { cleanerId: null, error: INVITATION_REQUIRED_MESSAGE };
+      return { cleanerId: null, userId: null, supabaseUserId: null, error: INVITATION_REQUIRED_MESSAGE };
     }
 
-    return { cleanerId: cleaner.id, error: null };
+    return {
+      cleanerId: cleaner.id,
+      userId: dbUser.id,
+      supabaseUserId: dbUser.supabaseUserId,
+      error: null,
+    };
   } catch (error) {
     console.error("[getCleanerAuth] database error", error);
-    return { cleanerId: null, error: SERVICE_UNAVAILABLE.database };
+    return { cleanerId: null, userId: null, supabaseUserId: null, error: SERVICE_UNAVAILABLE.database };
   }
 }
 

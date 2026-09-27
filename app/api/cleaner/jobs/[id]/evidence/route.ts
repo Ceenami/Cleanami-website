@@ -25,6 +25,7 @@ import {
   toStoragePath,
 } from "@/lib/storage/signed-url";
 import { and, eq } from "drizzle-orm";
+import { captureAndCreatePayouts } from "@/lib/services/payment/capture-and-payout.service";
 
 type PatchBody = {
   checklistLog: ChecklistLogPayload;
@@ -122,6 +123,16 @@ export async function PATCH(
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
 
+    if (
+      assignment.job.status !== "in-progress" &&
+      assignment.job.status !== "completed_pending_evidence"
+    ) {
+      return NextResponse.json(
+        { error: "Evidence has already been finalized for this job." },
+        { status: 409 }
+      );
+    }
+
     const requirements = getRoomPhotoRequirements(property);
     const roomPhotos = checklistLog.roomPhotos ?? {};
     const missingPhotos = getMissingPhotoRequirements(requirements, roomPhotos);
@@ -200,20 +211,55 @@ export async function PATCH(
     }
 
     await ensureEvidencePacket(jobId);
+    const packet = await db.query.evidencePackets.findFirst({
+      where: eq(evidencePackets.jobId, jobId),
+      columns: { finalEvidenceSubmittedAt: true },
+    });
 
-    await db
-      .update(evidencePackets)
-      .set({
-        photoUrls,
-        checklistLog,
-        cleanerNotes: cleanerNotes ?? null,
-        isChecklistComplete: true,
-        status: "pending_review",
-        updatedAt: new Date(),
-      })
-      .where(eq(evidencePackets.jobId, jobId));
+    // Final submission is immutable. A response retry after the server already
+    // accepted it must not rewrite the audit timestamp or submit another payout.
+    if (packet?.finalEvidenceSubmittedAt) {
+      return NextResponse.json({ success: true, alreadySubmitted: true });
+    }
 
-    return NextResponse.json({ success: true });
+    const now = new Date();
+    const departed = assignment.job.status === "completed_pending_evidence";
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(evidencePackets)
+        .set({
+          photoUrls,
+          checklistLog,
+          cleanerNotes: cleanerNotes ?? null,
+          isChecklistComplete: true,
+          status: departed ? "complete" : "pending_review",
+          ...(departed ? { finalEvidenceSubmittedAt: now } : {}),
+          updatedAt: now,
+        })
+        .where(eq(evidencePackets.jobId, jobId));
+
+      if (departed) {
+        await tx
+          .update(jobs)
+          .set({ status: "awaiting_capture", updatedAt: now })
+          .where(eq(jobs.id, jobId));
+      }
+    });
+
+    // Capture never runs in the mobile process. A transient Stripe failure
+    // leaves the job in awaiting_capture for the authenticated server cron;
+    // evidence remains final and no client-held shared key is needed.
+    if (departed) {
+      const capture = await captureAndCreatePayouts(jobId);
+      return NextResponse.json({
+        success: true,
+        finalEvidenceSubmittedAt: now.toISOString(),
+        capturePending: !capture.ok,
+      });
+    }
+
+    return NextResponse.json({ success: true, pendingPhysicalCheckout: true });
   } catch (err) {
     console.error("[PATCH /api/cleaner/jobs/[id]/evidence]", err);
     return NextResponse.json(
