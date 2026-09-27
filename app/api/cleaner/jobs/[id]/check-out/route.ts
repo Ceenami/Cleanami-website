@@ -7,7 +7,6 @@ import {
   getCleanerAuth,
   requireCleanerJobAssignment,
 } from "@/lib/cleaner-auth";
-import { validateEvidenceComplete } from "@/lib/cleaner/evidence";
 import { getCleanerJobDetail } from "@/lib/queries/cleaner-job-detail";
 import {
   evaluateGeofence,
@@ -101,27 +100,6 @@ export async function POST(
       );
     }
 
-    if (!evidence) {
-      return NextResponse.json(
-        {
-          error: "Evidence packet incomplete",
-          missing: ["Evidence packet not started"],
-        },
-        { status: 400 }
-      );
-    }
-
-    const validation = validateEvidenceComplete(evidence, property);
-    if (!validation.valid) {
-      return NextResponse.json(
-        {
-          error: "Evidence packet incomplete",
-          missing: validation.missing,
-        },
-        { status: 400 }
-      );
-    }
-
     const now = new Date();
 
     // Optional device location at check-out (record & flag, never block).
@@ -147,29 +125,35 @@ export async function POST(
       await tx
         .update(jobs)
         .set({
-          status: "awaiting_capture",
+          // Physical departure is not final evidence submission. Keep payment
+          // blocked until PATCH /evidence validates the packet and moves this
+          // job to awaiting_capture.
+          status: "completed_pending_evidence",
           checkOutTime: now,
           updatedAt: now,
         })
         .where(eq(jobs.id, jobId));
 
-      await tx
-        .update(evidencePackets)
-        .set({
-          gpsCheckOutTimestamp: now,
-          status: "complete",
-          updatedAt: now,
-          checkOutLatitude: device ? device.latitude.toString() : null,
-          checkOutLongitude: device ? device.longitude.toString() : null,
-          checkOutAccuracyMeters:
-            device?.accuracy != null ? device.accuracy.toString() : null,
-          checkOutDistanceMiles:
-            geofence.distanceMiles != null
-              ? geofence.distanceMiles.toString()
-              : null,
-          checkOutWithinGeofence: geofence.withinGeofence,
-        })
-        .where(eq(evidencePackets.jobId, jobId));
+      if (evidence) {
+        await tx
+          .update(evidencePackets)
+          .set({
+            gpsCheckOutTimestamp: now,
+            // Evidence may be submitted later. Its status remains incomplete
+            // or pending_review until the final submission route validates it.
+            updatedAt: now,
+            checkOutLatitude: device ? device.latitude.toString() : null,
+            checkOutLongitude: device ? device.longitude.toString() : null,
+            checkOutAccuracyMeters:
+              device?.accuracy != null ? device.accuracy.toString() : null,
+            checkOutDistanceMiles:
+              geofence.distanceMiles != null
+                ? geofence.distanceMiles.toString()
+                : null,
+            checkOutWithinGeofence: geofence.withinGeofence,
+          })
+          .where(eq(evidencePackets.jobId, jobId));
+      }
     });
 
     if (device) {

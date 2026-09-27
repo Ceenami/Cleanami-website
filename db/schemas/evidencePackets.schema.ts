@@ -16,6 +16,12 @@ export const evidencePackets = pgTable('evidence_packets', {
   checklistLog: jsonb('checklist_log'), // Can store a log of items checked
   gpsCheckInTimestamp: timestamp('gps_check_in_timestamp', { withTimezone: true }),
   gpsCheckOutTimestamp: timestamp('gps_check_out_timestamp', { withTimezone: true }),
+  /**
+   * When the cleaner explicitly finalized the complete evidence packet. This is
+   * distinct from physical departure: a cleaner may leave first and upload
+   * photos/checklist later, but payment must wait for this timestamp.
+   */
+  finalEvidenceSubmittedAt: timestamp('final_evidence_submitted_at', { withTimezone: true }),
   // GPS accountability (captured from the cleaner's device at check-in/out).
   checkInLatitude: numeric('check_in_latitude', { precision: 10, scale: 8 }),
   checkInLongitude: numeric('check_in_longitude', { precision: 11, scale: 8 }),

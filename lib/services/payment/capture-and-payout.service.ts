@@ -98,6 +98,7 @@ export async function captureAndCreatePayouts(
     evidence.status === "complete" &&
     evidence.gpsCheckInTimestamp &&
     evidence.gpsCheckOutTimestamp &&
+    evidence.finalEvidenceSubmittedAt &&
     evidence.isChecklistComplete &&
     evidence.photoUrls &&
     evidence.photoUrls.length > 0;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { jobs } from "@/db/schemas";
+import { evidencePackets, jobs } from "@/db/schemas";
 import { createClient } from "@/lib/supabase/server";
 import {
   cleanerAuthErrorStatus,
@@ -52,11 +52,14 @@ export async function POST(
       columns: { status: true },
     });
 
-    if (job?.status !== "in-progress") {
+    if (
+      job?.status !== "in-progress" &&
+      job?.status !== "completed_pending_evidence"
+    ) {
       return NextResponse.json(
         {
           error:
-            "Evidence photos can only be uploaded while the job is in progress. Check in first.",
+            "Evidence photos can only be uploaded while evidence is still pending.",
         },
         { status: 409 }
       );
@@ -74,8 +77,9 @@ export async function POST(
       );
     }
 
+    let capturedAt: Date | null = null;
     if (capturedAtRaw) {
-      const capturedAt = new Date(capturedAtRaw);
+      capturedAt = new Date(capturedAtRaw);
       const ageMs = Date.now() - capturedAt.getTime();
       if (Number.isNaN(capturedAt.getTime()) || ageMs < 0) {
         return NextResponse.json(
@@ -83,12 +87,37 @@ export async function POST(
           { status: 400 }
         );
       }
-      if (ageMs > MAX_PHOTO_AGE_MS) {
+      if (job.status === "in-progress" && ageMs > MAX_PHOTO_AGE_MS) {
         return NextResponse.json(
           {
             error:
               "This photo is too old to use as evidence. Please retake it.",
           },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (job.status === "completed_pending_evidence") {
+      const packet = await db.query.evidencePackets.findFirst({
+        where: eq(evidencePackets.jobId, jobId),
+        columns: {
+          gpsCheckInTimestamp: true,
+          gpsCheckOutTimestamp: true,
+        },
+      });
+      if (!capturedAt || !packet?.gpsCheckInTimestamp || !packet.gpsCheckOutTimestamp) {
+        return NextResponse.json(
+          { error: "Later evidence uploads must include a verified capture time." },
+          { status: 400 }
+        );
+      }
+      if (
+        capturedAt.getTime() < packet.gpsCheckInTimestamp.getTime() ||
+        capturedAt.getTime() > packet.gpsCheckOutTimestamp.getTime()
+      ) {
+        return NextResponse.json(
+          { error: "Evidence photos must have been captured during the recorded job window." },
           { status: 400 }
         );
       }
