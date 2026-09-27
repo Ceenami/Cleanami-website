@@ -3,11 +3,12 @@
 import { JobListView } from "./JobListView";
 import { JobCalendarView } from "./JobCalendarView";
 import { SwapRequestsView } from "./SwapRequestsView";
+import { CleanerStaffingView } from "./CleanerStaffingView";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
-export function JobOversightPageClient() {
+export function JobOversightPageClient({ isAdmin = false }: { isAdmin?: boolean }) {
   const searchParams = useSearchParams();
   const view = searchParams.get('view') || 'list';
 
@@ -64,6 +65,18 @@ export function JobOversightPageClient() {
             </span>
           )}
         </Link>
+        {isAdmin && (
+          <Link
+            href="?view=staffing"
+            className={`whitespace-nowrap px-4 py-3 text-sm font-medium sm:px-6 ${
+              view === "staffing"
+                ? "border-b-2 border-teal-500 text-teal-600"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Cleaner Staffing
+          </Link>
+        )}
         </nav>
       </div>
       <div>
@@ -75,6 +88,7 @@ export function JobOversightPageClient() {
           </div>
         )}
         {view === 'swaps' && <SwapRequestsView />}
+        {isAdmin && view === 'staffing' && <CleanerStaffingView />}
       </div>
     </div>
   );

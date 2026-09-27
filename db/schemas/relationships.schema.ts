@@ -8,6 +8,7 @@ import { evidencePackets } from "./evidencePackets.schema";
 import { payouts } from "./payouts.schema";
 import { cleaners } from "./cleaners.schema";
 import { availability } from "./availability.schema";
+import { cleanerAvailabilitySubmissions } from "./availabilitySubmissions.schema";
 import { users } from "./users.schema";
 import { onboardingDocuments } from "./onboardingDocuments.schema";
 import { capabilityFlags } from "./capabilityFlags.schema";
@@ -104,6 +105,7 @@ export const jobRelations = relations(jobs, ({ one, many }) => ({
 
 export const cleanerRelations = relations(cleaners, ({ one, many }) => ({
   availabilities: many(availability),
+  availabilitySubmissions: many(cleanerAvailabilitySubmissions),
   payouts: many(payouts),
   jobs: many(jobsToCleaners),
   user: one(users, { fields: [cleaners.userId], references: [users.id] }),
@@ -138,6 +140,16 @@ export const availabilityRelations = relations(availability, ({ one }) => ({
     references: [cleaners.id],
   }),
 }));
+
+export const cleanerAvailabilitySubmissionRelations = relations(
+  cleanerAvailabilitySubmissions,
+  ({ one }) => ({
+    cleaner: one(cleaners, {
+      fields: [cleanerAvailabilitySubmissions.cleanerId],
+      references: [cleaners.id],
+    }),
+  })
+);
 
 export const evidencePacketRelations = relations(
   evidencePackets,

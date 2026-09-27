@@ -1,4 +1,5 @@
 export * from './availability.schema';
+export * from './availabilitySubmissions.schema';
 export * from './cleanerAuditLogs.schema';
 export * from './cleanerInvitations.schema';
 export * from './cleanerSignupAttempts.schema';
