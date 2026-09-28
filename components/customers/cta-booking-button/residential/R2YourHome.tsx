@@ -5,7 +5,10 @@ import type { ResidentialFormData } from "@/lib/validations/residential";
 import { AddressAutocomplete } from "../AddressAutoComplete";
 import { StepFeedback } from "../StepFeedback";
 import { PetsField } from "../PetsField";
-import { PETS_QUESTION_RESIDENTIAL } from "@/lib/constants/service-type";
+import {
+  PETS_QUESTION_RESIDENTIAL,
+  RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER,
+} from "@/lib/constants/service-type";
 
 interface Props {
   formData: ResidentialFormData;
@@ -43,9 +46,13 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
       <div>
         <h3 className="text-lg font-medium text-gray-900">Your home</h3>
         <p className="mt-1 text-sm text-gray-600">
-          These details set your price and how long the clean takes.
+          These details help us prepare the right clean and price.
         </p>
       </div>
+
+      <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        {RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER}
+      </p>
 
       <div>
         <label

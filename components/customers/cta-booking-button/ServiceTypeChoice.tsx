@@ -47,7 +47,7 @@ const CHOICES: Array<{
   {
     value: "residential_one_time",
     icon: Home,
-    blurb: "A single deep clean of your own home, on a date you choose.",
+    blurb: "A one-time clean of your home, on a date you choose.",
     bullets: [
       "One clean, one price, paid up front",
       "Pick your arrival window",

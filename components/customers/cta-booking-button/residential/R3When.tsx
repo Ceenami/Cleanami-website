@@ -205,9 +205,7 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
                       value={window.key}
                       checked={formData.arrivalWindow === window.key}
                       title={window.label}
-                      description={`Your cleaner arrives in this window and needs about ${expectedHours.toFixed(
-                        1
-                      )} hours.`}
+                      description="Your cleaner arrives in this window. We will take care of the rest."
                       onChange={() =>
                         setFormData((prev) => ({
                           ...prev,

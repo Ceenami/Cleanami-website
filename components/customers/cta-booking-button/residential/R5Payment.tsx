@@ -8,6 +8,7 @@ import { AlertTriangle, Lock } from "lucide-react";
 import { CheckoutForm } from "../CheckoutForm";
 import { getStripe } from "@/lib/stripe/client";
 import { isServiceUnavailableMessage } from "@/lib/env/messages";
+import { RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER } from "@/lib/constants/service-type";
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { serializeResidentialFormForServer } from "@/lib/validations/residential/serialize";
 
@@ -124,6 +125,10 @@ export const R5Payment = ({
           Your clean is paid for now and scheduled straight away.
         </p>
       </div>
+
+      <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        {RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER}
+      </p>
 
       {amountInCents !== null && !error && (
         <div className="flex items-baseline justify-between rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">

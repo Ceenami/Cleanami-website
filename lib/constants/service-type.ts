@@ -17,8 +17,16 @@ export type ServiceType = (typeof SERVICE_TYPES)[number];
 /** Client 2B item 5 names a third label, "Reclean/Correction"; it is not a service type. */
 export const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
   vacation_rental_subscription: "Vacation Rental Turnover",
-  residential_one_time: "One-Time Residential Clean",
+  residential_one_time: "One-Time House Clean",
 };
+
+/**
+ * Scope-response closeout copy. This is deliberately a disclosure, not a
+ * classifier: a customer can tell us their home needs unusually intensive work,
+ * but the booking flow must not invent a review queue or an automatic surcharge.
+ */
+export const RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER =
+  "Our online prices assume a home in typical condition. If your home needs unusually heavy cleaning, please contact us before booking so we can review it and provide a custom quote.";
 
 export const JOB_SOURCES = [
   "ical",
