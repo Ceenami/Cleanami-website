@@ -1,11 +1,11 @@
--- 0044 — add 'refunded' to payment_status.
+-- 0046 — add 'refunded' to payment_status.
 --
 -- NOT YET APPLIED TO PRODUCTION. Test project only; production migrations are
 -- applied by hand after review. Safe to re-run.
 --
 -- Its own file because Postgres will not let you use an enum value in the same
 -- transaction that adds it, so this cannot be bundled with anything that then
--- writes 'refunded'. Nothing in 0045 would break if this were folded into it —
+-- writes 'refunded'. Nothing in 0047 would break if this were folded into it —
 -- neither job_label nor notification_log references the value. It is split
 -- anyway, because bundling an ADD VALUE with the UPDATE that uses it is
 -- precisely the mistake, and the only defence that survives a careless later
@@ -50,4 +50,4 @@ ALTER TYPE "payment_status" ADD VALUE IF NOT EXISTS 'refunded';
 -- reason it gets its own reviewed file.
 --
 -- Apply with (hand this to a human, do not run it):
---   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0044_payment_status_refunded.sql
+--   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0046_payment_status_refunded.sql

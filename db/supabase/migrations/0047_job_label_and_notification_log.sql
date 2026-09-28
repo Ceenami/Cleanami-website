@@ -1,4 +1,4 @@
--- 0045 — jobs.job_label, and the notification send log.
+-- 0047 — jobs.job_label, and the notification send log.
 --
 -- NOT YET APPLIED TO PRODUCTION. Test project only; production migrations are
 -- applied by hand after review, never by an agent. Safe to re-run — every
@@ -7,7 +7,7 @@
 --
 -- WHY THESE TWO TOGETHER
 -- They are the two additive objects in this phase that nothing else depends
--- on. Neither references the enum value added in 0044, so this file has no
+-- on. Neither references the enum value added in 0046, so this file has no
 -- ordering hazard of its own; it is numbered after it only to keep the applied
 -- sequence readable.
 --
@@ -27,7 +27,7 @@
 -- Rendering rule, everywhere a service type is displayed: show the job_label's
 -- display text when set, otherwise the service_type's. The three customer-
 -- facing literals are the client's own wording — "Vacation Rental Turnover",
--- "One-Time Residential Clean", "Reclean/Correction" — and, as with 0041, the
+-- "One-Time House Clean", "Reclean/Correction" — and, as with 0041, the
 -- display labels live in the application and only the stored literals are here.
 --
 -- varchar + CHECK rather than a pgEnum, for the same reason as 0041's
@@ -154,4 +154,4 @@ COMMENT ON COLUMN "notification_log"."provider_message_id" IS
 --   SELECT relrowsecurity FROM pg_class WHERE relname='notification_log';  -- t
 --
 -- Apply with (hand this to a human, do not run it):
---   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0045_job_label_and_notification_log.sql
+--   psql "$PRODUCTION_DATABASE_URL" -f db/supabase/migrations/0047_job_label_and_notification_log.sql
