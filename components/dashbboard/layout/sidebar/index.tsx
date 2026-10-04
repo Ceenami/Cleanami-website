@@ -39,6 +39,7 @@ export const Sidebar = () => {
   const pathname = usePathname()
 
   const [isOpen, setIsOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
   const toggleSidebar = () => {
     setIsOpen(!isOpen);
   };
@@ -46,6 +47,13 @@ export const Sidebar = () => {
   // On phones the sidebar covers the page, so leaving it open after a tab is
   // tapped hides the page that just loaded — which reads as "the tabs don't
   // work". Close it whenever the route changes at overlay widths.
+  useEffect(() => {
+    const updateViewport = () => setIsDesktop(window.innerWidth >= MD_BREAKPOINT);
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (window.innerWidth < MD_BREAKPOINT) {
@@ -76,7 +84,7 @@ export const Sidebar = () => {
     }
   }, [isOpen]);
 
-  const sidebarPositionClass = isOpen ? "translate-x-0" : "-translate-x-full";
+  const sidebarPositionClass = isOpen || isDesktop ? "translate-x-0" : "-translate-x-full";
   const tabVisibilityClass = isOpen ? "hidden" : "block";
 
 
@@ -171,10 +179,10 @@ const triggerAssignmentEngine = async () => {
   return (
     <>
       <aside
-        className={`fixed inset-y-0 md:top-20 md:absolute left-0 w-64 bg-white shadow-lg flex flex-col transition-transform duration-300 ease-in-out z-50 md:h-full ${sidebarPositionClass}`}
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-gray-200 bg-white shadow-xl transition-transform duration-300 ease-in-out md:sticky md:top-0 md:h-screen md:w-64 md:shrink-0 md:shadow-none ${sidebarPositionClass}`}
         // A closed sidebar is only moved off-screen, so without this its links
         // stay in the tab order and reachable by screen readers.
-        inert={!isOpen}
+        inert={!isOpen && !isDesktop}
       >
         <div className="h-20 flex shrink-0 items-center justify-between border-b border-gray-200 px-4">
           <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">
@@ -300,7 +308,7 @@ const triggerAssignmentEngine = async () => {
 
       <button
         onClick={toggleSidebar}
-        className={`fixed top-8 left-0 p-3 bg-teal-500 text-white rounded-r-lg shadow-md hover:bg-teal-600 transition-colors z-40 ${tabVisibilityClass}`}
+        className={`fixed left-0 top-3 z-40 rounded-r-lg bg-teal-600 p-3 text-white shadow-md transition-colors hover:bg-teal-700 md:hidden ${tabVisibilityClass}`}
         aria-label="Open sidebar"
       >
         <Menu className="w-6 h-6" />

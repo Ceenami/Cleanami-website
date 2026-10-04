@@ -575,7 +575,33 @@ export const JobListView = () => {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+      <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
+        {status === "pending" ? (
+          <p className="p-6 text-center text-sm text-gray-500">Loading jobs...</p>
+        ) : error ? (
+          <p className="p-6 text-center text-sm text-red-500">Error loading jobs.</p>
+        ) : jobs.length === 0 ? (
+          <p className="p-6 text-center text-sm text-gray-500">No jobs found.</p>
+        ) : jobs.map((job) => (
+          <details key={job.id} className="group p-4">
+            <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-gray-900">{job.property?.address ?? "Unknown"}</p>
+                <p className="mt-1 text-sm text-gray-500">{job.checkInTime ? new Date(job.checkInTime).toLocaleString() : "N/A"}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>{job.status}</span>
+            </summary>
+            <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+              <p><span className="text-gray-500">Service: </span>{SERVICE_TYPE_SHORT[job.serviceType ?? "vacation_rental_subscription"]}</p>
+              <p><span className="text-gray-500">Cleaner: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}</p>
+              <p className="font-mono text-xs text-gray-500">{job.id}</p>
+              <Link href={`/admin/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">Details</Link>
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">

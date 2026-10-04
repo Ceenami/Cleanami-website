@@ -7,12 +7,17 @@ export default function Layout({
   children: React.ReactNode;
 }>) {
   return (
-    <div className="relative min-h-screen">
-      <Header />
+    <div className="flex min-h-screen bg-gray-50">
       <Sidebar />
-      <main id="slide-content" className="min-h-screen flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-4 md:p-8 transition-all duration-300">
-        {children}
-      </main>
+      <div className="min-w-0 flex-1 pt-16 md:pt-0">
+        <Header />
+        <main
+          id="slide-content"
+          className="min-h-[calc(100svh-4rem)] overflow-x-hidden bg-gray-50 px-4 py-6 sm:px-6 md:min-h-screen md:px-8 md:py-8"
+        >
+          <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+        </main>
+      </div>
     </div>
   );
 }

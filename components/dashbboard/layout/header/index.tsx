@@ -31,21 +31,24 @@ export const Header = () => {
   const activePage = usePathname();
 
   return (
-    <header className="w-full h-20 bg-white border-b border-gray-200 flex md:items-center justify-end md:justify-between px-0 md:px-8">
+    <header className="fixed inset-x-0 top-0 z-30 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4 md:static md:h-20 md:px-8">
       <div id="header-content-slide">
-        <h2 className="text-xl font-semibold text-gray-800 transition-all duration-300 hidden md:block">{prettifyPath(activePage)}</h2>
+        <h2 className="text-sm font-semibold text-gray-800 md:text-xl">
+          <span className="md:hidden">CleanNami Admin</span>
+          <span className="hidden md:block">{prettifyPath(activePage)}</span>
+        </h2>
       </div>
-      <div className="flex items-center space-x-6">
+      <div className="flex items-center gap-3 sm:gap-6">
         <AdminNotificationsBell />
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="flex items-center space-x-2 text-left p-1 rounded-md hover:bg-gray-100"
+            className="flex items-center gap-2 rounded-md p-1 text-left hover:bg-gray-100"
           >
             <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center text-white font-bold">
               {user?.email?.charAt(0) ?? 'U'}
             </div>
-            <div>
+            <div className="hidden sm:block">
               <span className="text-sm font-medium block">
                 {user?.email ?? ''}
               </span>

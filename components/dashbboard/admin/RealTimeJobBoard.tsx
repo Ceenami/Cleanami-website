@@ -198,7 +198,7 @@ export const RealTimeJobBoard = () => {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {stats && (
           <>
             <KpiCard
@@ -222,7 +222,32 @@ export const RealTimeJobBoard = () => {
         <h2 className="mb-4 text-2xl font-bold text-gray-800">
           {showOwnerView ? "Your clean schedule" : "Real-Time Job Board"}
         </h2>
-        <div className="overflow-hidden rounded-lg bg-white shadow-md">
+        <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
+          {status === "pending" ? (
+            <p className="p-6 text-center text-sm text-gray-500">Loading jobs…</p>
+          ) : status === "error" ? (
+            <p className="p-6 text-center text-sm text-red-500">{error.message}</p>
+          ) : uniqueJobs.length === 0 ? (
+            <p className="p-8 text-center text-sm text-gray-500">No jobs scheduled yet. Jobs appear here after your property calendar syncs.</p>
+          ) : uniqueJobs.map((job) => (
+            <details key={job.id} className="group p-4">
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-gray-900">{job.property?.address ?? "N/A"}</p>
+                  <p className="mt-1 text-sm text-gray-500">{job.checkInTime ? <ClientTime dateString={job.checkInTime} /> : "N/A"}</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status || "")}`}>{job.status}</span>
+              </summary>
+              <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+                <p><span className="text-gray-500">Cleaners: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((c: JobsWithDetails["data"][number]["assignedCleaners"][number]) => c.fullName).join(", ") : "Awaiting assignment"}</p>
+                {showOwnerView && <div className="grid gap-2"><CustomerJobPromoCodeField jobId={job.id} status={job.status} checkInTime={job.checkInTime ? String(job.checkInTime) : null} paymentIntentId={job.paymentIntentId ?? null} paymentStatus={job.paymentStatus ?? null} appliedPromoCode={job.appliedPromoCode ?? null} /><CustomerJobCancelButton jobId={job.id} status={job.status} checkInTime={job.checkInTime ? String(job.checkInTime) : null} /></div>}
+                <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">{job.evidencePacket?.photoCount ? `Details · ${job.evidencePacket.photoCount} photo${job.evidencePacket.photoCount === 1 ? "" : "s"}` : "Details"}</Link>
+              </div>
+            </details>
+          ))}
+        </div>
+
+        <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
