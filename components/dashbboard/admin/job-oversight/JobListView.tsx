@@ -294,6 +294,11 @@ interface JobRecord {
 /** the admin job list is filterable by service type. */
 type ServiceTypeFilter = ServiceType | "all";
 
+const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
+  vacation_rental_subscription: "Vacation Rental",
+  residential_one_time: "Residential",
+};
+
 /**
  * Which end of the customer's history the list is showing.
  *
