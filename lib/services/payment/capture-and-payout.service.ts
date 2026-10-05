@@ -20,12 +20,7 @@ import { reconcileEvidenceAccountability } from "@/lib/services/gps/reconcile-ev
 import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
 import { appendJobNote } from "@/lib/jobs/job-notes";
 
-/**
- * Roles that actually worked the job and are paid. Shadow backups (and unaccepted
- * on-call) are NOT paid unless they were promoted in, at which point their role
- * is changed to `primary`. Without this, a backup left on the job was paid full
- * pay for not working.
- */
+/** Roles eligible for payout. */
 const PAID_ROLES = new Set(["primary", "laundry_lead"]);
 
 export type CaptureOutcome = {
@@ -51,14 +46,7 @@ async function emailCompletion(
   }
 }
 
-/**
- * Capture a completed job's payment (or mark a prepaid job captured), record the
- * 2% reserve, create cleaner payouts, and finalize the job as `completed`.
- *
- * Idempotent: a job already `captured` is a no-op, and payout inserts are
- * conflict-safe on `(jobId, cleanerId)`. Shared by the cleaner-app capture route
- * and the stranded-capture cron so no code path is left un-captured.
- */
+/** Settle a completed job and create cleaner payouts. */
 export async function captureAndCreatePayouts(
   jobId: string
 ): Promise<CaptureOutcome> {
@@ -66,14 +54,7 @@ export async function captureAndCreatePayouts(
     where: eq(jobs.id, jobId),
     with: {
       subscription: { with: { customer: true } },
-      // The completion email used to be addressed from
-      // `job.subscription.customer` alone, and `emailCompletion` early-returns
-      // on a falsy address — silently. Every subscription-less job (residential
-      // one-time, and the customer portal's one-off) therefore charged the card
-      // and never told the customer their clean was finished.
-      //
-      // `properties.customer_id` is NOT NULL, so this path always resolves.
-      // A residential job reaches its customer through its property.
+      // Subscription-less jobs resolve the customer through the property.
       property: { with: { customer: true } },
     },
   });
@@ -120,18 +101,7 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // Idempotency: never re-capture or re-create payouts for a job this function
-  // has already finished. This guards BOTH the prepaid and Stripe branches (2.2).
-  //
-  // `paymentStatus` alone is NOT sufficient evidence of that. The first clean of
-  // a subscription is charged in full at booking, and onboarding writes
-  // `paymentStatus: "captured"` at that moment (complete-onboarding.service.ts
-  // :462) — long before a cleaner ever touches the job. Keying off it alone made
-  // every first clean return here the moment the cleaner finished, leaving the
-  // job at `awaiting_capture` with no payout row ever written. `status` only
-  // becomes `completed` at the end of this function, so pairing the two is what
-  // actually means "already settled". The status is written only after the
-  // payout rows, so a crash cannot leave a completed job with missing pay.
+  // A completed, captured job has already been settled.
   if (job.status === "completed" && job.paymentStatus === "captured") {
     return {
       ok: true,
@@ -140,45 +110,20 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // Derive arrival lateness server-side rather than trusting the value the
-  // cleaner app wrote, which feeds the late-pay deduction below. Pure date math
-  // — no I/O, so it always resolves; fall back to the stored value only when
-  // there is no timestamp to compute from. See reconcileEvidenceAccountability
-  // for the fuller (best-effort) recompute of the geofence flags + admin alert.
+  // Derive late arrival from server-side timestamps.
   const serverArrival = evidence.gpsCheckInTimestamp
     ? evaluateArrival(job.checkInTime, evidence.gpsCheckInTimestamp)
     : null;
   const arrivalDelayMinutes =
     serverArrival?.delayMinutes ?? evidence.arrivalDelayMinutes;
 
-  // Overwrite the stored accountability fields with server-derived values and
-  // flag out-of-geofence / late check-ins for admin review. Best-effort: this
-  // never throws and never blocks capture.
+  // Update accountability fields without blocking settlement.
   await reconcileEvidenceAccountability({ job, evidence });
 
-  // ====================================================================
-  // CASE 1: NOTHING TO CAPTURE — prepaid, or billing skipped for this customer
-  // ====================================================================
-  // The skip-billing sentinel is a truthy string, so testing `job.paymentIntentId`
-  // for truthiness alone sent these jobs down the Stripe branch, where the capture
-  // call failed against a non-existent intent. The job then stuck at
-  // `capture_failed` and — the real damage — no payout row was ever written, so
-  // the cleaner was never paid for work they had fully evidenced.
+  // Prepaid jobs and skipped billing need no Stripe capture.
   const billingSkipped = isSkippedPaymentIntent(job.paymentIntentId);
 
-  // Which settlement this job needs is decided by the intent's own status at
-  // Stripe, never inferred from local columns. Capture is legal ONLY from
-  // `requires_capture`; calling it in any other state errors out, so we ask
-  // first rather than calling and catching.
-  // https://docs.stripe.com/api/payment_intents/capture
-  //
-  // This is the point the first-clean bug turned on. That intent is created with
-  // automatic capture (create-payment-intent.service.ts:299) and is therefore
-  // already `succeeded` — money collected, nothing left to capture. It cannot
-  // use manual capture instead, because a card authorization expires after ~7
-  // days and the booking schema forces the first clean at least 7 days out. So
-  // it is genuinely prepaid while still carrying a real intent id, and the old
-  // `!job.paymentIntentId` test sent it to CASE 2, where capture failed.
+  // Stripe decides whether the intent still needs capture.
   let alreadyCharged: Stripe.PaymentIntent | null = null;
 
   if (job.paymentIntentId && !billingSkipped) {
@@ -217,12 +162,10 @@ export async function captureAndCreatePayouts(
     }
 
     if (intent.status === "succeeded") {
-      // Charged up front. Skip the capture call, keep everything downstream.
+      // Charged up front; continue with reserve and payouts.
       alreadyCharged = intent;
     } else if (intent.status === "processing") {
-      // Asynchronous settlement still in flight. Leave the job at
-      // `awaiting_capture` and do NOT mark it failed — the stranded-capture
-      // cron re-runs this function and will find a terminal status next time.
+      // Leave asynchronous settlement for the retry cron.
       return {
         ok: false,
         httpStatus: 409,
@@ -234,9 +177,7 @@ export async function captureAndCreatePayouts(
         },
       };
     } else if (intent.status !== "requires_capture") {
-      // requires_payment_method / requires_confirmation / requires_action /
-      // canceled — the customer never completed payment. Capture would throw a
-      // generic 500; fail loudly with the actual reason instead.
+      // The customer did not complete payment.
       await db
         .update(jobs)
         .set({
@@ -272,11 +213,7 @@ export async function captureAndCreatePayouts(
           billingSkipped
             ? "[System] Billing skipped for this customer – no charge, marked as captured."
             : job.jobSource === "manual"
-              ? // A hand-created job was never sold, so it was never prepaid
-                // either. It reaches this branch for the same reason — nothing
-                // to capture — but writing "prepaid during onboarding" onto it
-                // would put a false sentence in the one record anyone reads
-                // when asking why a clean was not charged.
+              ? // Manually created jobs were never charged.
                 "[System] Manual job – no charge was due. Marked as captured so the cleaner is paid."
               : "[System] Prepaid during onboarding – marked as captured."
         ),
@@ -319,12 +256,7 @@ export async function captureAndCreatePayouts(
       PAID_ROLES.has(a.role)
     );
 
-    // This was `Promise.all` over the payout inserts — a pipelined batch inside
-    // the function that pays contractors. It survived
-    // because a team size of 1 pipelines nothing; a large residential home
-    // staffs TWO, which is exactly the shape that hangs forever against the
-    // transaction pooler, and only in a production build. One insert at a
-    // time. See `sequentialQueries` in db/index.ts.
+    // Insert sequentially; the production pooler cannot pipeline DB writes.
     for (const assignment of workingCleaners) {
       const pay = computeCleanerPay({
         expectedHours,
@@ -348,7 +280,7 @@ export async function captureAndCreatePayouts(
             : null,
           status: "pending",
         })
-        // Never duplicate a payout for the same (job, cleaner) (2.2).
+        // A cleaner can be paid once per job.
         .onConflictDoNothing({
           target: [payouts.jobId, payouts.cleanerId],
         });
@@ -360,9 +292,7 @@ export async function captureAndCreatePayouts(
       .where(eq(jobs.id, jobId));
 
     await emailCompletion(
-      // A subscription-less job resolves its customer through the
-      // property. `??` and not `||`, so the property's customer is only
-      // consulted when there is genuinely no subscription customer.
+      // Subscription-less jobs resolve through the property.
       job.subscription?.customer?.email ?? job.property?.customer?.email,
       job.subscription?.customer?.name ?? job.property?.customer?.name,
       job.property?.address
@@ -385,14 +315,7 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // ====================================================================
-  // CASE 2: MONEY WAS COLLECTED — capture it now, or it was taken at booking
-  // ====================================================================
-  // Both paths converge here on purpose. A job charged up front still collected
-  // real revenue, so it must record the 2% reserve and create payouts exactly
-  // like a captured one; the only difference is that there is nothing to call
-  // capture on. Routing it to CASE 1 instead would have paid the cleaner but
-  // silently omitted the reserve ledger row for that revenue.
+  // Captured and pre-authorized payments share the reserve and payout path.
   const stripe = getStripe();
   if (!stripe) {
     return { ok: false, httpStatus: 503, body: { error: SERVICE_UNAVAILABLE } };
@@ -400,8 +323,7 @@ export async function captureAndCreatePayouts(
 
   let paymentIntent: Stripe.PaymentIntent;
   try {
-    // Deterministic idempotency key: a retried capture for the same job never
-    // double-captures the customer (2.2).
+    // A retry for this job must not capture twice.
     paymentIntent =
       alreadyCharged ??
       (await stripe.paymentIntents.capture(
@@ -418,8 +340,7 @@ export async function captureAndCreatePayouts(
       .update(jobs)
       .set({
         paymentStatus: "capture_failed",
-        // Appended, not assigned: this used to overwrite the notes wholesale,
-        // discarding reconciliation history and seed tags on the way past.
+        // Preserve prior reconciliation notes.
         notes: appendJobNote(job.notes, `[System] Capture failed: ${message}`),
         updatedAt: new Date(),
       })
@@ -432,23 +353,14 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // What was actually collected, not what was requested. Identical to `amount`
-  // for a full capture, but it is the truthful figure for an intent that was
-  // charged at booking, and it keeps the reserve math honest either way.
+  // Base reserve calculations on the amount collected.
   const capturedAmount = paymentIntent.amount_received || paymentIntent.amount;
-  // Reserve is normally 2%, auto-escalating to 5% when the 30-day dispute rate
-  // exceeds 0.5%.
+  // Reserve rate accounts for recent dispute risk.
   const reserveRate = await computeReserveRate();
   const reserveAmount = Math.round(capturedAmount * reserveRate);
   const netAmount = capturedAmount - reserveAmount;
 
-  // The Stripe capture above is idempotent, but everything after it must be too:
-  // a crash between the capture and the job update leaves the money taken and
-  // the job still marked uncaptured, so the next run repeats this block.
-  //
-  // The ledger insert is conflict-safe because a retry after Stripe succeeds is
-  // expected. Job completion waits until payout rows are in place below; that
-  // ordering lets a retry repair an interrupted payout write.
+  // Ledger writes are safe to repeat after a partial failure.
   await db.transaction(async (tx) => {
     await tx
       .insert(reserveTransactions)
@@ -499,12 +411,7 @@ export async function captureAndCreatePayouts(
     PAID_ROLES.has(a.role)
   );
 
-  // This was `Promise.all` over the payout inserts — a pipelined batch inside
-  // the function that pays contractors. It survived
-  // because a team size of 1 pipelines nothing; a large residential home
-  // staffs TWO, which is exactly the shape that hangs forever against the
-  // transaction pooler, and only in a production build. One insert at a
-  // time. See `sequentialQueries` in db/index.ts.
+  // Insert sequentially; the production pooler cannot pipeline DB writes.
   for (const assignment of workingCleaners) {
     const pay = computeCleanerPay({
       expectedHours,
@@ -528,7 +435,7 @@ export async function captureAndCreatePayouts(
           : null,
         status: "pending",
       })
-      // Never duplicate a payout for the same (job, cleaner) (2.2).
+      // A cleaner can be paid once per job.
       .onConflictDoNothing({
         target: [payouts.jobId, payouts.cleanerId],
       });
@@ -544,9 +451,7 @@ export async function captureAndCreatePayouts(
     .where(eq(jobs.id, jobId));
 
   await emailCompletion(
-    // A subscription-less job resolves its customer through the
-    // property. `??` and not `||`, so the property's customer is only
-    // consulted when there is genuinely no subscription customer.
+    // Subscription-less jobs resolve through the property.
     job.subscription?.customer?.email ?? job.property?.customer?.email,
     job.subscription?.customer?.name ?? job.property?.customer?.name,
     job.property?.address

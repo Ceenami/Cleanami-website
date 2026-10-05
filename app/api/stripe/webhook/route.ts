@@ -32,18 +32,7 @@ async function appendJobNoteByPaymentIntent(
     .where(eq(jobs.id, job.id));
 }
 
-/**
- * Record that a charge came back, on the job the PaymentIntent paid for.
- *
- * This is what makes a refund issued from the STRIPE DASHBOARD visible to the
- * application at all — an admin cancel writes the status itself, but a refund
- * taken directly in Stripe has no other way in, and today leaves the job saying
- * it was paid.
- *
- * Deliberately narrow: it only ever moves a job TO 'refunded' after the whole
- * charge has been returned. Stripe emits refund events for partial refunds as
- * well, and calling those a full refund would make the payment record lie.
- */
+/** Mark a job refunded only after Stripe reports the full charge returned. */
 async function markRefundedByPaymentIntent(
   paymentIntentId: string | null,
   amountRefunded: number,

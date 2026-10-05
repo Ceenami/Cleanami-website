@@ -49,18 +49,7 @@ import {
 } from "@/lib/scheduling/residential-notice";
 import type { PriceDetails } from "@/lib/validations/bookng-modal";
 
-/**
- * Residential one-time booking.
- *
- * Ordering follows one-off.service.ts: everything that can fail runs before the
- * charge, so there is exactly one write after money moves.
- *
- * One money path only. Under 48 hours is refused outright — no hold, no
- * approval queue, nothing to expire.
- *
- * entryInstructions holds door and gate codes. It goes to the properties row
- * and nowhere else — never Stripe metadata, jobs.notes or addonsSnapshot.
- */
+/** Residential one-time booking and payment flow. */
 
 const pricingService = new PricingService();
 
@@ -97,23 +86,14 @@ export type ResidentialRefusal = {
   fieldErrors?: Record<string, string[] | undefined>;
 };
 
-/**
- * Everything that decides whether this booking may be sold. No Stripe call, no
- * writes. Kept separate from createResidentialPaymentIntent so the refusal
- * paths can be tested without going through Stripe.
- */
+/** Validate and price a booking without creating a payment or writing data. */
 export async function evaluateResidentialBooking(
   input: ResidentialFormData,
   now: Date = new Date()
 ): Promise<ResidentialQuote | ResidentialRefusal> {
   const form = normalizeResidentialFormData(input);
 
-  // Domain rules before shape. The schema refines on both of these too, but zod
-  // collapses a refinement into a generic parse error and we need the reason
-  // code plus the earliest bookable date to offer the customer.
-  //
-  // Guarded on the inputs being usable so a half-filled form still gets proper
-  // field errors from the parse below instead of an answer computed from zeroes.
+  // Check booking rules before schema validation so the UI gets a useful refusal.
   const hasSizing =
     Number.isFinite(form.bedrooms) &&
     (form.bedrooms ?? 0) > 0 &&
@@ -131,8 +111,7 @@ export async function evaluateResidentialBooking(
       hotTubDeepClean: false,
     }).expectedHoursPerCleaner;
 
-    // Re-checked server-side: the form only hides windows that don't fit, and a
-    // hidden control isn't an enforced one.
+    // Enforce window availability on the server.
     if (!windowFitsOperatingDay(preWindow, preHours)) {
       return {
         ok: false,
@@ -141,9 +120,7 @@ export async function evaluateResidentialBooking(
       };
     }
 
-    // 48 hours, Eastern, measured from the START of the arrival window — not
-    // midnight of the chosen date, and not the browser clock. Runs before any
-    // PaymentIntent exists, so a refused booking leaves no record at all.
+    // Notice is measured from the arrival window in Eastern time.
     if (!meetsResidentialNotice(form.cleanDate, form.arrivalWindow, now)) {
       return {
         ok: false,
@@ -154,8 +131,7 @@ export async function evaluateResidentialBooking(
     }
   }
 
-  // Shape, including the same two rules again as refinements, so a direct API
-  // post that skipped the wizard can't get through.
+  // Validate the submitted shape and schema refinements.
   const parsed = residentialFormSchema.safeParse(form);
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors as Record<
@@ -188,9 +164,7 @@ export async function evaluateResidentialBooking(
     };
   }
 
-  // These return null rather than an Invalid Date. `Invalid Date < earliest` is
-  // false, so a malformed time would sail past a buffer check and only be
-  // rejected by Postgres after the card was charged.
+  // Reject malformed date or time values before payment.
   const arrival = getArrivalInstant(data.cleanDate, data.arrivalWindow);
   const deadline = getDeadlineInstant(
     data.cleanDate,
@@ -210,26 +184,21 @@ export async function evaluateResidentialBooking(
     };
   }
 
-  // Priced from the server's own inputs. There is no field for a client-sent
-  // amount, and this is the only number the intent is created from.
+  // Price from server-side inputs only.
   const pricingInput = buildResidentialPricingInput({
     bedCount: data.bedrooms,
     bathCount: data.bathrooms,
     sqFt: data.sqft,
     petsAllowed: data.petsAllowed,
   });
-  // calculatePrice is typed against the vacation-rental form, where laundryLoads
-  // is `number | undefined`; we pass an explicit null. The engine reads both as
-  // zero loads, so the cast covers a type difference, not a behaviour one.
+  // The shared pricing engine accepts the rental form shape.
   const priceDetails = await pricingService.calculatePrice(
     pricingInput as unknown as Parameters<
       typeof pricingService.calculatePrice
     >[0]
   );
 
-  // Covers isCustomQuote, pricingUnavailable, and the staffing case where a home
-  // prices fine but the table declines to give it a team size. Call it rather
-  // than re-implementing the checks.
+  // Keep quote refusal rules in one place.
   const refusal = residentialQuoteRefusal(priceDetails, {
     bedCount: data.bedrooms,
     bathCount: data.bathrooms,
@@ -301,14 +270,7 @@ async function resolveStripeCustomer(
   });
 }
 
-/**
- * Create the PaymentIntent for a residential booking, or refuse.
- *
- * Automatic capture — the customer is at checkout, so there is a moment to
- * charge at. Subscriptions authorize the night before via the pre-authorize
- * cron; residential never reaches it, because that cron inner-joins
- * subscriptions and a residential job has none.
- */
+/** Create a PaymentIntent for a valid residential booking. */
 export async function createResidentialPaymentIntent(input: {
   formData: ResidentialFormData;
   /** The onboarding session token, which is what makes the charge idempotent. */
@@ -330,8 +292,7 @@ export async function createResidentialPaymentIntent(input: {
 > {
   const now = input.now ?? new Date();
 
-  // Every refusal runs before any Stripe object exists, so a refused booking
-  // leaves nothing behind: no customer, no property, no PaymentIntent.
+  // Validate before creating any Stripe records.
   const quote = await evaluateResidentialBooking(input.formData, now);
   if (!quote.ok) return quote;
 
@@ -351,10 +312,7 @@ export async function createResidentialPaymentIntent(input: {
 
   const { form, priceDetails, amountCents } = quote;
 
-  // Re-checked against the geocoder; the client-sent isAddressInServiceArea flag
-  // can say anything. Same branches as create-payment-intent.service.ts,
-  // including the fail-open on `unavailable`: an outage on our side shouldn't
-  // block every booking. That hole is deliberate, which is why it logs at error.
+  // Verify the address on the server.
   if (form.address) {
     const geocode = await geocodeAddressResult(form.address);
 
@@ -406,15 +364,7 @@ export async function createResidentialPaymentIntent(input: {
     stripeCustomerId
   );
 
-  // The promo code, resolved HERE and nowhere else. The wizard previews a code
-  // for the customer's benefit, but the preview decides nothing: this is the
-  // only place a discount can change what Stripe is asked for.
-  //
-  // Fails LOUD, the same way the portal one-off does. The customer typed a code
-  // moments ago and is about to pay; silently charging them full price because
-  // the code turned out to be expired is the wrong answer. (The recurring
-  // pre-authorize cron makes the opposite choice, correctly — nobody is
-  // watching it, and a stale code must not block a real charge.)
+  // Resolve promotional pricing before payment.
   let chargeAmountCents = amountCents;
   let appliedPromo:
     | { promoCodeId: string; code: string; discountCents: number }
@@ -458,13 +408,7 @@ export async function createResidentialPaymentIntent(input: {
     };
   }
 
-  // Written with the secret key so completion can verify against it — otherwise
-  // a succeeded PaymentIntent id could be replayed with attacker-chosen form
-  // data.
-  //
-  // No entry_method, entry_instructions or parking_instructions here, and they
-  // must stay out. None of it affects the price, so there's nothing to verify
-  // and everything to leak.
+  // Keep immutable booking details in Stripe metadata; never include access data.
   const metadata: Stripe.MetadataParam = {
     type: "residential_one_time",
     service_type: "residential_one_time",
@@ -476,8 +420,7 @@ export async function createResidentialPaymentIntent(input: {
     clean_date: form.cleanDate ?? "",
     arrival_window: form.arrivalWindow ?? "",
     price_before_discounts_cents: String(amountCents),
-    // Written with the secret key, so completion can verify the charge against
-    // it rather than against anything the browser sends back.
+    // Used to verify the final amount during completion.
     promo_code: appliedPromo?.code ?? "",
     promo_code_id: appliedPromo?.promoCodeId ?? "",
     promo_discount_cents: String(appliedPromo?.discountCents ?? 0),
@@ -493,10 +436,7 @@ export async function createResidentialPaymentIntent(input: {
         automatic_payment_methods: { enabled: true },
         metadata,
       },
-      // No customer or property row exists yet, so there is nothing for the
-      // one-off path's key to reference. The session token plus the date is the
-      // stable equivalent. Omitted with no session: a constant key would
-      // collapse different customers' bookings onto one charge.
+      // Use the onboarding session when available to make retries safe.
       input.sessionToken
         ? {
             idempotencyKey: `res_${input.sessionToken}_${form.cleanDate}_${chargeAmountCents}`,
@@ -505,9 +445,7 @@ export async function createResidentialPaymentIntent(input: {
     );
   } catch (error) {
     console.error("[residential-booking] PaymentIntent create failed", error);
-    // `rawType`, not `code`: the SDK wraps the API's idempotency_error in a
-    // StripeIdempotencyError whose `code` is undefined, so checking `code`
-    // never matched. Verified against the live test API.
+    // Stripe reports idempotency failures through rawType.
     const stripeError = error as { rawType?: string; type?: string } | null;
     if (
       stripeError?.rawType === "idempotency_error" ||
@@ -565,11 +503,7 @@ function formatUsd(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-/**
- * Coordinates in the shape the property columns want. Runs after the card is
- * charged, so it returns null rather than throwing — a geocode problem must not
- * fail a paid booking.
- */
+/** Return property coordinates when geocoding succeeds. */
 async function geocodeForProperty(
   address: string
 ): Promise<{ latitude: string; longitude: string } | null> {
@@ -586,35 +520,12 @@ async function geocodeForProperty(
   };
 }
 
-/**
- * Finalise a paid residential booking: verify the PaymentIntent really belongs
- * to this booking, then write the customer, the property and the job.
- *
- * The verification block is not optional: without it, someone else's succeeded
- * PaymentIntent id could be replayed to mint a property bound to attacker-chosen
- * form data. Email, address and amount are all compared against metadata we
- * wrote with the secret key, and the amount against a fresh server re-price.
- *
- * Unlike the one-off path, we cannot put the fallible work before the charge —
- * the Payment Element already confirmed it by the time the browser calls us. So
- * instead:
- *
- * - everything fallible that doesn't write runs before the first write;
- * - the three writes are one transaction, so we never leave a property with no
- *   job or a job with no property;
- * - if that transaction fails, voidCharge() refunds. A phantom charge is visible
- *   in Stripe; a phantom unpaid job would be assigned and paid out as prepaid.
- *
- * The job keeps its payment_intent_id because capture-and-payout returns early
- * for a job without one, before the reserve_transactions insert — so a job with
- * no intent id accrues no 2% reserve at all.
- */
+/** Verify a paid booking and create its customer, property, and job. */
 export async function completeResidentialBooking(
   formData: ResidentialFormData,
   paymentIntentId: string
 ): Promise<CompleteResidentialResult> {
-  // Set only once every tamper check has passed. Tells the catch block whether
-  // an unexpected failure is ours to refund.
+  // Refund only after the intent has been verified for this booking.
   let paymentVerified = false;
   let verifiedDb: ReturnType<typeof getDbOrNull> = null;
 
@@ -649,10 +560,7 @@ export async function completeResidentialBooking(
       };
     }
 
-    // Verify the values that define the home and appointment before treating a
-    // succeeded intent as ours to refund. Completion re-runs the current quote
-    // below, but that can legitimately change after checkout (for example when
-    // the 48-hour boundary passes); metadata is the immutable checkout record.
+    // Match the submitted booking to immutable checkout metadata.
     const submitted = normalizeResidentialFormData(formData);
     const expectedPropertyDetails = `${submitted.bedrooms} bed, ${submitted.bathrooms} bath, ${submitted.sqft ?? "N/A"} sqft`;
     if (
@@ -674,17 +582,14 @@ export async function completeResidentialBooking(
       };
     }
 
-    // From here on the intent is verified as this booking. Any later failure is
-    // ours to compensate rather than leaving a paid customer without a clean.
+    // A verified payment is refunded if finalization fails.
     paymentVerified = true;
 
     verifiedDb = getDbOrNull();
     if (!verifiedDb) throw new Error(SERVICE_UNAVAILABLE.database);
     const db = verifiedDb;
 
-    // Do this before re-evaluating the live booking rules. A replay can arrive
-    // after the 48-hour boundary or a price change; it must return the booking
-    // already created for this PaymentIntent, never refund a valid clean.
+    // Return an existing booking before evaluating current rules.
     const replayed = await db.query.jobs.findFirst({
       where: eq(jobs.paymentIntentId, paymentIntentId),
       columns: { id: true, propertyId: true },
@@ -708,8 +613,7 @@ export async function completeResidentialBooking(
       };
     }
 
-    // Re-run the current quote before writing. If an operational rule or price
-    // changed after checkout, the catch below refunds the verified charge.
+    // Re-check current booking rules before writing.
     const quote = await evaluateResidentialBooking(formData);
     if (!quote.ok) throw new Error(quote.error);
 
@@ -742,10 +646,7 @@ export async function completeResidentialBooking(
       };
     }
 
-    // The server re-price wins, minus whatever discount the intent itself
-    // records. Both halves come from trusted sources — the re-price from this
-    // process, the discount from metadata written with the secret key — so a
-    // browser cannot widen a discount by editing what it posts back.
+    // Compare the current server quote with the amount charged.
     const metadataDiscountCents = Number(
       paymentIntent.metadata?.promo_discount_cents ?? 0
     );
@@ -771,23 +672,13 @@ export async function completeResidentialBooking(
 
     const coordinates = await geocodeForProperty(form.address!);
 
-    // Easy to get backwards: default_check_out_time is the arrival anchor (the
-    // column the early-check-in gate reads) and default_check_in_time is the
-    // must-finish-before. On a rental those names mean guest check-out and
-    // check-in; on a home they are the same two roles under different words, and
-    // each surface picks its wording from service_type.
+    // Residential uses these existing fields for its arrival and finish times.
     const windowStartTime = minutesToTimeOfDay(quote.window.startMinutes);
     const mustFinishBeforeTime = minutesToTimeOfDay(
       mustFinishBeforeMinutes(quote.window, quote.expectedHours)
     );
 
-    // Staffed before the first write, so a failure here has no half-written
-    // booking to undo.
-    //
-    // buildJobStaffingUpdate wants a subscriptionStart and there is no
-    // subscription. The arrival instant is safe to pass: it only reaches
-    // isHotTubDeepCleanDue, and only when hotTubServiceLevel is true, which
-    // residential never sets.
+    // Build staffing before opening the transaction.
     const hotTubTimeAdditions = await loadHotTubTimeAdditions();
     const staffing = buildJobStaffingUpdate({
       property: {
@@ -806,16 +697,11 @@ export async function completeResidentialBooking(
 
     const addonsSnapshot = {
       ...staffing.addonsSnapshot,
-      // Display only. The real bounds are check_in_time and check_out_time;
-      // this is so a cleaner surface can say "arrive between 9:00 and 11:00"
-      // instead of inferring a window from the two timestamps.
+      // Kept for display; timestamps remain the source of truth.
       arrivalWindow: quote.window.key,
     };
 
-    // The snapshot is read by the native app and travels across surfaces that
-    // have no business holding a door code. buildJobStaffingUpdate spreads
-    // existingSnapshot, so a future caller could put one here by accident — one
-    // loop turns a silent credential leak into a refund.
+    // Access details must not enter the job snapshot.
     for (const forbidden of [
       "entryMethod",
       "entryInstructions",
@@ -856,8 +742,7 @@ export async function completeResidentialBooking(
         sqFt: form.sqft,
         bedCount: form.bedrooms,
         bathCount: String(form.bathrooms),
-        // Fixed, not asked. Residential offers neither, and laundry_type
-        // 'none' is what makes getTeamSize return the in-unit column.
+        // Residential does not include laundry or hot-tub work.
         laundryType: "none",
         laundryLoads: null,
         hasHotTub: false,
@@ -868,15 +753,11 @@ export async function completeResidentialBooking(
         iCalUrl: null,
         serviceType: "residential_one_time",
         petsAllowed: form.petsAllowed ?? false,
-        // This row is the ONLY place the codes live.
+        // Access details live only on the property.
         entryMethod: form.entryMethod ?? null,
         entryInstructions: form.entryInstructions ?? null,
         parkingInstructions: form.parkingInstructions ?? null,
-        // The residential form has always collected this and, until M7, always
-        // discarded it — the customer typed a note about their home and it
-        // reached nobody. It is not a credential (see the column comment), so
-        // it renders to the cleaner beside the access details rather than
-        // inside them.
+        // Customer instructions are not access credentials.
         specialInstructions: form.specialNotes ?? null,
         defaultCheckOutTime: windowStartTime,
         defaultCheckInTime: mustFinishBeforeTime,
@@ -895,9 +776,7 @@ export async function completeResidentialBooking(
 
       if (!property) throw new Error("properties insert returned no rows");
 
-      // No subscription: the job reaches its customer through the property. The
-      // synthetic UID can't collide with a feed UID, so cancellation detection
-      // never sees it and can't delete the job.
+      // Synthetic UID keeps this job out of calendar cancellation detection.
       const [job] = await tx
         .insert(jobs)
         .values({
@@ -913,36 +792,23 @@ export async function completeResidentialBooking(
           addonsSnapshot,
           paymentIntentId,
           paymentStatus: "captured",
-          // The audit trail for the discount, on the row the money is attached
-          // to. A discount with no record of which code caused it is
-          // unreconcilable.
+          // Keep the promo reference with the paid job.
           promoCodeId,
-          // No access data here — jobs.notes renders on more surfaces than the
-          // job detail view.
           notes: `[System] Residential one-time clean, prepaid. PaymentIntent ${paymentIntentId}.`,
         })
         .returning({ id: jobs.id });
 
-      // Otherwise this surfaces as "cannot read properties of undefined"
-      // further down, after the money moved.
       if (!job) throw new Error("jobs insert returned no rows");
 
       return { customer, property, job };
     });
 
-    // How the customer sees the clean they just paid for.
     const accountResult = await inviteCustomerToPortalAfterPayment({
       email: form.email!,
       name: form.name!,
     });
 
-    // In-app only. The email flag is for time-sensitive alerts and this isn't
-    // one: the clean is at least 48h out, the job is already visible in
-    // job-oversight, and the assignment engine will try to staff it before
-    // anyone needs to act. The engine *failing* is what escalates by email.
-    //
-    // booking_alert needs migration 0042, but notifyAdmins swallows its own
-    // errors, so an unapplied 0042 costs the bell and not the booking.
+    // Admin alert is best-effort.
     try {
       await notifyAdmins({
         type: "booking_alert",
@@ -955,11 +821,7 @@ export async function completeResidentialBooking(
       console.error("[residential-booking] admin notification failed:", err);
     }
 
-    // Burns the customer's single redemption of this code. Best-effort and
-    // deliberately after the job exists: the clean is paid for and scheduled by
-    // now, so a bookkeeping failure must not undo it. It is logged loudly
-    // because a discount that leaves no redemption row is worse than no
-    // discount at all — it cannot be reconciled.
+    // Record promo redemption after the booking exists.
     if (promoCodeId && promoCode) {
       try {
         await recordPromoRedemption({
@@ -982,9 +844,7 @@ export async function completeResidentialBooking(
       }
     }
 
-    // Last, and best-effort: the clean is booked and paid for by now, and Resend
-    // being down must not turn that into a refund. Carries the access reminder —
-    // the method, never the code — and the cancellation/refund wording.
+    // Confirmation email is best-effort.
     try {
       await sendResidentialBookingConfirmationEmail({
         to: form.email!,
@@ -1021,9 +881,7 @@ export async function completeResidentialBooking(
       }
     );
 
-    // A concurrent completion can lose the partial unique-index race after the
-    // other request has already created the job. Read that winner back instead
-    // of refunding the payment that funds it.
+    // A concurrent completion may have created the job first.
     if (paymentVerified && verifiedDb && isUniqueViolation(error)) {
       try {
         const replayed = await verifiedDb.query.jobs.findFirst({
@@ -1051,17 +909,10 @@ export async function completeResidentialBooking(
       }
     }
 
-    // Payment verified, so this is our failure: the card was charged for a
-    // booking that doesn't exist, and we refund rather than strand it.
-    //
-    // The tamper checks above return rather than throw, so they never land here.
-    // A mismatched email or amount must not auto-refund a PaymentIntent that may
-    // not belong to the submitter at all.
+    // Refund a verified payment when finalization fails.
     if (paymentVerified) {
       await voidCharge({
         paymentIntentId,
-        // Confirmed by the Payment Element with automatic capture, so it is
-        // already succeeded. There is no job row to read a status from.
         paymentStatus: "captured",
         context: "residential booking",
       });
