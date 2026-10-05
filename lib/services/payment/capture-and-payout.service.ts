@@ -130,8 +130,8 @@ export async function captureAndCreatePayouts(
   // every first clean return here the moment the cleaner finished, leaving the
   // job at `awaiting_capture` with no payout row ever written. `status` only
   // becomes `completed` at the end of this function, so pairing the two is what
-  // actually means "already settled". The payout insert is conflict-safe on
-  // (jobId, cleanerId), so a second pass can never double-pay.
+  // actually means "already settled". The status is written only after the
+  // payout rows, so a crash cannot leave a completed job with missing pay.
   if (job.status === "completed" && job.paymentStatus === "captured") {
     return {
       ok: true,
@@ -265,7 +265,6 @@ export async function captureAndCreatePayouts(
     await db
       .update(jobs)
       .set({
-        status: "completed",
         paymentStatus: "captured",
         paymentFailed: false,
         notes: appendJobNote(
@@ -297,6 +296,10 @@ export async function captureAndCreatePayouts(
         : "prepaid";
 
     if (assignedCleaners.length === 0) {
+      await db
+        .update(jobs)
+        .set({ status: "completed", updatedAt: new Date() })
+        .where(eq(jobs.id, jobId));
       console.warn(`No cleaners assigned to non-charging job ${jobId}`);
       return {
         ok: true,
@@ -350,6 +353,11 @@ export async function captureAndCreatePayouts(
           target: [payouts.jobId, payouts.cleanerId],
         });
     }
+
+    await db
+      .update(jobs)
+      .set({ status: "completed", updatedAt: new Date() })
+      .where(eq(jobs.id, jobId));
 
     await emailCompletion(
       // A subscription-less job resolves its customer through the
@@ -438,9 +446,9 @@ export async function captureAndCreatePayouts(
   // a crash between the capture and the job update leaves the money taken and
   // the job still marked uncaptured, so the next run repeats this block.
   //
-  // Both writes go in one transaction, and the ledger insert no-ops if a row
-  // for this job already exists (unique on job_id). Without that, a retry
-  // inserted a second reserve row and double-counted the 2% hold.
+  // The ledger insert is conflict-safe because a retry after Stripe succeeds is
+  // expected. Job completion waits until payout rows are in place below; that
+  // ordering lets a retry repair an interrupted payout write.
   await db.transaction(async (tx) => {
     await tx
       .insert(reserveTransactions)
@@ -453,14 +461,6 @@ export async function captureAndCreatePayouts(
       })
       .onConflictDoNothing({ target: reserveTransactions.jobId });
 
-    await tx
-      .update(jobs)
-      .set({
-        status: "completed",
-        paymentStatus: "captured",
-        updatedAt: new Date(),
-      })
-      .where(eq(jobs.id, jobId));
   });
 
   const assignedCleaners = await db.query.jobsToCleaners.findMany({
@@ -469,6 +469,14 @@ export async function captureAndCreatePayouts(
   });
 
   if (assignedCleaners.length === 0) {
+    await db
+      .update(jobs)
+      .set({
+        status: "completed",
+        paymentStatus: "captured",
+        updatedAt: new Date(),
+      })
+      .where(eq(jobs.id, jobId));
     console.warn(`No cleaners assigned to job ${jobId}`);
     return {
       ok: true,
@@ -525,6 +533,15 @@ export async function captureAndCreatePayouts(
         target: [payouts.jobId, payouts.cleanerId],
       });
   }
+
+  await db
+    .update(jobs)
+    .set({
+      status: "completed",
+      paymentStatus: "captured",
+      updatedAt: new Date(),
+    })
+    .where(eq(jobs.id, jobId));
 
   await emailCompletion(
     // A subscription-less job resolves its customer through the

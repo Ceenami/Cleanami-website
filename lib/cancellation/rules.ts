@@ -65,7 +65,7 @@ export function canCancelSubscription(subscription: SubscriptionForCancel): {
 }
 
 export function canCancelJob(
-  subscription: SubscriptionForCancel,
+  subscription: SubscriptionForCancel | null,
   job: JobForCancel,
   assignments: { role: string }[]
 ): { allowed: boolean; late: boolean; reason: string | null } {
@@ -91,7 +91,13 @@ export function canCancelJob(
 
   const late = isLateCancellation(job.checkInTime, assignments);
 
-  if (!isWithinFirstMonth(subscription) && hoursUntilCheckIn(job.checkInTime) < CANCEL_NOTICE_HOURS && !late) {
+  // A standalone one-time clean has no subscription and therefore no first
+  // month exception. It follows the normal 24-hour notice rule.
+  if (
+    (!subscription || !isWithinFirstMonth(subscription)) &&
+    hoursUntilCheckIn(job.checkInTime) < CANCEL_NOTICE_HOURS &&
+    !late
+  ) {
     return {
       allowed: false,
       late: false,

@@ -40,14 +40,16 @@ async function appendJobNoteByPaymentIntent(
  * taken directly in Stripe has no other way in, and today leaves the job saying
  * it was paid.
  *
- * Deliberately narrow: it only ever moves a job TO 'refunded', and only when it
- * is not already there. It never contradicts a status the application set for
- * itself, and re-delivery of the same event is a no-op.
+ * Deliberately narrow: it only ever moves a job TO 'refunded' after the whole
+ * charge has been returned. Stripe emits refund events for partial refunds as
+ * well, and calling those a full refund would make the payment record lie.
  */
 async function markRefundedByPaymentIntent(
-  paymentIntentId: string | null
+  paymentIntentId: string | null,
+  amountRefunded: number,
+  chargeAmount: number
 ): Promise<void> {
-  if (!paymentIntentId) return;
+  if (!paymentIntentId || amountRefunded < chargeAmount) return;
   const job = await db.query.jobs.findFirst({
     where: eq(jobs.paymentIntentId, paymentIntentId),
     columns: { id: true, paymentStatus: true },
@@ -163,18 +165,22 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         typeof charge.payment_intent === "string"
           ? charge.payment_intent
           : null;
+      const isFullyRefunded = charge.amount_refunded >= charge.amount;
       await appendJobNoteByPaymentIntent(
         pi,
-        `[Stripe] Charge refunded: ${charge.amount_refunded} cents (${new Date().toISOString()})`
+        `[Stripe] Charge ${isFullyRefunded ? "fully refunded" : "partially refunded"}: ${charge.amount_refunded} of ${charge.amount} cents (${new Date().toISOString()})`
       );
-      await markRefundedByPaymentIntent(pi);
+      await markRefundedByPaymentIntent(
+        pi,
+        charge.amount_refunded,
+        charge.amount
+      );
       break;
     }
 
-    // Stripe's current guidance is that `refund.created` is the minimum to
-    // listen for; `charge.refunded` is still sent and still correct, so both are
-    // handled and the second one to arrive is a no-op. (`charge.refund.updated`
-    // is deprecated in favour of `refund.updated`; this repo uses neither.)
+    // Keep the individual refund in the audit trail. `charge.refunded` carries
+    // the aggregate charge amount, which is what tells a partial refund from a
+    // full one and therefore owns the payment-status transition.
     case "refund.created": {
       const refund = event.data.object as Stripe.Refund;
       const pi =
@@ -185,7 +191,6 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         pi,
         `[Stripe] Refund created: ${refund.amount} cents (${new Date().toISOString()})`
       );
-      await markRefundedByPaymentIntent(pi);
       break;
     }
 

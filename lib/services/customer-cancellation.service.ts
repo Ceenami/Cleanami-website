@@ -204,7 +204,7 @@ export async function cancelJobForCustomer(
   customerId: string
 ): Promise<CancelJobResult> {
   const job = await loadJobContext(jobId);
-  if (!job?.property || !job.subscription) {
+  if (!job?.property) {
     throw new Error("Job not found");
   }
 
@@ -221,7 +221,8 @@ export async function cancelJobForCustomer(
     job,
     eligibility.late,
     "customer",
-    job.subscription.durationMonths
+    // One-time jobs do not have a subscription discount to preserve.
+    job.subscription?.durationMonths ?? 1
   );
 }
 

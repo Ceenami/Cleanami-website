@@ -10,6 +10,7 @@ import Stripe from "stripe";
 
 import { getDbOrNull } from "@/db";
 import { customers, jobs, properties } from "@/db/schemas";
+import { isUniqueViolation } from "@/lib/db/errors";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { geocodeAddressResult } from "@/lib/services/google-maps/geocoding";
@@ -615,20 +616,11 @@ export async function completeResidentialBooking(
   // Set only once every tamper check has passed. Tells the catch block whether
   // an unexpected failure is ours to refund.
   let paymentVerified = false;
+  let verifiedDb: ReturnType<typeof getDbOrNull> = null;
 
   try {
     const stripe = getStripe();
     if (!stripe) return { success: false, error: SERVICE_UNAVAILABLE.stripe };
-
-    const db = getDbOrNull();
-    if (!db) return { success: false, error: SERVICE_UNAVAILABLE.database };
-
-    // Re-runs every refusal, so a booking cannot be completed against a form
-    // that would be refused if submitted fresh.
-    const quote = await evaluateResidentialBooking(formData);
-    if (!quote.ok) return { success: false, error: quote.error };
-
-    const { form, amountCents } = quote;
 
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
@@ -656,6 +648,72 @@ export async function completeResidentialBooking(
           "Critical: could not find a Stripe Customer ID associated with this payment.",
       };
     }
+
+    // Verify the values that define the home and appointment before treating a
+    // succeeded intent as ours to refund. Completion re-runs the current quote
+    // below, but that can legitimately change after checkout (for example when
+    // the 48-hour boundary passes); metadata is the immutable checkout record.
+    const submitted = normalizeResidentialFormData(formData);
+    const expectedPropertyDetails = `${submitted.bedrooms} bed, ${submitted.bathrooms} bath, ${submitted.sqft ?? "N/A"} sqft`;
+    if (
+      paymentIntent.metadata?.type !== "residential_one_time" ||
+      paymentIntent.metadata?.customer_email?.toLowerCase() !==
+        (submitted.email ?? "").toLowerCase() ||
+      paymentIntent.metadata?.property_address?.trim().toLowerCase() !==
+        (submitted.address ?? "").trim().toLowerCase() ||
+      paymentIntent.metadata?.clean_date !== submitted.cleanDate ||
+      paymentIntent.metadata?.arrival_window !== submitted.arrivalWindow ||
+      paymentIntent.metadata?.pets_allowed !==
+        (submitted.petsAllowed ? "yes" : "no") ||
+      paymentIntent.metadata?.property_details !== expectedPropertyDetails
+    ) {
+      return {
+        success: false,
+        error:
+          "This payment does not match the submitted booking. Please contact support.",
+      };
+    }
+
+    // From here on the intent is verified as this booking. Any later failure is
+    // ours to compensate rather than leaving a paid customer without a clean.
+    paymentVerified = true;
+
+    verifiedDb = getDbOrNull();
+    if (!verifiedDb) throw new Error(SERVICE_UNAVAILABLE.database);
+    const db = verifiedDb;
+
+    // Do this before re-evaluating the live booking rules. A replay can arrive
+    // after the 48-hour boundary or a price change; it must return the booking
+    // already created for this PaymentIntent, never refund a valid clean.
+    const replayed = await db.query.jobs.findFirst({
+      where: eq(jobs.paymentIntentId, paymentIntentId),
+      columns: { id: true, propertyId: true },
+      with: { property: { columns: { customerId: true } } },
+    });
+
+    if (replayed?.propertyId && replayed.property?.customerId) {
+      const invite = await inviteCustomerToPortalAfterPayment({
+        email: submitted.email!,
+        name: submitted.name ?? "",
+      });
+      return {
+        success: true,
+        data: {
+          customer: { id: replayed.property.customerId },
+          property: { id: replayed.propertyId },
+          job: { id: replayed.id },
+          portalInviteEmailSent: invite.success ? invite.emailSent : false,
+          alreadyCompleted: true,
+        },
+      };
+    }
+
+    // Re-run the current quote before writing. If an operational rule or price
+    // changed after checkout, the catch below refunds the verified charge.
+    const quote = await evaluateResidentialBooking(formData);
+    if (!quote.ok) throw new Error(quote.error);
+
+    const { form, amountCents } = quote;
 
     const piEmail =
       typeof paymentIntent.metadata?.customer_email === "string"
@@ -708,36 +766,6 @@ export async function completeResidentialBooking(
         success: false,
         error:
           "The payment amount does not match the expected price for this booking. Please contact support.",
-      };
-    }
-
-    // From here on a failure is ours, and the catch block refunds.
-    paymentVerified = true;
-
-    // Replay guard keyed on the PaymentIntent. Not on (customer, address): a
-    // repeat customer booking a second clean at the same home is not a replay,
-    // and matching the address there would take their money and hand back the
-    // first booking's ids without creating the job they paid for.
-    const replayed = await db.query.jobs.findFirst({
-      where: eq(jobs.paymentIntentId, paymentIntentId),
-      columns: { id: true, propertyId: true },
-      with: { property: { columns: { customerId: true } } },
-    });
-
-    if (replayed?.propertyId && replayed.property?.customerId) {
-      const invite = await inviteCustomerToPortalAfterPayment({
-        email: form.email!,
-        name: form.name ?? "",
-      });
-      return {
-        success: true,
-        data: {
-          customer: { id: replayed.property.customerId },
-          property: { id: replayed.propertyId },
-          job: { id: replayed.id },
-          portalInviteEmailSent: invite.success ? invite.emailSent : false,
-          alreadyCompleted: true,
-        },
       };
     }
 
@@ -992,6 +1020,36 @@ export async function completeResidentialBooking(
         error: error instanceof Error ? error.message : String(error),
       }
     );
+
+    // A concurrent completion can lose the partial unique-index race after the
+    // other request has already created the job. Read that winner back instead
+    // of refunding the payment that funds it.
+    if (paymentVerified && verifiedDb && isUniqueViolation(error)) {
+      try {
+        const replayed = await verifiedDb.query.jobs.findFirst({
+          where: eq(jobs.paymentIntentId, paymentIntentId),
+          columns: { id: true, propertyId: true },
+          with: { property: { columns: { customerId: true } } },
+        });
+        if (replayed?.propertyId && replayed.property?.customerId) {
+          return {
+            success: true,
+            data: {
+              customer: { id: replayed.property.customerId },
+              property: { id: replayed.propertyId },
+              job: { id: replayed.id },
+              portalInviteEmailSent: false,
+              alreadyCompleted: true,
+            },
+          };
+        }
+      } catch (replayLookupError) {
+        console.error(
+          "[residential-booking] could not read concurrent completion",
+          replayLookupError
+        );
+      }
+    }
 
     // Payment verified, so this is our failure: the card was charged for a
     // booking that doesn't exist, and we refund rather than strand it.

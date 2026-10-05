@@ -1,4 +1,5 @@
 import { pgTable, uuid, timestamp, text, pgEnum, boolean, uniqueIndex, primaryKey, index, numeric, jsonb, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { subscriptions } from "./subscriptions.schema";
 import { properties } from "./properties.schema";
 import { cleaners } from "./cleaners.schema";
@@ -96,6 +97,11 @@ export const jobs = pgTable('jobs', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
    uniqueIndex("calendar_event_uid_idx").on(table.calendarEventUid),
+   // A real Stripe PaymentIntent may fund exactly one job. Skipped-billing
+   // sentinels are intentionally shared, so the partial index excludes them.
+   uniqueIndex("jobs_real_payment_intent_idx")
+     .on(table.paymentIntentId)
+     .where(sql`${table.paymentIntentId} like 'pi\\_%'`),
    index("jobs_status_idx").on(table.status),
    index("jobs_service_type_idx").on(table.serviceType),
 ]);

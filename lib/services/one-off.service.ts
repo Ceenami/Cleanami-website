@@ -25,7 +25,7 @@ import {
 } from "@/lib/services/promo-code.service";
 import { fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 const EASTERN_TZ = "America/New_York";
@@ -183,8 +183,9 @@ export async function previewOneOffPromoCode(
  *  - charged up front on the saved card (prepaid), like the first clean.
  *  - the job is created with no subscription and a synthetic calendar UID, and
  *    flows through assignment → evidence → the prepaid payout path so the
- *    cleaner is paid on completion. Money is collected here, so the job carries
- *    no paymentIntentId (prepaid), mirroring the onboarding first clean.
+ *    cleaner is paid on completion. The PaymentIntent stays on the job even
+ *    though it was captured here: completion uses it to record the reserve and
+ *    cancellation uses it to issue a refund when one is due.
  */
 export async function bookOneOffClean(
   customerId: string,
@@ -433,6 +434,26 @@ export async function bookOneOffClean(
     };
   }
 
+  // A lost response after a successful booking must not turn the customer's
+  // retry into a second job for the same property and arrival. This check also
+  // makes Stripe's stable idempotency key useful at the application layer.
+  const existingBooking = await db.query.jobs.findFirst({
+    where: and(
+      eq(jobs.propertyId, property.id),
+      eq(jobs.checkInTime, arrival),
+      eq(jobs.jobSource, "customer_one_off"),
+      ne(jobs.status, "canceled")
+    ),
+    columns: { id: true },
+  });
+  if (existingBooking) {
+    return {
+      success: true,
+      jobId: existingBooking.id,
+      amountCents,
+    };
+  }
+
   // Null on the skip-payment path: no money moved, so there is no intent to
   // record. The job then carries no paymentIntentId, which is exactly what
   // capture-and-payout treats as prepaid — the cleaner is still paid.
@@ -510,6 +531,55 @@ export async function bookOneOffClean(
   }
   }
 
+  // The process may have charged and then failed to save the job. That path
+  // refunds the PaymentIntent. Stripe's idempotency key would return that same
+  // intent on a retry, so never attach a refunded charge to a newly created
+  // job. The customer needs a fresh checkout once the refund is visible.
+  if (paymentIntentId) {
+    try {
+      const refunds = await stripe!.refunds.list({
+        payment_intent: paymentIntentId,
+        limit: 1,
+      });
+      if (refunds.data.some((refund) => refund.status !== "failed")) {
+        return {
+          success: false,
+          error:
+            "Your earlier payment is being refunded, so this clean was not booked. Please try again after the refund is confirmed, or contact CleanNami.",
+        };
+      }
+    } catch (err) {
+      console.error("[bookOneOffClean] refund-state lookup failed", err);
+      return {
+        success: false,
+        unexpected: true,
+        error:
+          "We could not verify the earlier payment. Nothing new has been booked — please try again shortly or contact CleanNami.",
+      };
+    }
+  }
+
+  // Check again after Stripe responds. A concurrent retry can have saved the
+  // job while this request was creating or replaying the same PaymentIntent.
+  const savedBooking = await db.query.jobs.findFirst({
+    where: and(
+      eq(jobs.propertyId, property.id),
+      eq(jobs.checkInTime, arrival),
+      eq(jobs.jobSource, "customer_one_off"),
+      ne(jobs.status, "canceled")
+    ),
+    columns: { id: true },
+  });
+  if (savedBooking) {
+    return {
+      success: true,
+      jobId: savedBooking.id,
+      amountCents: chargeAmountCents,
+      promoCode: appliedPromo?.code,
+      promoDiscountCents: appliedPromo?.discountCents,
+    };
+  }
+
   // The single write after the money moved. If it fails the customer has paid
   // for nothing, so the charge is refunded rather than left stranded — a
   // phantom charge is visible in Stripe and reconcilable, which is why this
@@ -551,6 +621,11 @@ export async function bookOneOffClean(
         // Preserve the feedback integration's immutable issued checklist while
         // adding the residential arrival-window pricing snapshot.
         checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
+        // This charge is already captured, but it must remain linked to the job.
+        // Without that link the completion path treats a paid clean as a
+        // no-charge job, skips the reserve ledger, and cannot refund it later.
+        paymentIntentId,
+        paymentStatus: skipPayment ? null : "captured",
         promoCodeId: appliedPromo?.promoCodeId ?? null,
         notes: skipPayment
           ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`
