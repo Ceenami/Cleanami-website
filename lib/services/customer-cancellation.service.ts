@@ -75,10 +75,7 @@ async function createCleanerPayouts(
   const hours = parseFloat(expectedHours || "0");
   const basePay = hours * CLEANER_HOURLY_RATE;
 
-  // One insert at a time — see `sequentialQueries` in db/index.ts. Concurrent
-  // statements can be pipelined onto a single pooler connection, where all but
-  // the first are dropped without an error; here that would hang the
-  // cancellation with some cleaners silently unpaid.
+  // Insert sequentially; the production pooler cannot pipeline DB writes.
   for (const assignment of payTargets) {
     let total = basePay;
     let urgentBonus: string | null = null;
@@ -102,8 +99,7 @@ async function voidCustomerCharge(job: {
   paymentIntentId: string | null;
   paymentStatus: string | null;
 }) {
-  // Shared with the one-off booking path's compensating refund — see
-  // `lib/services/payment/void-charge.ts` for why there is only one copy.
+  // Shared refund helper for cancellation and booking recovery.
   await voidCharge({
     paymentIntentId: job.paymentIntentId,
     paymentStatus: job.paymentStatus,
@@ -147,9 +143,7 @@ async function chargeCustomerForLateCancel(
     return true;
   }
 
-  // The sentinel is normally unreachable here (the skipPayment guard above
-  // returns first), but it survives on the job after skip_payment is turned off,
-  // and handing it to Stripe would throw mid-cancellation.
+  // A skip-payment sentinel is not a Stripe PaymentIntent.
   if (
     job.paymentStatus === "authorized" &&
     job.paymentIntentId &&
@@ -170,8 +164,7 @@ async function chargeCustomerForLateCancel(
   const priceDetails = await pricingService.calculatePrice(
     buildRecurringPricingInput(
       property,
-      // Apply the same subscription-term discount the customer agreed to, so
-      // a late-cancel charge is not more than a normal clean would have cost.
+      // Apply the customer's subscription term to the late-cancel quote.
       subscriptionMonths
     ) as never
   );
@@ -204,7 +197,7 @@ export async function cancelJobForCustomer(
   customerId: string
 ): Promise<CancelJobResult> {
   const job = await loadJobContext(jobId);
-  if (!job?.property || !job.subscription) {
+  if (!job?.property) {
     throw new Error("Job not found");
   }
 
@@ -221,20 +214,15 @@ export async function cancelJobForCustomer(
     job,
     eligibility.late,
     "customer",
-    job.subscription.durationMonths
+    // One-time jobs do not have a subscription discount to preserve.
+    job.subscription?.durationMonths ?? 1
   );
 }
 
 export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> {
   const job = await loadJobContext(jobId);
 
-  // The subscription is optional here, and that is the whole point of the
-  // change (M4). This used to require one, so a residential one-time job — and
-  // the customer portal's one-off, which has never had a subscription either —
-  // failed with "Job not found" and an admin had **no way at all** to cancel or
-  // refund a clean the customer had already paid for in full. Under prepay that
-  // is not a missing convenience; the spec says a job that is not completed
-  // does not get charged, and this is the only mechanism that honours it.
+  // One-time jobs do not have a subscription.
   if (!job) {
     throw new Error("Job not found");
   }
@@ -248,12 +236,7 @@ export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> 
     job,
     late,
     "admin",
-    // A one-time clean has no subscription term, so there is no term discount
-    // to reapply — 1 means "a single clean at full price". The value reaches
-    // exactly one place, `chargeCustomerForLateCancel`'s re-price, and a
-    // prepaid job returns from that function before the re-price runs
-    // (`paymentStatus === "captured"`). It is inert for residential, and it is
-    // the honest number if that branch ever changes.
+    // Use a one-month term for subscription-less jobs.
     job.subscription?.durationMonths ?? 1
   );
 }
@@ -301,14 +284,7 @@ async function finalizeJobCancellation(
   let customerCharged = false;
   let cleanerPaid = false;
 
-  /**
-   * A prepaid clean that is cancelled on time is REFUNDED, not merely
-   * un-authorized — `voidCharge` branches on `paymentStatus` and issues a real
-   * `refunds.create` for a captured charge. That is the mechanism behind M4's
-   * "an admin can cancel and refund a prepaid residential clean", and it is
-   * worth naming in the record because the two outcomes look identical in the
-   * job row once the columns below are cleared.
-   */
+  // Captured prepaid jobs are refunded on an on-time cancellation.
   const refundedIntentId =
     !lateCancel &&
     job.paymentStatus === "captured" &&
@@ -343,13 +319,12 @@ async function finalizeJobCancellation(
       ? `[On-time cancel – refunded]`
       : `[On-time cancel – no charge]`;
 
-  // Appended, not assigned. This used to overwrite `jobs.notes` wholesale,
-  // which is the exact bug `appendJobNote` exists to prevent — and on a prepaid
-  // job it destroyed the only record of which PaymentIntent paid for the clean,
-  // moments before the columns holding it are nulled out below.
   const noteLine = refundedIntentId
     ? `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}. Refunded PaymentIntent ${refundedIntentId}.`
     : `${notePrefix} Canceled by ${source} at ${new Date().toISOString()}`;
+
+  // Preserve a prior refund when a cancellation request is retried.
+  const alreadyRefunded = job.paymentStatus === "refunded";
 
   await db
     .update(jobs)
@@ -357,7 +332,13 @@ async function finalizeJobCancellation(
       status: "canceled",
       notes: appendJobNote(job.notes, noteLine),
       updatedAt: new Date(),
-      ...(lateCancel ? {} : { paymentStatus: null, paymentIntentId: null }),
+      // Keep the PaymentIntent for reconciliation and Stripe webhook lookups.
+      ...(lateCancel
+        ? {}
+        : {
+            paymentStatus:
+              refundedIntentId || alreadyRefunded ? "refunded" : null,
+          }),
     })
     .where(eq(jobs.id, job.id));
 

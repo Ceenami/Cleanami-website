@@ -3,8 +3,18 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { CleanerJobSummary } from "@/lib/queries/cleaner-jobs";
-import { PETS_CLEANER_NOTE } from "@/lib/constants/service-type";
+import {
+  PETS_CLEANER_NOTE,
+  getJobDisplay,
+  type JobDisplay,
+} from "@/lib/constants/service-type";
 import { cn } from "@/lib/utils";
+
+const JOB_TONE_BADGE: Record<JobDisplay["tone"], string> = {
+  vacation_rental: "bg-sky-100 text-sky-800",
+  residential: "bg-violet-100 text-violet-800",
+  labeled: "bg-amber-100 text-amber-900",
+};
 
 const roleStyles: Record<
   CleanerJobSummary["role"],
@@ -38,6 +48,7 @@ type JobCardProps = {
 export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
   const role = roleStyles[job.role];
   const isResidential = job.serviceType === "residential_one_time";
+  const display = getJobDisplay(job);
   const [withdrawing, setWithdrawing] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
 
@@ -83,14 +94,10 @@ export function JobCard({ job, onRequestSwap, onSwapWithdrawn }: JobCardProps) {
               <span
                 className={cn(
                   "mt-1 mr-1.5 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                  job.serviceType === "residential_one_time"
-                    ? "bg-violet-100 text-violet-800"
-                    : "bg-sky-100 text-sky-800"
+                  JOB_TONE_BADGE[display.tone]
                 )}
               >
-                {job.serviceType === "residential_one_time"
-                  ? "Residential"
-                  : "Turnover"}
+                {display.short}
               </span>
               <span
                 className={cn(

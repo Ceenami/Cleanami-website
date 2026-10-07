@@ -25,7 +25,33 @@ export const PropertiesTable = ({
 }: PropertiesTableProps) => {
 
   return (
-    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+    <>
+      <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
+        {properties.map((property) => (
+          <details key={property.id} className="group p-4">
+            <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-900">{property.address}</p>
+                <p className="mt-1 text-sm text-gray-500">{property.customer?.name ?? "N/A"}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge("active")}`}>Active</span>
+            </summary>
+            <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+              <p><span className="text-gray-500">Email: </span>{formatContactValue(property.customer?.email)}</p>
+              <p><span className="text-gray-500">Phone: </span>{formatContactValue(property.customer?.phone)}</p>
+              <p><span className="text-gray-500">Next clean: </span>{property.nextJob?.checkInTime ? <ClientTime dateString={new Date(property.nextJob.checkInTime)} /> : "None scheduled"}</p>
+              <p className="font-mono text-xs text-gray-500">{property.id}</p>
+              <div className="flex items-center justify-between pt-1">
+                <Link href={`${portalPrefix}/properties/${property.id}`} className="font-medium text-teal-700 hover:text-teal-900">Details</Link>
+                {showDelete && <button onClick={() => onDelete(property)} className="text-sm font-medium text-red-600 hover:text-red-700">Delete</button>}
+              </div>
+            </div>
+          </details>
+        ))}
+        {properties.length === 0 && <div className="p-10 text-center text-sm text-gray-500">No properties found.</div>}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -96,6 +122,7 @@ export const PropertiesTable = ({
           <p className="text-gray-500">No properties found.</p>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 };

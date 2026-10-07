@@ -4,9 +4,18 @@ import React, { useState } from "react";
 import { Tag, Check, X } from "lucide-react";
 import { SignupFormData } from "@/lib/validations/bookng-modal";
 import { serializeSignupFormDataForServer } from "@/lib/validations/bookng-modal/serialize-signup-form";
+import type { ResidentialFormData } from "@/lib/validations/residential";
+import { serializeResidentialFormForServer } from "@/lib/validations/residential/serialize";
 
 interface Props {
-  formData: SignupFormData;
+  /** Vacation-rental wizard: prices against the in-progress signup form. */
+  formData?: SignupFormData;
+  /**
+   * Residential wizard: prices against the residential form instead. Exactly
+   * one of these two is passed; they quote different endpoints because they
+   * describe different things being bought.
+   */
+  residentialFormData?: ResidentialFormData;
   /** Applied code, or "" to clear it. Drives the PaymentIntent amount. */
   onApply: (code: string) => void;
   /** Blocked while the PaymentIntent is being created or the payment is running. */
@@ -30,7 +39,12 @@ const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
  * cause a wrong charge, only a wrong-looking one; that is why applying a code
  * re-creates the intent rather than adjusting a displayed number.
  */
-export const PromoCodeField = ({ formData, onApply, disabled }: Props) => {
+export const PromoCodeField = ({
+  formData,
+  residentialFormData,
+  onApply,
+  disabled,
+}: Props) => {
   const [code, setCode] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,13 +58,26 @@ export const PromoCodeField = ({ formData, onApply, disabled }: Props) => {
     setError(null);
 
     try {
-      const response = await fetch("/api/promo/validate", {
+      const [endpoint, body] = residentialFormData
+        ? [
+            "/api/residential/preview-promo",
+            {
+              code: trimmed,
+              formData: serializeResidentialFormForServer(residentialFormData),
+            },
+          ]
+        : [
+            "/api/promo/validate",
+            {
+              code: trimmed,
+              formData: serializeSignupFormDataForServer(formData!),
+            },
+          ];
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: trimmed,
-          formData: serializeSignupFormDataForServer(formData),
-        }),
+        body: JSON.stringify(body),
       });
 
       const result = (await response.json()) as {

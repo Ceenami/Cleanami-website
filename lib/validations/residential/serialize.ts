@@ -67,5 +67,8 @@ export function normalizeResidentialFormData(
     entryInstructions: optionalText(data.entryInstructions),
     parkingInstructions: optionalText(data.parkingInstructions),
     specialNotes: optionalText(data.specialNotes),
+    // Upper-cased so "save10" and "SAVE10" produce the same idempotency key and
+    // the same re-price, rather than two PaymentIntents for one booking.
+    promoCode: optionalText(data.promoCode)?.toUpperCase(),
   };
 }

@@ -251,7 +251,36 @@ export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTablePro
   ];
 
   return (
-    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+    <>
+    <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
+      {cleaners.map((cleaner) => (
+        <details key={cleaner.id} className="group p-4">
+          <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100"><UserIcon className="h-5 w-5 text-gray-500" /></div>
+              <div className="min-w-0">
+                <p className="truncate font-medium text-gray-900">{cleaner.fullName}</p>
+                <p className="mt-1 truncate text-sm text-gray-500">{formatContactValue(cleaner.email)}</p>
+              </div>
+            </div>
+            <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(cleaner.accountStatus)}`}>{cleaner.accountStatus?.replaceAll("_", " ") || "N/A"}</span>
+          </summary>
+          <div className="mt-4 grid gap-4 border-t border-gray-100 pt-4 text-sm text-gray-700">
+            <p><span className="text-gray-500">Phone: </span>{formatContactValue(cleaner.phone)}</p>
+            <p><span className="text-gray-500">Joined: </span>{formatDate(cleaner.createdAt, "yyyy-MM-dd")}</p>
+            <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Job assignments</p><AssignmentEligibilityToggle cleaner={cleaner} /></div>
+            <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Certifications</p><CertificationsCell cleaner={cleaner} /></div>
+            <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Residential work</p><ResidentialEligibilityCell cleaner={cleaner} /></div>
+            <div className="grid gap-1"><p><span className="text-gray-500">Onboarding: </span>{cleaner.onboardingCompleted ? "Complete" : cleaner.onboardingStarted ? "In progress" : "Not started"}</p><button type="button" onClick={() => setDocumentsFor(cleaner)} className="w-fit text-sm font-medium text-teal-700 hover:text-teal-900">Documents</button></div>
+            <div><p>Payouts: {cleaner.stripePayoutsEnabled ? "Yes" : "No"}</p><p className="mt-1 break-all font-mono text-xs text-gray-500">{cleaner.stripeAccountId ?? "—"}</p></div>
+            <p><span className="text-gray-500">Reliability: </span>{cleaner.reliabilityScore ? `${cleaner.reliabilityScore}%` : "—"}</p>
+          </div>
+        </details>
+      ))}
+      {cleaners.length === 0 && <p className="p-10 text-center text-sm text-gray-500">No cleaners found.</p>}
+    </div>
+
+    <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -373,13 +402,14 @@ export const CleanersTable = ({ cleaners, sortConfig, onSort }: CleanersTablePro
         </table>
       </div>
 
-      {documentsFor && (
-        <CleanerDocumentsModal
-          cleanerId={documentsFor.id}
-          cleanerName={documentsFor.fullName}
-          onClose={() => setDocumentsFor(null)}
-        />
-      )}
     </div>
+    {documentsFor && (
+      <CleanerDocumentsModal
+        cleanerId={documentsFor.id}
+        cleanerName={documentsFor.fullName}
+        onClose={() => setDocumentsFor(null)}
+      />
+    )}
+    </>
   );
 };

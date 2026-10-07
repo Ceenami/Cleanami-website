@@ -41,6 +41,10 @@ export async function getPropertiesWithOwner({
       hasHotTub: properties.hasHotTub,
       laundryType: properties.laundryType,
       laundryLoads: properties.laundryLoads,
+      // The manual job form asks for an arrival window only for a home; a
+      // rental turnover takes its times from the property's own check-in and
+      // check-out. The picker cannot tell which it is without this.
+      serviceType: properties.serviceType,
       iCalUrl: properties.iCalUrl,
       createdAt: properties.createdAt,
       updatedAt: properties.updatedAt,

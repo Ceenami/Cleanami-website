@@ -1,3 +1,5 @@
+-- Superseded by 0045_cleaner_disputes_rebuild.sql. Do not apply this file.
+
 CREATE TYPE "public"."dispute_type" AS ENUM('pay', 'reliability_score', 'job_assignment');
 CREATE TYPE "public"."dispute_status" AS ENUM('pending', 'resolved', 'denied');
 

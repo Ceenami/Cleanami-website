@@ -123,7 +123,7 @@ export function JobDetailsClient({
           Back to {isAdmin ? "Job Oversight" : "your schedule"}
         </button>
 
-        <JobSummaryHeader job={job} />
+        <JobSummaryHeader job={job} isAdmin={isAdmin} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           

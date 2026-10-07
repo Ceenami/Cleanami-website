@@ -250,6 +250,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Route } from "next";
+import { usePathname } from "next/navigation";
 import { getStatusBadge } from "../../utils";
 import { SearchBar } from "../ui/SearchBar";
 import {
@@ -259,8 +260,16 @@ import {
 } from "@/lib/queries/dashboard-job-window";
 import {
   SERVICE_TYPE_LABELS,
+  getJobDisplay,
+  type JobDisplay,
   type ServiceType,
 } from "@/lib/constants/service-type";
+import {
+  getPaymentDisplay,
+  type PaymentDisplay,
+} from "@/lib/constants/payment-status";
+import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { CreateJobModal } from "./CreateJobModal";
 
 interface AssignedCleaner {
   id: string;
@@ -275,20 +284,42 @@ interface JobRecord {
   checkInTime?: string | null;
   /** 0041. Older rows all default to the vacation-rental literal. */
   serviceType?: ServiceType | null;
+  /** 0045. Null on every ordinary job; wins over the service type when set. */
+  jobLabel?: string | null;
+  /** 0035, from the job's frozen snapshot. Null on a vacation-rental job. */
+  arrivalWindow?: string | null;
+  paymentStatus?: string | null;
 }
 
 /** the admin job list is filterable by service type. */
 type ServiceTypeFilter = ServiceType | "all";
 
-const SERVICE_TYPE_BADGE: Record<ServiceType, string> = {
-  vacation_rental_subscription: "bg-sky-100 text-sky-800",
-  residential_one_time: "bg-violet-100 text-violet-800",
-};
-
-/** Short enough for a table cell; the full label is the select's wording. */
 const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
   vacation_rental_subscription: "Vacation Rental",
   residential_one_time: "Residential",
+};
+
+/**
+ * Which end of the customer's history the list is showing.
+ *
+ * The admin list is a rolling window around today, which is right for someone
+ * watching operations. It is wrong for a customer, whose one-time clean drops
+ * off the bottom of that window a week after it happens - and a completed clean
+ * they can no longer find is the thing this list exists to show them.
+ */
+type Timeframe = "upcoming" | "past";
+
+const JOB_TONE_BADGE: Record<JobDisplay["tone"], string> = {
+  vacation_rental: "bg-sky-100 text-sky-800",
+  residential: "bg-violet-100 text-violet-800",
+  labeled: "bg-amber-100 text-amber-900",
+};
+
+const PAYMENT_TONE_BADGE: Record<PaymentDisplay["tone"], string> = {
+  positive: "bg-green-100 text-green-800",
+  negative: "bg-red-100 text-red-800",
+  pending: "bg-yellow-100 text-yellow-800",
+  neutral: "bg-gray-100 text-gray-700",
 };
 
 interface GetJobsResponse {
@@ -302,7 +333,13 @@ type JobStatus = "all" | "unassigned" | "assigned" | "in-progress" | "completed"
 
 type JobsQueryKey = readonly [
   string,
-  { status: JobStatus; query: string; serviceType: ServiceTypeFilter },
+  {
+    status: JobStatus;
+    query: string;
+    serviceType: ServiceTypeFilter;
+    ownerScope: boolean;
+    timeframe: Timeframe;
+  },
 ];
 
 type FetchJobsContext = {
@@ -310,17 +347,38 @@ type FetchJobsContext = {
   queryKey: JobsQueryKey;
 };
 
+/** Midnight tonight-just-gone, local, matching the dashboard window's own idiom. */
+function startOfToday(): Date {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
 async function fetchJobs(context: FetchJobsContext) {
   const { pageParam = 1, queryKey } = context;
-  const { status, query, serviceType } = queryKey[1];
-  const { startDate, endDate } = getDashboardJobDateRange();
+  const { status, query, serviceType, ownerScope, timeframe } = queryKey[1];
   const params = new URLSearchParams({
     page: String(pageParam),
     limit: "15",
-    dashboard: "1",
-    startDate: startDate.toISOString(),
-    endDate: endDate.toISOString(),
   });
+
+  if (ownerScope) {
+    // Today's cleans belong to "upcoming" all day, so the boundary is midnight
+    // rather than now - a clean that finished this morning is still today's.
+    // Past therefore ends where upcoming begins, with no overlap and no gap.
+    if (timeframe === "upcoming") {
+      params.set("startDate", startOfToday().toISOString());
+      params.set("sortByCheckIn", "asc");
+    } else {
+      params.set("endDate", new Date(startOfToday().getTime() - 1).toISOString());
+      params.set("sortByCheckIn", "desc");
+    }
+  } else {
+    const { startDate, endDate } = getDashboardJobDateRange();
+    params.set("dashboard", "1");
+    params.set("startDate", startDate.toISOString());
+    params.set("endDate", endDate.toISOString());
+  }
 
   if (status !== "all") {
     params.append("status", status);
@@ -342,12 +400,54 @@ async function fetchJobs(context: FetchJobsContext) {
   return response.json() as Promise<GetJobsResponse>;
 }
 
+/**
+ * When the clean is, in the words the job's own type earns.
+ *
+ * A residential job gets its arrival window, because that is what the customer
+ * was sold and what the cleaner was told. Rendering `check_out_time` here would
+ * be worse than saying nothing: it is the internal finish deadline, not a
+ * promise anyone made.
+ */
+function WhenCell({ job }: { job: JobRecord }) {
+  const window =
+    job.serviceType === "residential_one_time"
+      ? getArrivalWindow(job.arrivalWindow)
+      : undefined;
+
+  if (!job.checkInTime) {
+    return <span className="text-gray-500">N/A</span>;
+  }
+
+  if (window) {
+    return (
+      <div>
+        <p className="text-gray-900">
+          {new Date(job.checkInTime).toLocaleDateString()}
+        </p>
+        <p className="text-xs text-gray-500">{window.label}</p>
+      </div>
+    );
+  }
+
+  return <span>{new Date(job.checkInTime).toLocaleString()}</span>;
+}
+
 export const JobListView = () => {
   const queryClient = useQueryClient();
+  const pathname = usePathname();
+  // The portal this list is rendering inside, from the URL. It decides wording,
+  // links and which columns appear - never who is allowed to see what. The API
+  // scopes every row to the signed-in customer from `users.role`, and the page
+  // that prefetches this list authorizes itself before the query runs.
+  const isOwnerPortal = pathname.startsWith("/customer");
+  const portalPrefix = isOwnerPortal ? "/customer" : "/admin";
+
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<JobStatus>("all");
   const [serviceTypeFilter, setServiceTypeFilter] =
     useState<ServiceTypeFilter>("all");
+  const [timeframe, setTimeframe] = useState<Timeframe>("upcoming");
+  const [creating, setCreating] = useState(false);
 
   const queryKey = useMemo(
     () =>
@@ -357,9 +457,11 @@ export const JobListView = () => {
           status: statusFilter,
           query: searchTerm,
           serviceType: serviceTypeFilter,
+          ownerScope: isOwnerPortal,
+          timeframe,
         },
       ] as const,
-    [statusFilter, searchTerm, serviceTypeFilter]
+    [statusFilter, searchTerm, serviceTypeFilter, isOwnerPortal, timeframe]
   );
 
   const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInfiniteQuery({
@@ -383,26 +485,69 @@ export const JobListView = () => {
 
   const jobs = useMemo(() => {
     const merged = data?.pages.flatMap((page) => page.data) ?? [];
+    // Past cleans read newest-first; everything else reads next-first. Sorting
+    // client-side over merged pages only works because the server already
+    // ordered them the same way.
+    const descending = isOwnerPortal && timeframe === "past";
     return [...merged].sort((a, b) => {
       const ta = a.checkInTime ? new Date(a.checkInTime).getTime() : Number.MAX_SAFE_INTEGER;
       const tb = b.checkInTime ? new Date(b.checkInTime).getTime() : Number.MAX_SAFE_INTEGER;
-      return ta - tb;
+      return descending ? tb - ta : ta - tb;
     });
-  }, [data]);
+  }, [data, isOwnerPortal, timeframe]);
+
+  const columnCount = isOwnerPortal ? 7 : 8;
 
   return (
     <div className="space-y-6">
+      <CreateJobModal open={creating} onClose={() => setCreating(false)} />
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Job List</h2>
+          <h2 className="text-2xl font-semibold text-gray-900">
+            {isOwnerPortal ? "Your cleans" : "Job List"}
+          </h2>
           <p className="text-sm text-gray-500">
-            Check-in order · last {DASHBOARD_PAST_DAYS} days through{" "}
-            {DASHBOARD_FUTURE_DAYS} days ahead
+            {isOwnerPortal
+              ? timeframe === "upcoming"
+                ? "Today and everything booked ahead"
+                : "Everything before today, most recent first"
+              : `Check-in order · last ${DASHBOARD_PAST_DAYS} days through ${DASHBOARD_FUTURE_DAYS} days ahead`}
           </p>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <SearchBar onSearch={setSearchTerm} placeholder="Search by job ID, address, or cleaner..." />
+          {/* Until now nothing in the product could create a job by hand.
+              This is the entry point for a reclean or a correction. */}
+          {!isOwnerPortal && (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="w-full sm:w-auto rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+            >
+              Create job
+            </button>
+          )}
+          <SearchBar
+            onSearch={setSearchTerm}
+            placeholder={
+              isOwnerPortal
+                ? "Search by address..."
+                : "Search by job ID, address, or cleaner..."
+            }
+          />
+          {isOwnerPortal && (
+            <select
+              aria-label="Timeframe"
+              value={timeframe}
+              onChange={(event) =>
+                setTimeframe(event.target.value as Timeframe)
+              }
+              className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
+            >
+              <option value="upcoming">Upcoming</option>
+              <option value="past">Past cleans</option>
+            </select>
+          )}
           <select
             aria-label="Service type"
             value={serviceTypeFilter}
@@ -435,51 +580,90 @@ export const JobListView = () => {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+      <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
+        {status === "pending" ? (
+          <p className="p-6 text-center text-sm text-gray-500">Loading jobs...</p>
+        ) : error ? (
+          <p className="p-6 text-center text-sm text-red-500">Error loading jobs.</p>
+        ) : jobs.length === 0 ? (
+          <p className="p-6 text-center text-sm text-gray-500">No jobs found.</p>
+        ) : jobs.map((job) => (
+          <details key={job.id} className="group p-4">
+            <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-gray-900">{job.property?.address ?? "Unknown"}</p>
+                <p className="mt-1 text-sm text-gray-500">{job.checkInTime ? new Date(job.checkInTime).toLocaleString() : "N/A"}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>{job.status}</span>
+            </summary>
+            <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+              <p><span className="text-gray-500">Service: </span>{SERVICE_TYPE_SHORT[job.serviceType ?? "vacation_rental_subscription"]}</p>
+              <p><span className="text-gray-500">Cleaner: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}</p>
+              <p className="font-mono text-xs text-gray-500">{job.id}</p>
+              <Link href={`/admin/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">Details</Link>
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
+                {/* A raw uuid is an operations tool, not something a customer
+                    has any use for. */}
+                {!isOwnerPortal && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Property</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cleaner</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Check-In</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  {isOwnerPortal ? "When" : "Check-In"}
+                </th>
                 <th className="relative px-6 py-3"><span className="sr-only">Details</span></th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {status === "pending" ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-6 text-center text-gray-500">Loading jobs...</td>
+                  <td colSpan={columnCount} className="px-6 py-6 text-center text-gray-500">Loading jobs...</td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-6 text-center text-red-500">Error loading jobs.</td>
+                  <td colSpan={columnCount} className="px-6 py-6 text-center text-red-500">Error loading jobs.</td>
                 </tr>
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-6 text-center text-gray-500">No jobs found.</td>
+                  <td colSpan={columnCount} className="px-6 py-6 text-center text-gray-500">
+                    {isOwnerPortal
+                      ? timeframe === "upcoming"
+                        ? "No cleans booked yet."
+                        : "No past cleans yet."
+                      : "No jobs found."}
+                  </td>
                 </tr>
               ) : (
-                jobs.map((job) => (
+                jobs.map((job) => {
+                  const display = getJobDisplay(job);
+                  const payment = getPaymentDisplay(
+                    job.status,
+                    job.paymentStatus ?? null
+                  );
+                  return (
                   <tr key={job.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{job.id}</td>
+                    {!isOwnerPortal && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{job.id}</td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{job.property?.address ?? "Unknown"}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <span
-                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-                          SERVICE_TYPE_BADGE[
-                            job.serviceType ?? "vacation_rental_subscription"
-                          ]
-                        }`}
+                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${JOB_TONE_BADGE[display.tone]}`}
                       >
-                        {
-                          SERVICE_TYPE_SHORT[
-                            job.serviceType ?? "vacation_rental_subscription"
-                          ]
-                        }
+                        {display.short}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -490,16 +674,33 @@ export const JobListView = () => {
                         {job.status}
                       </span>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      {/* Null on every job that predates payment tracking. An
+                          empty cell is the honest answer there - those jobs are
+                          not unpaid, nobody ever recorded a status for them.
+                          The PaymentIntent id is admin-only and belongs on the
+                          job detail, not in a list either side reads. */}
+                      {payment ? (
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${PAYMENT_TONE_BADGE[payment.tone]}`}
+                        >
+                          {isOwnerPortal ? payment.customer : payment.admin}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {job.checkInTime ? new Date(job.checkInTime).toLocaleString() : "N/A"}
+                      <WhenCell job={job} />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <Link href={`/admin/job-oversight/${job.id}` as Route} className="text-teal-600 hover:text-teal-900">
+                      <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="text-teal-600 hover:text-teal-900">
                         Details
                       </Link>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

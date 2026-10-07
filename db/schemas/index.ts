@@ -24,6 +24,7 @@ export * from './onboardingDocuments.schema';
 export * from './capabilityFlags.schema';
 export * from './gpsTrackingLogs.schema';
 export * from './notifications.schema';
+export * from './notificationLog.schema';
 export * from './reliabilityEvents.schema';
 export * from './reliabilityChecks.schema';
 export * from './badges.schema';

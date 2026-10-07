@@ -5,6 +5,7 @@ import { properties } from "@/db/schemas";
 import { getCustomerAuth } from "@/lib/customer-auth";
 import { PricingService } from "@/lib/services/pricing.service";
 import { OneOffCleanBooking } from "@/components/customer/OneOffCleanBooking";
+import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
 
 export default async function BookOneOffPage() {
   const { customerId, error } = await getCustomerAuth();
@@ -40,10 +41,28 @@ export default async function BookOneOffPage() {
       subscriptionMonths: 1,
       priceOverrideCents: p.priceOverrideCents,
     } as any);
+    // A home is offered arrival windows, and which ones fit the operating day
+    // depends on how long the clean takes. Same inputs the public residential
+    // flow uses, so the window list the customer sees here matches the one
+    // they would have seen there.
+    const expectedHours =
+      p.serviceType === "residential_one_time"
+        ? calculateJobStaffing({
+            bedCount: p.bedCount,
+            bathCount: p.bathCount,
+            sqFt: p.sqFt,
+            laundryType: "none",
+            hotTubServiceLevel: false,
+            hotTubDeepClean: false,
+          }).expectedHoursPerCleaner
+        : null;
+
     items.push({
       id: p.id,
       address: p.address,
       price: pd.pricingUnavailable || pd.isCustomQuote ? null : pd.totalPerClean,
+      serviceType: p.serviceType,
+      expectedHours,
     });
   }
 

@@ -10,6 +10,8 @@ const bodySchema = z.object({
   propertyId: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   promoCode: z.string().trim().max(64).optional(),
+  /** Required for a residential property; ignored for a rental. */
+  arrivalWindow: z.string().trim().max(32).optional(),
 });
 
 export async function POST(request: Request) {

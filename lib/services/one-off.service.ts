@@ -14,12 +14,18 @@ import {
 } from "@/lib/pricing/custom-quote-message";
 import { getStartOfTodayEastern } from "@/lib/time/eastern";
 import {
+  getArrivalInstant,
+  getDeadlineInstant,
+  meetsResidentialNotice,
+  RESIDENTIAL_NOTICE_MESSAGE,
+} from "@/lib/scheduling/residential-notice";
+import {
   recordPromoRedemption,
   resolvePromoCodeForAmount,
 } from "@/lib/services/promo-code.service";
 import { fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 const EASTERN_TZ = "America/New_York";
@@ -31,6 +37,8 @@ export type BookOneOffInput = {
   date: string;
   /** Optional customer-entered promo code; discounts this one clean only. */
   promoCode?: string;
+  /** Residential arrival window. */
+  arrivalWindow?: string;
 };
 export type BookOneOffResult =
   | {
@@ -43,11 +51,7 @@ export type BookOneOffResult =
   | {
       success: false;
       error: string;
-      /**
-       * An infrastructure fault rather than a business refusal. The route maps
-       * this to 5xx so "we could not reach Stripe" is not reported to the
-       * customer as "your booking was invalid".
-       */
+      /** True for an infrastructure failure. */
       unexpected?: true;
       /** Explicit override when the default 400/500 split is wrong. */
       status?: number;
@@ -57,11 +61,7 @@ type PricedProperty = NonNullable<
   Awaited<ReturnType<typeof db.query.properties.findFirst>>
 >;
 
-/**
- * Standard engine, single clean — no subscription-term discount (there is no
- * term), admin per-property override still honoured. Shared by the booking
- * call and the promo preview so both quote off exactly the same number.
- */
+/** Price a single clean with the shared pricing engine. */
 async function priceOneOffCents(
   property: PricedProperty
 ): Promise<{ ok: true; amountCents: number } | { ok: false; error: string }> {
@@ -76,9 +76,7 @@ async function priceOneOffCents(
     hotTubService: property.hotTubServiceLevel,
     hotTubDrain: property.hotTubDrain,
     hotTubDrainCadence: property.hotTubDrainCadence,
-    // Item 7. The `as any` below means the compiler cannot ask for this, so it
-    // is here by hand: omitting it under-charges every pet property by $10 on
-    // a path that actually takes the customer's money.
+    // Include pet pricing for one-off bookings.
     petsAllowed: property.petsAllowed,
     subscriptionMonths: 1,
     priceOverrideCents: property.priceOverrideCents,
@@ -88,9 +86,7 @@ async function priceOneOffCents(
     return { ok: false, error: CUSTOM_QUOTE_EXISTING_PROPERTY_MESSAGE };
   }
 
-  // A laundry service with no load count prices laundry at $0, so the number
-  // below would be wrong rather than merely unknown. A human is waiting on this
-  // answer, so refuse rather than quietly under-charging them.
+  // Refuse laundry bookings without a load count.
   if (priceDetails.laundryLoadsMissing) {
     return { ok: false, error: LAUNDRY_LOADS_INCOMPLETE_MESSAGE };
   }
@@ -124,11 +120,7 @@ export type OneOffPromoPreview =
     }
   | { valid: false; message: string };
 
-/**
- * Price a code against a one-off before the customer commits to the charge.
- * Preview only — `bookOneOffClean` re-resolves the code authoritatively, so a
- * stale answer here can never decide what is actually charged.
- */
+/** Preview one-off promo pricing. */
 export async function previewOneOffPromoCode(
   customerId: string,
   propertyId: string,
@@ -163,17 +155,7 @@ export async function previewOneOffPromoCode(
   };
 }
 
-/**
- * Task 1.6 — book a single (non-recurring) clean for an existing customer's
- * property from the customer portal. Sensible defaults / best practice:
- *  - priced with the standard engine but NO subscription-term discount (single
- *    clean); an admin per-property override still applies.
- *  - charged up front on the saved card (prepaid), like the first clean.
- *  - the job is created with no subscription and a synthetic calendar UID, and
- *    flows through assignment → evidence → the prepaid payout path so the
- *    cleaner is paid on completion. Money is collected here, so the job carries
- *    no paymentIntentId (prepaid), mirroring the onboarding first clean.
- */
+/** Book a prepaid one-off clean for an existing property. */
 export async function bookOneOffClean(
   customerId: string,
   input: BookOneOffInput
@@ -185,40 +167,54 @@ export async function bookOneOffClean(
     return { success: false, error: "Please choose a valid date." };
   }
 
-  // Arrival anchor = the property's guest-checkout time; deadline = guest
-  // check-in time (defaults 09:00 / 16:00 ET), both on the chosen date.
-  const checkOutTime = property.defaultCheckOutTime ?? "09:00:00";
-  const checkInTime = property.defaultCheckInTime ?? "16:00:00";
-  const arrival = fromZonedTime(`${input.date}T${checkOutTime}`, EASTERN_TZ);
-  const deadline = fromZonedTime(`${input.date}T${checkInTime}`, EASTERN_TZ);
+  // Residential uses its selected arrival window; rentals use guest turnover times.
+  const isResidential = property.serviceType === "residential_one_time";
+  const arrivalWindow = input.arrivalWindow?.trim() || null;
 
-  // A malformed time on the property yields an Invalid Date, and `Invalid Date
-  // < earliest` is false — so it sails past the buffer check below and is only
-  // rejected by Postgres at the insert, which happens AFTER the card is
-  // charged. Catch it here, while nothing has been paid.
-  if (Number.isNaN(arrival.getTime()) || Number.isNaN(deadline.getTime())) {
-    console.error(
-      `[bookOneOffClean] property ${property.id} has unusable check-in/check-out times:`,
-      { checkInTime, checkOutTime }
-    );
-    return {
-      success: false,
-      error:
-        "This property's check-in/check-out times are misconfigured, so we cannot schedule a clean. Please contact CleanNami.",
-    };
+  let arrival: Date;
+  let rentalDeadline: Date | null = null;
+
+  if (isResidential) {
+    const instant = getArrivalInstant(input.date, arrivalWindow);
+    if (!instant) {
+      return {
+        success: false,
+        error: "Please choose an arrival window for this clean.",
+      };
+    }
+    arrival = instant;
+
+    if (!meetsResidentialNotice(input.date, arrivalWindow)) {
+      return { success: false, error: RESIDENTIAL_NOTICE_MESSAGE };
+    }
+  } else {
+    const checkOutTime = property.defaultCheckOutTime ?? "09:00:00";
+    const checkInTime = property.defaultCheckInTime ?? "16:00:00";
+    arrival = fromZonedTime(`${input.date}T${checkOutTime}`, EASTERN_TZ);
+    rentalDeadline = fromZonedTime(`${input.date}T${checkInTime}`, EASTERN_TZ);
+
+    if (Number.isNaN(arrival.getTime()) || Number.isNaN(rentalDeadline.getTime())) {
+      console.error(
+        `[bookOneOffClean] property ${property.id} has unusable check-in/check-out times:`,
+        { checkInTime, checkOutTime }
+      );
+      return {
+        success: false,
+        error:
+          "This property's check-in/check-out times are misconfigured, so we cannot schedule a clean. Please contact CleanNami.",
+      };
+    }
+
+    const earliest = addDays(getStartOfTodayEastern(), ONE_OFF_BUFFER_DAYS);
+    if (arrival < earliest) {
+      return {
+        success: false,
+        error: `Please choose a date at least ${ONE_OFF_BUFFER_DAYS} days out.`,
+      };
+    }
   }
 
-  const earliest = addDays(getStartOfTodayEastern(), ONE_OFF_BUFFER_DAYS);
-  if (arrival < earliest) {
-    return {
-      success: false,
-      error: `Please choose a date at least ${ONE_OFF_BUFFER_DAYS} days out.`,
-    };
-  }
-
-  // Price it: standard engine, single clean (no term discount), property
-  // override honoured. The Stripe floor is checked against the FULL price so a
-  // promo code can never mask a misconfigured property.
+  // Price before payment.
   const priced = await priceOneOffCents(property);
   if (!priced.ok) return { success: false, error: priced.error };
   const amountCents = priced.amountCents;
@@ -228,10 +224,7 @@ export async function bookOneOffClean(
     columns: { stripeCustomerId: true, email: true, skipPayment: true },
   });
 
-  // `skip_payment` is how a comped or demo account transacts without a card.
-  // `completeOnboarding()` has always honoured it; this path did not, so those
-  // customers could not book a one-off at all — they hit "Payment is not set
-  // up for your account" with no way forward.
+  // Comped accounts can book without a card.
   const skipPayment = customer?.skipPayment === true;
 
   const stripe = getStripe();
@@ -245,10 +238,7 @@ export async function bookOneOffClean(
       };
     }
 
-    // Unprotected, this was the most likely source of the raw HTTP 500 the
-    // client hit: a Stripe customer id that does not resolve in the mode the
-    // deployment is running throws here, and the throw escaped all the way out
-    // of the route.
+    // Handle invalid Stripe customer records as a booking failure.
     let paymentMethods;
     try {
       paymentMethods = await stripe.paymentMethods.list({
@@ -275,14 +265,7 @@ export async function bookOneOffClean(
     }
   }
 
-  // Customer-entered promo code — resolved authoritatively here, never trusting
-  // the preview. Discounts this single clean, which is the whole unit being
-  // bought, and burns the customer's one redemption of this code.
-  //
-  // Fails LOUD, unlike the recurring pre-authorize cron: there, nobody is
-  // watching and a stale code must not block a real charge; here the customer
-  // just typed the code and is about to be charged, so silently billing them
-  // full price would be the wrong answer.
+  // Resolve promotional pricing before payment.
   const submittedPromoCode = input.promoCode?.trim() ?? "";
   let chargeAmountCents = amountCents;
   let appliedPromo: { promoCodeId: string; code: string; discountCents: number } | null =
@@ -324,10 +307,7 @@ export async function bookOneOffClean(
     };
   }
 
-  // Staffing is pure computation over data already in hand, and it used to sit
-  // BETWEEN the charge and the insert — so a failure here meant a charged card
-  // and no job. Everything that can fail now happens before any money moves,
-  // leaving the insert as the single post-charge write.
+  // Calculate staffing before taking payment.
   let staffing;
   try {
     const hotTubTimeAdditions = await loadHotTubTimeAdditions();
@@ -355,9 +335,45 @@ export async function bookOneOffClean(
     };
   }
 
-  // Null on the skip-payment path: no money moved, so there is no intent to
-  // record. The job then carries no paymentIntentId, which is exactly what
-  // capture-and-payout treats as prepaid — the cleaner is still paid.
+  // Residential deadlines include the expected cleaning time.
+  const deadline = isResidential
+    ? getDeadlineInstant(
+        input.date,
+        arrivalWindow,
+        staffing.staffing.expectedHoursPerCleaner
+      )
+    : rentalDeadline;
+
+  if (!deadline) {
+    console.error("[bookOneOffClean] unusable arrival window or expected hours", {
+      date: input.date,
+      arrivalWindow,
+      expectedHours: staffing.staffing.expectedHoursPerCleaner,
+    });
+    return {
+      success: false,
+      error: "We could not schedule that date and time. Please choose another.",
+    };
+  }
+
+  // Return an existing booking on a retry.
+  const existingBooking = await db.query.jobs.findFirst({
+    where: and(
+      eq(jobs.propertyId, property.id),
+      eq(jobs.checkInTime, arrival),
+      eq(jobs.jobSource, "customer_one_off"),
+      ne(jobs.status, "canceled")
+    ),
+    columns: { id: true },
+  });
+  if (existingBooking) {
+    return {
+      success: true,
+      jobId: existingBooking.id,
+      amountCents,
+    };
+  }
+
   let paymentIntentId: string | null = null;
   if (skipPayment) {
     chargeAmountCents = 0;
@@ -367,8 +383,6 @@ export async function bookOneOffClean(
       {
         amount: chargeAmountCents,
         currency: "usd",
-        // Both are guaranteed by the `!skipPayment` guard above, which returns
-        // early when either is missing.
         customer: customer.stripeCustomerId!,
         payment_method: paymentMethodId!,
         off_session: true,
@@ -381,10 +395,7 @@ export async function bookOneOffClean(
           promo_discount_cents: String(appliedPromo?.discountCents ?? 0),
         },
       },
-      // Same customer/property/date never double-charges on a retry. The promo
-      // code is deliberately NOT part of the key: keeping it stable is what
-      // makes a re-submit collapse onto the existing charge instead of billing
-      // twice at a different amount.
+      // Retries for the same customer, property, and date share a charge.
       { idempotencyKey: `oneoff_${customerId}_${property.id}_${input.date}` }
     );
     if (paymentIntent.status !== "succeeded") {
@@ -393,29 +404,80 @@ export async function bookOneOffClean(
     paymentIntentId = paymentIntent.id;
   } catch (err) {
     console.error("[bookOneOffClean] charge failed", err);
-    // Re-booking the same property/date at a different amount (e.g. first
-    // without a code, then with one) reuses the key with different parameters.
-    // Stripe rejects that rather than charging again — say what actually
-    // happened instead of surfacing the raw API wording.
-    if ((err as { code?: string } | null)?.code === "idempotency_error") {
+    // Stripe rejects retries with changed idempotency parameters.
+    const stripeError = err as
+      | { rawType?: string; type?: string; message?: string }
+      | null;
+    if (
+      stripeError?.rawType === "idempotency_error" ||
+      stripeError?.type === "StripeIdempotencyError"
+    ) {
       return {
         success: false,
         error:
           "You have already booked a clean for this property on this date. Refresh to see it.",
       };
     }
+
+    // Only card-decline copy is safe to return directly from Stripe.
+    if (stripeError?.type === "StripeCardError" && stripeError.message) {
+      return { success: false, error: stripeError.message };
+    }
     return {
       success: false,
-      error: err instanceof Error ? err.message : "Payment failed.",
+      unexpected: true,
+      error:
+        "We could not complete the payment. Nothing has been charged — please try again, or contact CleanNami if you were charged.",
     };
   }
   }
 
-  // The single write after the money moved. If it fails the customer has paid
-  // for nothing, so the charge is refunded rather than left stranded — a
-  // phantom charge is visible in Stripe and reconcilable, which is why this
-  // ordering is preferred over insert-first (a phantom *unpaid* job would be
-  // picked up by assignment and paid out to a cleaner as if prepaid).
+  // Do not reuse an intent that has already entered the refund flow.
+  if (paymentIntentId) {
+    try {
+      const refunds = await stripe!.refunds.list({
+        payment_intent: paymentIntentId,
+        limit: 1,
+      });
+      if (refunds.data.some((refund) => refund.status !== "failed")) {
+        return {
+          success: false,
+          error:
+            "Your earlier payment is being refunded, so this clean was not booked. Please try again after the refund is confirmed, or contact CleanNami.",
+        };
+      }
+    } catch (err) {
+      console.error("[bookOneOffClean] refund-state lookup failed", err);
+      return {
+        success: false,
+        unexpected: true,
+        error:
+          "We could not verify the earlier payment. Nothing new has been booked — please try again shortly or contact CleanNami.",
+      };
+    }
+  }
+
+  // Check once more in case a concurrent retry saved the job.
+  const savedBooking = await db.query.jobs.findFirst({
+    where: and(
+      eq(jobs.propertyId, property.id),
+      eq(jobs.checkInTime, arrival),
+      eq(jobs.jobSource, "customer_one_off"),
+      ne(jobs.status, "canceled")
+    ),
+    columns: { id: true },
+  });
+  if (savedBooking) {
+    return {
+      success: true,
+      jobId: savedBooking.id,
+      amountCents: chargeAmountCents,
+      promoCode: appliedPromo?.code,
+      promoDiscountCents: appliedPromo?.discountCents,
+    };
+  }
+
+  // Refund the charge if the job cannot be saved.
   let job: { id: string } | undefined;
   try {
     [job] = await db
@@ -427,16 +489,17 @@ export async function bookOneOffClean(
         checkOutTime: deadline,
         calendarEventUid: `oneoff_${randomUUID()}`,
         status: "unassigned",
-        // A one-off is booked by a
-        // vacation-rental customer against their existing property, so the
-        // SERVICE is unchanged — what differs is where the job came from, which
-        // is the question `job_source` answers. Without it, telling this apart
-        // from a synced clean means reverse-engineering `calendar_event_uid`.
-        serviceType: "vacation_rental_subscription",
+        // Preserve the property service type and record the creation path.
+        serviceType: property.serviceType,
         jobSource: "customer_one_off",
         expectedHours: staffing.expectedHours,
-        addonsSnapshot: staffing.addonsSnapshot,
+        addonsSnapshot: isResidential
+          ? { ...staffing.addonsSnapshot, arrivalWindow }
+          : staffing.addonsSnapshot,
         checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
+        // Link the captured payment for reserves and possible refunds.
+        paymentIntentId,
+        paymentStatus: skipPayment ? null : "captured",
         promoCodeId: appliedPromo?.promoCodeId ?? null,
         notes: skipPayment
           ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`
@@ -444,8 +507,6 @@ export async function bookOneOffClean(
       })
       .returning({ id: jobs.id });
 
-    // `.returning()` yielding nothing would otherwise surface as a confusing
-    // "cannot read properties of undefined" further down, after the charge.
     if (!job) throw new Error("jobs insert returned no rows");
   } catch (err) {
     console.error(
@@ -454,8 +515,6 @@ export async function bookOneOffClean(
     );
     await voidCharge({
       paymentIntentId,
-      // A one-off PaymentIntent is created with `confirm: true`, so it is
-      // captured immediately; there is no job row to read a status from.
       paymentStatus: "captured",
       context: "one-off booking",
     });
@@ -467,9 +526,7 @@ export async function bookOneOffClean(
     };
   }
 
-  // Best-effort bookkeeping, after the money moved and the job exists: this is
-  // what burns the customer's single redemption of this code. Never allowed to
-  // fail the booking — the clean is paid for and scheduled by this point.
+    // Promo bookkeeping must not undo a completed booking.
   if (appliedPromo) {
     try {
       await recordPromoRedemption({
@@ -479,10 +536,7 @@ export async function bookOneOffClean(
         customerId,
         subscriptionId: null,
         jobId: job.id,
-        // `promo_redemptions.payment_intent_id` is the idempotency key, so it
-        // cannot be null. With no charge there is no intent, so the job id
-        // stands in — still unique per booking, so the code is burned exactly
-        // once here too.
+        // Use the job ID when payment was intentionally skipped.
         paymentIntentId: paymentIntentId ?? `skip_payment_${job.id}`,
         originalAmountCents: amountCents,
         discountAmountCents: appliedPromo.discountCents,

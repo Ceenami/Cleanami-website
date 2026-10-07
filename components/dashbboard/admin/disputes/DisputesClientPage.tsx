@@ -87,6 +87,16 @@ export function DisputesClientPage() {
                 </span>
               </div>
               <p className="mt-1 text-sm text-gray-700">{d.description}</p>
+              {d.job && (
+                <p className="mt-1 text-xs text-gray-600">
+                  <span className="font-medium">Job</span>{" "}
+                  <span className="font-mono">{d.job.shortId}</span>
+                  {d.job.scheduledAt
+                    ? ` · ${new Date(d.job.scheduledAt).toLocaleDateString()}`
+                    : ""}
+                  {d.job.propertyAddress ? ` · ${d.job.propertyAddress}` : ""}
+                </p>
+              )}
               <p className="mt-1 text-xs text-gray-400">
                 {new Date(d.createdAt).toLocaleString()}
               </p>

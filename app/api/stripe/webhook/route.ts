@@ -32,6 +32,24 @@ async function appendJobNoteByPaymentIntent(
     .where(eq(jobs.id, job.id));
 }
 
+/** Mark a job refunded only after Stripe reports the full charge returned. */
+async function markRefundedByPaymentIntent(
+  paymentIntentId: string | null,
+  amountRefunded: number,
+  chargeAmount: number
+): Promise<void> {
+  if (!paymentIntentId || amountRefunded < chargeAmount) return;
+  const job = await db.query.jobs.findFirst({
+    where: eq(jobs.paymentIntentId, paymentIntentId),
+    columns: { id: true, paymentStatus: true },
+  });
+  if (!job || job.paymentStatus === "refunded") return;
+  await db
+    .update(jobs)
+    .set({ paymentStatus: "refunded", updatedAt: new Date() })
+    .where(eq(jobs.id, job.id));
+}
+
 /**
  * Best-effort customer + admin notification for a failed charge. Spec §20.5:
  * `payment_intent.failed` → notify customer + admin. Never throws — a mail
@@ -136,9 +154,31 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         typeof charge.payment_intent === "string"
           ? charge.payment_intent
           : null;
+      const isFullyRefunded = charge.amount_refunded >= charge.amount;
       await appendJobNoteByPaymentIntent(
         pi,
-        `[Stripe] Charge refunded: ${charge.amount_refunded} cents (${new Date().toISOString()})`
+        `[Stripe] Charge ${isFullyRefunded ? "fully refunded" : "partially refunded"}: ${charge.amount_refunded} of ${charge.amount} cents (${new Date().toISOString()})`
+      );
+      await markRefundedByPaymentIntent(
+        pi,
+        charge.amount_refunded,
+        charge.amount
+      );
+      break;
+    }
+
+    // Keep the individual refund in the audit trail. `charge.refunded` carries
+    // the aggregate charge amount, which is what tells a partial refund from a
+    // full one and therefore owns the payment-status transition.
+    case "refund.created": {
+      const refund = event.data.object as Stripe.Refund;
+      const pi =
+        typeof refund.payment_intent === "string"
+          ? refund.payment_intent
+          : null;
+      await appendJobNoteByPaymentIntent(
+        pi,
+        `[Stripe] Refund created: ${refund.amount} cents (${new Date().toISOString()})`
       );
       break;
     }

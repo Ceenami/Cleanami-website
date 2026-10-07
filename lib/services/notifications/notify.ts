@@ -6,6 +6,7 @@ import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
 import { sendPushToCleaner } from "@/lib/services/push.service";
 import { sendSms } from "@/lib/services/sms.service";
 import { eq } from "drizzle-orm";
+import { recordNotificationAttempt } from "@/lib/services/notifications/notification-log";
 
 type CleanerNotificationType =
   | "job_reminder"
@@ -44,14 +45,41 @@ export async function notifyCleaner(input: {
       jobId: input.jobId ?? null,
       metadata: { source: "notify" },
     });
+    await recordNotificationAttempt({
+      channel: "in_app",
+      status: "sent",
+      meta: {
+        trigger: input.type,
+        userId,
+        jobId: input.jobId ?? null,
+        recipient: userId,
+      },
+    });
+  } else {
+    // A cleaner with no linked user row gets no in-app notification at all,
+    // and used to get it silently. This is the row that says so.
+    await recordNotificationAttempt({
+      channel: "in_app",
+      status: "skipped",
+      error: "no user row linked to this cleaner",
+      meta: {
+        trigger: input.type,
+        jobId: input.jobId ?? null,
+        recipient: input.cleanerId,
+      },
+    });
   }
 
   // Web push (no-op if VAPID/subscriptions absent).
-  await sendPushToCleaner(input.cleanerId, {
-    title: input.title,
-    body: input.message,
-    url: input.url ?? "/cleaner/jobs",
-  });
+  await sendPushToCleaner(
+    input.cleanerId,
+    {
+      title: input.title,
+      body: input.message,
+      url: input.url ?? "/cleaner/jobs",
+    },
+    { trigger: input.type, jobId: input.jobId ?? null }
+  );
 
   // SMS for time-critical alerts only.
   if (input.sms) {
@@ -59,6 +87,10 @@ export async function notifyCleaner(input: {
       where: eq(cleaners.id, input.cleanerId),
       columns: { phone: true },
     });
-    await sendSms(cleaner?.phone, `${input.title}: ${input.message}`);
+    await sendSms(cleaner?.phone, `${input.title}: ${input.message}`, {
+      trigger: input.type,
+      userId,
+      jobId: input.jobId ?? null,
+    });
   }
 }

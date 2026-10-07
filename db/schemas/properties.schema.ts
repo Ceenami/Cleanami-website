@@ -55,7 +55,7 @@ export const properties = pgTable(
      * 0041 — varchar + CHECK rather than a pgEnum, because a value added by
      * ALTER TYPE cannot be used until its transaction commits. The two literals
      * are the client's own, from the 2026-08-27 counterproposal; the display
-     * labels ("Vacation Rental Turnover", "One-Time Residential Clean") live in
+     * labels ("Vacation Rental Turnover", "One-Time House Clean") live in
      * the application.
      */
     serviceType: varchar("service_type", {

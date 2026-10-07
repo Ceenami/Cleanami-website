@@ -6,6 +6,8 @@ import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 interface Props {
   paymentIntentId?: string;
   amountInCents?: number | null;
+  /** Shown so the customer can see the code was actually taken into account. */
+  promoCode?: string | null;
   cleanDate?: string;
   arrivalWindow?: string;
   portalInviteEmailSent?: boolean;
@@ -22,6 +24,7 @@ interface Props {
 export const R6Confirmation = ({
   paymentIntentId,
   amountInCents,
+  promoCode,
   cleanDate,
   arrivalWindow,
   portalInviteEmailSent = true,
@@ -56,6 +59,12 @@ export const R6Confirmation = ({
           <div className="flex justify-between">
             <span className="text-gray-600">Arrival window</span>
             <span className="font-medium text-gray-900">{window.label}</span>
+          </div>
+        )}
+        {promoCode && (
+          <div className="flex justify-between">
+            <span className="text-gray-600">Promo code</span>
+            <span className="font-medium text-teal-700">{promoCode}</span>
           </div>
         )}
         {typeof amountInCents === "number" && (

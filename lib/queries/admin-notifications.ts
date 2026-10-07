@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { notifications, users } from "@/db/schemas";
 import { inArray } from "drizzle-orm";
 import { sendAdminAlertEmail } from "@/lib/services/email.service";
+import { recordNotificationAttempt } from "@/lib/services/notifications/notification-log";
 
 type AdminNotificationType =
   | "swap_requested"
@@ -54,6 +55,14 @@ export async function notifyAdmins(input: {
     // why this is logged rather than returned quietly.
     if (admins.length === 0) {
       console.warn("[notifyAdmins] no admin users found; nothing was sent");
+      // A silent zero-admin fan-out looks exactly like a working one. This is
+      // the row that distinguishes them after the fact.
+      await recordNotificationAttempt({
+        channel: "in_app",
+        status: "skipped",
+        error: "no admin users exist to notify",
+        meta: { trigger: input.type, jobId: input.jobId ?? null },
+      });
       return 0;
     }
 
@@ -67,6 +76,19 @@ export async function notifyAdmins(input: {
         metadata: { source: "admin_alert", url: input.url ?? null },
       }))
     );
+
+    for (const admin of admins) {
+      await recordNotificationAttempt({
+        channel: "in_app",
+        status: "sent",
+        meta: {
+          trigger: input.type,
+          userId: admin.id,
+          jobId: input.jobId ?? null,
+          recipient: admin.id,
+        },
+      });
+    }
 
     if (input.email) {
       // One at a time. `sendAdminAlertEmail` is a network call, not a DB query,

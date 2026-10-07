@@ -93,7 +93,22 @@ export const JobCalendarView = () => {
         ) : error ? (
           <div className="text-center py-12 text-red-500">{(error as Error).message}</div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          <div className="space-y-3 md:hidden">
+            {calendarDays.flatMap((day) => day.jobs.map((job) => ({ job, day }))).length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-500">No jobs scheduled this month.</p>
+            ) : (
+              calendarDays.flatMap((day) => day.jobs.map((job) => ({ job, day }))).map(({ job, day }) => (
+                <Link key={job.id} href={`/admin/job-oversight/${job.id}`} className="block rounded-lg border border-gray-200 bg-white p-4 hover:border-teal-300">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{format(day.date, "EEE, MMM d")}</p><p className="mt-1 truncate font-medium text-gray-900">{job.property?.address ?? "Unknown address"}</p><p className="mt-1 text-sm text-gray-500">{job.cleaners.map((entry) => entry.cleaner?.fullName).filter(Boolean).join(", ") || "Unassigned"}</p></div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>{job.status}</span>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <div className="grid grid-cols-7 gap-2 text-center mb-2">
               {weekdays.map((weekday) => (
                 <div key={weekday} className="text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -140,6 +155,7 @@ export const JobCalendarView = () => {
               })}
             </div>
           </div>
+          </>
         )}
 
         {selectedDay && (
