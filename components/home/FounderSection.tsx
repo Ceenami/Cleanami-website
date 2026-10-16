@@ -7,7 +7,7 @@ import { Suspense } from "react";
 
 const FOUNDER_IMAGE_PATH = "/images/ceenami-headshot.jpg";
 const GOOGLE_CALENDAR_BOOKING_URL =
-  "https://calendar.app.google/g2vMVoyihnQK2nPy9";
+  "https://calendar.app.google/48bpmZiPgRz5CoA48";
 
 export const FounderSection = () => {
   const handleBookCall = () => {
