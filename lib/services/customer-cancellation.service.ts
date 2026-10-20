@@ -1,4 +1,6 @@
 import "server-only";
+import { getExecutionContract } from "./job-execution-contract";
+import { cancelExecutionJob } from "./payment/execution-cancellation";
 
 import { db } from "@/db";
 import {
@@ -205,11 +207,14 @@ export async function cancelJobForCustomer(
     throw new Error("Forbidden");
   }
 
+  const issuedExecution = await getExecutionContract(jobId);
+  if (issuedExecution && job.status === "canceled") return cancelExecutionJob(jobId, "customer");
   const eligibility = canCancelJob(job.subscription, job, job.cleaners);
   if (!eligibility.allowed) {
     throw new Error(eligibility.reason ?? "Cannot cancel this clean");
   }
 
+  if (issuedExecution) return cancelExecutionJob(jobId, "customer");
   return finalizeJobCancellation(
     job,
     eligibility.late,
@@ -220,6 +225,7 @@ export async function cancelJobForCustomer(
 }
 
 export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> {
+  if (await getExecutionContract(jobId)) return cancelExecutionJob(jobId, "admin");
   const job = await loadJobContext(jobId);
 
   // One-time jobs do not have a subscription.
@@ -280,6 +286,7 @@ async function finalizeJobCancellation(
   source: "customer" | "admin",
   subscriptionMonths: number
 ): Promise<CancelJobResult> {
+  if (await getExecutionContract(job.id)) return cancelExecutionJob(job.id, source);
   const assignments = job.cleaners;
   let customerCharged = false;
   let cleanerPaid = false;

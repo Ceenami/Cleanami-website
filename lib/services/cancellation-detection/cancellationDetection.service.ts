@@ -1,3 +1,6 @@
+import "server-only";
+import { getExecutionContract } from "@/lib/services/job-execution-contract";
+import { jobOperationAudit } from "@/db/schemas";
 import { schema } from "@/db";
 import { jobs, cancelledJobs, jobsToCleaners } from "@/db/schemas";
 import { and, eq, isNotNull } from "drizzle-orm";
@@ -316,6 +319,10 @@ export class CancellationDetectionService {
   }
 
   private async _processSingleCancellation(job: ExistingJob): Promise<void> {
+    if (await getExecutionContract(job.id)) {
+      await this.db.insert(jobOperationAudit).values({ jobId: job.id, operation: "calendar_cancellation_review", identity: "event-missing", actor: "server" }).onConflictDoNothing();
+      throw new Error("Issued job retained: calendar event missing. Operations must review cancellation/refund; automatic history deletion is blocked.");
+    }
     await this.db.transaction(async (tx) => {
       await tx.delete(jobsToCleaners).where(eq(jobsToCleaners.jobId, job.id));
 

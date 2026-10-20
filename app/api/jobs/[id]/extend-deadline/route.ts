@@ -1,3 +1,4 @@
+import { getExecutionContract } from "@/lib/services/job-execution-contract";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { jobs } from "@/db/schemas";
@@ -18,6 +19,7 @@ export async function POST(
     }
 
     const { id } = await params;
+    if (await getExecutionContract(id)) return NextResponse.json({ error: "Issued job times are frozen. Contact operations for a separately reviewed schedule change." }, { status: 409 });
     const { newDeadline } = await request.json();
 
     if (!newDeadline) {

@@ -1,4 +1,6 @@
 import "server-only";
+import { jobOperationAudit } from "@/db/schemas";
+import { getExecutionContract } from "./job-execution-contract";
 
 import { db } from "@/db";
 import { evidencePackets, jobs, payouts } from "@/db/schemas";
@@ -136,6 +138,12 @@ export async function reconcileStaleJobs(
   const now = new Date();
 
   for (const job of staleJobs as JobRow[]) {
+    // Issued work remains recoverable. Never synthesize departure or settlement.
+    // A review audit is observational; ordinary user departure/finalization remains available.
+    if (await getExecutionContract(job.id)) {
+      await db.insert(jobOperationAudit).values({ jobId: job.id, actor: "server", operation: "reconciliation_review", identity: "service-date-passed" }).onConflictDoNothing();
+      continue;
+    }
     summary.processed += 1;
 
     const address = job.property?.address ?? "Unknown property";

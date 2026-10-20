@@ -1,3 +1,4 @@
+import { executionResponse, executionVisitRequest } from "@/lib/services/job-execution-http";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
@@ -51,6 +52,9 @@ export async function POST(
   if (assignmentError) {
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
+
+  const issuedResponse = await executionResponse(jobId, async () => ({ ...await executionVisitRequest(request, jobId, cleanerId, "departure"), job: await getCleanerJobDetail(cleanerId, jobId) }));
+  if (issuedResponse) return issuedResponse;
 
   try {
     const assignment = await db.query.jobsToCleaners.findFirst({

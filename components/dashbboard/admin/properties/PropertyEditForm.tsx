@@ -294,6 +294,7 @@ export const PropertyEditForm = ({ property }: Props) => {
             />
           </div>
           <div>
+            <p className="text-sm text-gray-600">Time defaults apply to newly created jobs. Existing issued jobs keep their scheduled times.</p>
             <label className={labelClass}>Default Check-out</label>
             <input
               type="time"

@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:execution": "node scripts/test-job-execution.cjs && node scripts/test-execution-timezones.cjs && node scripts/test-execution-transfer.cjs"
   },
   "dependencies": {
     "@react-email/components": "^1.0.2",
@@ -33,15 +34,18 @@
     "react-day-picker": "^9.11.0",
     "react-dom": "19.1.0",
     "resend": "^6.6.0",
+    "sharp": "0.34.5",
     "sonner": "^2.0.4",
     "stripe": "^19.0.0",
     "tailwind-merge": "^3.3.1",
+    "tus-js-client": "4.3.1",
     "twilio": "^6.0.2",
     "use-debounce": "^10.0.6",
     "web-push": "^3.6.7",
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.3.14",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

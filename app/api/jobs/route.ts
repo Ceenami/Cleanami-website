@@ -1,9 +1,10 @@
+import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { jobs, properties } from "@/db/schemas";
+import { properties } from "@/db/schemas";
 import { getJobsWithDetails } from "@/lib/queries/jobs";
 import {
   getDashboardJobDateRange,
@@ -298,9 +299,7 @@ export async function POST(request: NextRequest) {
     : "[System] Manual clean created by admin.";
 
   try {
-    const [created] = await db
-      .insert(jobs)
-      .values({
+    const [created] = await insertIssuedJobs(db, [{
         subscriptionId: null,
         propertyId: property.id,
         checkInTime: arrival,
@@ -326,8 +325,7 @@ export async function POST(request: NextRequest) {
         // of the link back to the original clean — there is no reclean_of
         // column and there is deliberately not going to be one this phase.
         notes: notes ? appendJobNote(systemLine, notes) : systemLine,
-      })
-      .returning({ id: jobs.id });
+      }]);
 
     if (!created) throw new Error("jobs insert returned no rows");
 

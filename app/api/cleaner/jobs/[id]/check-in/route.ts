@@ -1,3 +1,5 @@
+import { getExecutionContract } from "@/lib/services/job-execution-contract";
+import { executionResponse, executionVisitRequest } from "@/lib/services/job-execution-http";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
@@ -66,6 +68,9 @@ export async function POST(
   if (assignmentError) {
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
+
+  const issuedResponse = await executionResponse(jobId, async () => ({ ...await executionVisitRequest(request, jobId, cleanerId, "arrival"), job: await getCleanerJobDetail(cleanerId, jobId) }));
+  if (issuedResponse) return issuedResponse;
 
   // The body carries the device fix and, when the cleaner is retrying a
   // refused check-in, their justification. Read once — `request.json()` can
@@ -195,6 +200,10 @@ export async function POST(
       cleanerId,
       jobId
     );
+
+    for (const otherId of otherInProgressIds) {
+      if (await getExecutionContract(otherId)) return NextResponse.json({ error: "Record departure from your other active job before checking in." }, { status: 409 });
+    }
 
     await db.transaction(async (tx) => {
       if (otherInProgressIds.length > 0) {

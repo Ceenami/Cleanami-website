@@ -1,4 +1,5 @@
 import "server-only";
+import { getExecutionContract } from "../job-execution-contract";
 
 import { db } from "@/db";
 import { evidencePackets } from "@/db/schemas";
@@ -65,6 +66,7 @@ export async function reconcileEvidenceAccountability(
   input: ReconcileInput
 ): Promise<void> {
   const { job, evidence } = input;
+  if (await getExecutionContract(job.id)) return;
   try {
     const checkInDevice = toDevice(
       evidence.checkInLatitude,

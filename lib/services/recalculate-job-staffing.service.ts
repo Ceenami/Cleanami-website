@@ -1,4 +1,5 @@
 import "server-only";
+import { getExecutionContract } from "./job-execution-contract";
 
 import { db } from "@/db";
 import { jobs } from "@/db/schemas";
@@ -59,6 +60,7 @@ export async function recalculateJobStaffing(options?: {
   let updated = 0;
 
   for (const row of targetRows) {
+    if (await getExecutionContract(row.id)) continue;
     const property = row.property;
     if (!property) continue;
 

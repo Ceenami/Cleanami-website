@@ -1,3 +1,6 @@
+import { executionResponse, executionVisitRequest } from "@/lib/services/job-execution-http";
+import { jobsToCleaners as executionAssignments } from "@/db/schemas";
+import { ExecutionError } from "@/lib/services/job-execution";
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -21,6 +24,15 @@ export async function POST(
   if (!jobId) {
     return new NextResponse("Job ID is required", { status: 400 });
   }
+
+  const issuedResponse = await executionResponse(jobId, async () => {
+    const assignments = await db.query.jobsToCleaners.findMany({ where: eq(executionAssignments.jobId, jobId) });
+    const workers = assignments.filter(a => a.role === "primary");
+    const leader = workers.find(a => a.isTeamLeader) ?? (workers.length === 1 ? workers[0] : undefined);
+    if (!leader) throw new ExecutionError("Select an unambiguous working lead before recording this visit");
+    return executionVisitRequest(request, jobId, leader.cleanerId, "arrival");
+  });
+  if (issuedResponse) return issuedResponse;
 
   console.log(`[Check-In] Starting for job: ${jobId}`);
 
