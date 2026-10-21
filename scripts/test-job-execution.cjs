@@ -561,6 +561,28 @@ async function run() {
       );
     }
   });
+  const selected = { ...reserveInput(), source: "gallery", capturedAt: null };
+  await test("selected images after departure are verified without inventing a capture time", async () => {
+    const r = await service.reserveExecutionUpload(job.id, f.cleaner.id, selected);
+    media.set(r.path, jpeg);
+    await service.acknowledgeExecutionUpload(job.id, f.cleaner.id, selected.uploadId);
+    await service.acknowledgeExecutionUpload(job.id, f.cleaner.id, selected.uploadId);
+    const saved = await row(schema.evidenceUploadManifest, schema.evidenceUploadManifest.uploadId, selected.uploadId);
+    assert.equal(saved.source, "gallery"); assert.equal(saved.capturedAt, null); assert.equal(saved.state, "verified");
+    const form = await service.getExecutionEvidence(job.id, f.cleaner.id);
+    assert.equal(form.photos.find(p => p.uploadId === selected.uploadId).source, "gallery");
+    assert.equal(form.isSubmitted, false);
+  });
+  await test("photo source cannot change on retry and imports cannot claim a shutter timestamp", async () => {
+    await assert.rejects(() => service.reserveExecutionUpload(job.id, f.cleaner.id, { ...selected, source: "camera", capturedAt: input.capturedAt }), /different evidence/);
+    await assert.rejects(() => service.reserveExecutionUpload(job.id, f.cleaner.id, { ...selected, uploadId: uuid(), capturedAt: input.capturedAt }), /capture time unknown/);
+    await assert.rejects(() => service.reserveExecutionUpload(job.id, f.cleaner.id, { ...selected, uploadId: uuid(), source: "camera" }), /require a capture time/);
+  });
+  await test("gallery still requires arrival and cannot bypass assignment authorization", async () => {
+    const g = await seed(), j = await make(g);
+    await assert.rejects(() => service.reserveExecutionUpload(j.id, g.cleaner.id, { ...selected, uploadId: uuid() }), /not open/);
+    await assert.rejects(() => service.reserveExecutionUpload(job.id, g.cleaner.id, { ...selected, uploadId: uuid() }), /assignment/);
+  });
   const final = {
     revision: 1,
     items: issued.checklist.map((i) => ({ ...i, completed: true })),

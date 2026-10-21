@@ -3,7 +3,8 @@ export type LocalEvidencePhoto = {
   owner: string;
   jobId: string;
   roomKey: string;
-  capturedAt: string;
+  source?: "camera" | "gallery";
+  capturedAt: string | null;
   blob: Blob;
   sha256: string;
 };

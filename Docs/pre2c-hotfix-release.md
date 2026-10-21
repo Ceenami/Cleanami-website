@@ -29,10 +29,16 @@ checklist completion. Final submission requires departure, all issued minimums
 and no unresolved upload reservations. Only canonical final evidence can settle.
 A repeat identical finalization/settlement is safe; changed final evidence conflicts.
 
-The new web/native clients capture camera photos, normalize them, persist local
+The new web/native clients offer Take photo and Choose existing photos, normalize
+both sources and persist local
 bytes and use signed private Storage/TUS uploads with stable IDs. Upload authorization
 is short-lived and not stored with queued photos. Failed previews do not remove
-accepted evidence. Device captures are time claims, not proof of physical presence.
+accepted evidence. Camera capture times are device claims, not proof of presence.
+Selected images count toward the same room minimums without an extra review gate.
+Their source is recorded as gallery and their original capture time stays unknown;
+selection/upload time is never presented as a camera timestamp. They may be added
+after departure until final submission. Live camera capture remains visit-bounded.
+This follows the client's 21 October direction superseding camera-only policy.
 
 Installed clients retain their endpoint/response contract. The old binary upload
 endpoint adapts issued jobs into the durable manifest; large binary requests still
@@ -96,7 +102,7 @@ no Checkout sessions, live charges, transfers, webhook changes or production
 mutations are part of that test. Existing enabled test webhook subscriptions were
 checked before mutation to exclude PaymentIntent/charge event delivery.
 
-The recorded checks cover 32 local PostgreSQL/service cases, three process timezone
+The recorded checks cover 35 local PostgreSQL/service cases, three process timezone
 runs, four web transfer cases, 13 hosted Auth/Storage/API cases, four large-photo
 transport cases and six browser recovery checks. The hosted large JPEG was
 2,779,943 bytes; both transport adapters uploaded a previously captured image after

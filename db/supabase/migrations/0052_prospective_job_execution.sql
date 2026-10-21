@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS public.evidence_upload_manifest (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS evidence_upload_path_uidx ON public.evidence_upload_manifest(path);
 CREATE INDEX IF NOT EXISTS evidence_upload_job_idx ON public.evidence_upload_manifest(job_id);
+-- 21 October client direction: camera and existing images count equally.
+-- Imported capture time is unknown; never replace it with selection/upload time.
+ALTER TABLE public.evidence_upload_manifest ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'camera';
+ALTER TABLE public.evidence_upload_manifest ALTER COLUMN captured_at DROP NOT NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.evidence_upload_manifest'::regclass AND conname='evidence_upload_source_check') THEN
+    ALTER TABLE public.evidence_upload_manifest ADD CONSTRAINT evidence_upload_source_check CHECK (
+      (source='camera' AND captured_at IS NOT NULL) OR
+      (source='gallery' AND captured_at IS NULL)
+    );
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS public.job_evidence_drafts (
   job_id uuid PRIMARY KEY REFERENCES public.job_execution_contracts(job_id),
   revision integer NOT NULL DEFAULT 0 CHECK (revision>=0),

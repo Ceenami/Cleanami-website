@@ -53,11 +53,15 @@ export const deviceSchema = z.object({
 const reservationSchema = z.object({
   uploadId: z.uuid(),
   roomKey: z.string(),
-  capturedAt: z.iso.datetime(),
+  source: z.enum(["camera", "gallery"]).default("camera"),
+  capturedAt: z.iso.datetime().nullable().default(null),
   byteSize: z.number().int().positive().max(10485760),
   mime: z.enum(["image/jpeg", "image/png", "image/webp"]),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
-});
+}).refine(
+  (photo) => photo.source === "camera" ? photo.capturedAt !== null : photo.capturedAt === null,
+  "Camera photos require a capture time; selected images must leave capture time unknown",
+);
 const draftSchema = z.object({
   revision: z.number().int().nonnegative(),
   items: z
@@ -342,11 +346,14 @@ export async function reserveExecutionUpload(
       writable(job, packet);
       if (!issued.rooms.some((r) => r.roomKey === input.roomKey))
         throw new ExecutionError("Unknown issued room", 400);
-      assertCaptureWindow(
-        new Date(input.capturedAt),
-        packet?.gpsCheckInTimestamp ?? null,
-        packet?.gpsCheckOutTimestamp ?? null,
-      );
+      if (!packet?.gpsCheckInTimestamp)
+        throw new ExecutionError("Record arrival before adding evidence");
+      if (input.source === "camera")
+        assertCaptureWindow(
+          new Date(input.capturedAt!),
+          packet.gpsCheckInTimestamp,
+          packet.gpsCheckOutTimestamp,
+        );
       const [old] = await tx
         .select()
         .from(evidenceUploadManifest)
@@ -359,7 +366,8 @@ export async function reserveExecutionUpload(
           old.sha256 !== input.sha256 ||
           old.byteSize !== input.byteSize ||
           old.mime !== input.mime ||
-          +old.capturedAt !== Date.parse(input.capturedAt) ||
+          old.source !== input.source ||
+          (old.capturedAt ? +old.capturedAt : null) !== (input.capturedAt ? Date.parse(input.capturedAt) : null) ||
           old.state === "removed"
         )
           throw new ExecutionError(
@@ -377,7 +385,7 @@ export async function reserveExecutionUpload(
         .insert(evidenceUploadManifest)
         .values({
           ...input,
-          capturedAt: new Date(input.capturedAt),
+          capturedAt: input.capturedAt ? new Date(input.capturedAt) : null,
           jobId,
           cleanerId,
           path,
@@ -469,11 +477,14 @@ export async function acknowledgeExecutionUpload(
       .where(eq(evidenceUploadManifest.uploadId, uploadId));
     if (!current || current.state === "removed")
       throw new ExecutionError("Photo has been removed");
-    assertCaptureWindow(
-      current.capturedAt,
-      packet?.gpsCheckInTimestamp ?? null,
-      packet?.gpsCheckOutTimestamp ?? null,
-    );
+    if (!packet?.gpsCheckInTimestamp)
+      throw new ExecutionError("Record arrival before adding evidence");
+    if (current.source === "camera") {
+      if (!current.capturedAt) throw new ExecutionError("Camera capture time missing");
+      assertCaptureWindow(current.capturedAt, packet.gpsCheckInTimestamp, packet.gpsCheckOutTimestamp);
+    } else if (current.source !== "gallery" || current.capturedAt !== null) {
+      throw new ExecutionError("Invalid photo source");
+    }
     if (current.state !== "verified")
       await tx
         .update(evidenceUploadManifest)
@@ -668,6 +679,8 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
       roomKey: u.roomKey,
       path: u.path,
       state: u.state,
+      source: u.source,
+      capturedAt: u.capturedAt?.toISOString() ?? null,
       url,
       mine: u.cleanerId === cleanerId,
     });

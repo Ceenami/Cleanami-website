@@ -35,6 +35,7 @@ export type ExecutionForm = {
     roomKey: string;
     path: string;
     state: string;
+    source?: "camera" | "gallery";
     url: string | null;
     mine: boolean;
   }[];
@@ -145,11 +146,12 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         ),
       );
       const blob = await normalizePhoto(source);
-      const item = {
+      const item: LocalEvidencePhoto = {
         uploadId: crypto.randomUUID(),
         owner: form.queueOwner,
         jobId,
         roomKey: room,
+        source: "camera",
         capturedAt,
         blob,
         sha256: await photoHash(blob),
@@ -160,6 +162,24 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
       closeCamera();
       setMessage("Photo saved on this device. Upload to save it to the job.");
     });
+  }
+  async function choosePhotos(roomKey: string, files: File[]) {
+    if (!form) return;
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        const blob = await normalizePhoto(file);
+        await putLocalPhoto({
+          uploadId: crypto.randomUUID(), owner: form.queueOwner, jobId, roomKey,
+          source: "gallery", capturedAt: null, blob, sha256: await photoHash(blob),
+        });
+      } catch (error) {
+        failures.push(`${file.name}: ${error instanceof Error ? error.message : "Could not save photo"}`);
+      }
+    }
+    setPhotos(await localPhotos(form.queueOwner, jobId));
+    if (failures.length) throw Error(`Some photos could not be saved. Other saved photos are retained. ${failures.join("; ")}`);
+    setMessage("Selected photos saved on this device. Upload to save them to the job.");
   }
   async function upload() {
     if (!form) return;
@@ -174,6 +194,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
           operation: "reserve",
           uploadId: photo.uploadId,
           roomKey: photo.roomKey,
+          source: photo.source ?? "camera",
           capturedAt: photo.capturedAt,
           byteSize: photo.blob.size,
           mime: photo.blob.type,
@@ -225,7 +246,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         {form.isSubmitted
           ? "Final evidence submitted. Payment processing is pending."
           : form.departureRecorded
-            ? "Departure recorded. Upload photos captured during your visit, then submit final evidence."
+            ? "Departure recorded. Choose existing photos or finish your queued uploads, then submit final evidence."
             : "Save progress as you work. Record departure when you leave, then submit final evidence."}
       </p>
       {error && (
@@ -274,11 +295,27 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                   Take photo
                 </button>
               )}
+              {form.arrivalRecorded && (
+                <label className="inline-flex cursor-pointer rounded border px-3 py-2 ml-2">
+                  Choose existing photos
+                  <input
+                    type="file" accept="image/jpeg,image/png,image/webp" multiple
+                    aria-label={`Choose existing photos for ${r.label}`}
+                    className="sr-only" disabled={busy || !!room}
+                    onChange={(event) => {
+                      const files = Array.from(event.currentTarget.files ?? []);
+                      event.currentTarget.value = "";
+                      if (files.length) void run(() => choosePhotos(r.roomKey, files));
+                    }}
+                  />
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 {form.photos
                   .filter((p) => p.roomKey === r.roomKey)
                   .map((p) => (
                     <div key={p.uploadId}>
+                      <p className="text-xs">{p.source === "gallery" ? "Selected photo" : "Camera photo"}</p>
                       {p.url ? (
                         <img
                           src={p.url}

@@ -115,7 +115,7 @@ export async function normalizePhoto(source: Blob): Promise<Blob> {
   const bitmap = await createImageBitmap(source, {
     imageOrientation: "from-image",
   }).catch(() => {
-    throw Error("This image cannot be decoded. Capture a new JPEG photo.");
+    throw Error("This image cannot be decoded. Choose a valid JPEG, PNG or WebP image, or take a new photo.");
   });
   try {
     const ratio = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
