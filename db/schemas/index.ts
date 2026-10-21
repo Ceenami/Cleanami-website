@@ -38,3 +38,5 @@ export * from './disputes.schema';
 export * from './propertyCleaners.schema';
 export * from './ratings.schema';
 export * from './processedStripeEvents.schema';
+
+export * from "./jobExecution.schema";

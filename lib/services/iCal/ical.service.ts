@@ -1,7 +1,10 @@
+import "server-only";
+import { insertIssuedJobs, enrollmentEnabled } from "@/lib/services/job-execution-contract";
+import { calendarDay, rentalSchedule } from "@/lib/jobs/execution-policy";
+import type { Database } from "@/db";
 import { schema } from "@/db";
 import { jobs } from "@/db/schemas";
 import { and, eq } from "drizzle-orm";
-import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as webcal from "node-ical";
 import { VEvent } from "node-ical";
 import { fromZonedTime } from "date-fns-tz";
@@ -14,7 +17,7 @@ import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
 import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 
 type NewJob = typeof jobs.$inferInsert;
-type DrizzleDb = NodePgDatabase<typeof schema>;
+type DrizzleDb = Database;
 
 const IANA_TIMEZONE = "America/New_York";
 const DEFAULT_CHECKIN_TIME = "T16:00:00"; // 4:00 PM
@@ -55,7 +58,7 @@ const createFloridaDate = (date: Date, timeStr: string): Date => {
  */
 export const getEventJobStartTime = (event: VEvent): Date =>
   isDateOnly(event)
-    ? createFloridaDate(event.end, DEFAULT_CHECKOUT_TIME)
+    ? createFloridaDate(new Date(`${calendarDay(event.end)}T00:00:00Z`), DEFAULT_CHECKOUT_TIME)
     : event.end;
 
 /**
@@ -80,6 +83,8 @@ type SyncContext = {
 };
 
 type PropertyDetails = {
+  defaultCheckOutTime?: string | null;
+  defaultCheckInTime?: string | null;
   bedCount: number;
   bathCount: string;
   sqFt: number | null;
@@ -323,11 +328,14 @@ export class ICalService {
     // Loaded once for the whole batch rather than per generated job.
     const hotTubTimeAdditions = await loadHotTubTimeAdditions();
 
-    const allJobsToInsert: NewJob[] = filteredEvents.map((event, index) => {
+    const existingRows = await this.db.select({ uid: jobs.calendarEventUid }).from(jobs).where(eq(jobs.propertyId, context.propertyId));
+    const existingKeys = new Set(existingRows.map(j => j.uid));
+    const allJobsToInsert: NewJob[] = filteredEvents.flatMap((event, index) => {
+      if (existingKeys.has(getEventCompositeUid(event))) return [];
       const isEndDateOnly = isDateOnly(event);
 
       // Arrival window anchor = guest checkout time
-      const jobStartTime: Date = isEndDateOnly
+      let jobStartTime: Date = isEndDateOnly
         ? createFloridaDate(event.end, DEFAULT_CHECKOUT_TIME)
         : event.end;
 
@@ -357,6 +365,12 @@ export class ICalService {
         jobDeadline = standardDeadline;
       }
 
+      if (enrollmentEnabled()) {
+        const corrected = rentalSchedule(event, nextEvent, property);
+        jobStartTime = corrected.start;
+        jobDeadline = corrected.deadline;
+      }
+
       // Calculate details (hours, team size, deep clean status, expected loads)
       const jobDetails = this._calculateJobDetails(
         property,
@@ -366,9 +380,9 @@ export class ICalService {
       );
 
       // "Deduplicate jobs using (UID + end_date)"
-      const compositeUid = `${event.uid}_${jobStartTime.toISOString()}`;
+      const compositeUid = getEventCompositeUid(event);
 
-      return {
+      return [{
         subscriptionId: context.subscriptionId,
         propertyId: context.propertyId,
         checkInTime: jobStartTime,
@@ -402,39 +416,30 @@ export class ICalService {
           hotTubHours: jobDetails.hotTubHours,
         },
         checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
-      };
+      }];
     });
 
-    let totalSynced = 0;
+    const existing = filteredEvents.filter(e => existingKeys.has(getEventCompositeUid(e))).length;
+    let totalCreated = 0;
 
     for (let i = 0; i < allJobsToInsert.length; i += BATCH_SIZE) {
       const batch = allJobsToInsert.slice(i, i + BATCH_SIZE);
       console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}...`);
 
       try {
-        const result = await this.db
-          .insert(jobs)
-          .values(batch)
-          .onConflictDoUpdate({
-            target: jobs.calendarEventUid,
-            set: {
-              checkInTime: jobs.checkInTime,
-              checkOutTime: jobs.checkOutTime,
-              expectedHours: jobs.expectedHours,
-              addonsSnapshot: jobs.addonsSnapshot,
-            },
-          })
-          .returning({ id: jobs.id });
+        const result = await insertIssuedJobs(this.db, batch);
 
-        totalSynced += result.length;
+        totalCreated += result.length;
       } catch (error) {
         console.error(`Error processing batch starting at index ${i}:`, error);
       }
     }
 
     return {
-      message: `Successfully synced ${totalSynced} of ${allJobsToInsert.length} total events.`,
-      totalSynced,
+      message: `Created ${totalCreated} jobs; retained ${existing} existing jobs unchanged.`,
+      totalSynced: totalCreated + existing,
+      totalCreated,
+      totalExisting: existing,
     };
   }
 }

@@ -1,4 +1,6 @@
 import "server-only";
+import { getExecutionContract } from "../job-execution-contract";
+import { settleExecutionJob } from "./execution-settlement";
 
 import { db } from "@/db";
 import {
@@ -50,6 +52,7 @@ async function emailCompletion(
 export async function captureAndCreatePayouts(
   jobId: string
 ): Promise<CaptureOutcome> {
+  if (await getExecutionContract(jobId)) return settleExecutionJob(jobId);
   const job = await db.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
     with: {

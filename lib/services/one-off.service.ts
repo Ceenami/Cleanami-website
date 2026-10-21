@@ -1,3 +1,4 @@
+import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import "server-only";
 
 import { randomUUID } from "crypto";
@@ -480,9 +481,7 @@ export async function bookOneOffClean(
   // Refund the charge if the job cannot be saved.
   let job: { id: string } | undefined;
   try {
-    [job] = await db
-      .insert(jobs)
-      .values({
+    [job] = await insertIssuedJobs(db, [{
         subscriptionId: null,
         propertyId: property.id,
         checkInTime: arrival,
@@ -504,11 +503,22 @@ export async function bookOneOffClean(
         notes: skipPayment
           ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`
           : `[System] One-off clean prepaid. PaymentIntent ${paymentIntentId}.`,
-      })
-      .returning({ id: jobs.id });
+      }]);
 
     if (!job) throw new Error("jobs insert returned no rows");
   } catch (err) {
+    // An insert/commit response can be lost or a concurrent retry can win the
+    // PaymentIntent unique constraint. Never refund a charge funding a saved job.
+    if (paymentIntentId) {
+      try {
+        const replayed = await db.query.jobs.findFirst({ where: eq(jobs.paymentIntentId, paymentIntentId), columns: { id: true, status: true } });
+        if (replayed) return replayed.status === "canceled"
+          ? { success: false, error: "This payment belongs to a canceled booking. Contact support before booking again." }
+          : { success: true, jobId: replayed.id, amountCents: chargeAmountCents, promoCode: appliedPromo?.code, promoDiscountCents: appliedPromo?.discountCents };
+      } catch {
+        return { success: false, unexpected: true, error: "We could not confirm whether your paid booking was saved. Do not pay again; refresh or contact support." };
+      }
+    }
     console.error(
       "[bookOneOffClean] job insert failed AFTER charge — refunding",
       err

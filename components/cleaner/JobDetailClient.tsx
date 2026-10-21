@@ -68,6 +68,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [executionOverrideReason, setExecutionOverrideReason] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
 
   const loadJob = useCallback(async () => {
@@ -113,7 +114,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
       const response = await fetch(`/api/cleaner/jobs/${jobId}/check-in`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ location }),
+        body: JSON.stringify({ location, ...(job?.executionProtocol && executionOverrideReason.trim() ? { override: { reason: executionOverrideReason.trim() } } : {}) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Check-in failed");
@@ -179,11 +180,12 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
   const hasAccessInfo = Boolean(
     job.entryMethodLabel || job.entryInstructions || job.parkingInstructions
   );
-  const canCheckIn = job.status === "assigned";
+  const workingRole = !job.executionProtocol || job.role !== "backup";
+  const canCheckIn = job.status === "assigned" && workingRole;
   const canCheckOut =
-    job.status === "in-progress" && job.evidence.hasSubmitted;
+    workingRole && job.status === "in-progress" && (!!job.executionProtocol || job.evidence.hasSubmitted);
   const showEvidenceLink =
-    job.status === "in-progress" || job.status === "completed_pending_evidence";
+    workingRole && (job.status === "in-progress" || job.status === "completed_pending_evidence");
 
   return (
     <div className="space-y-4">
@@ -391,6 +393,15 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
       <RestockRequestCard jobId={jobId} />
 
       <div className="space-y-2">
+        {canCheckIn && job.executionProtocol && (
+          <label className="block text-sm">
+            Location override reason (10–500 characters)
+            <span className="block text-gray-600">
+              Required if location is unavailable or you are outside the property’s geofence.
+            </span>
+            <input className="block w-full rounded border p-2" value={executionOverrideReason} maxLength={500} onChange={e => setExecutionOverrideReason(e.target.value)} />
+          </label>
+        )}
         {canCheckIn && (
           <button
             type="button"
@@ -425,7 +436,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
           </button>
         )}
 
-        {job.status === "in-progress" && !job.evidence.hasSubmitted && (
+        {job.status === "in-progress" && !job.executionProtocol && !job.evidence.hasSubmitted && (
           <p className="text-center text-xs text-gray-500">
             Submit your evidence packet before checking out.
           </p>

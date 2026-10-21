@@ -1,3 +1,4 @@
+import { executionResponse, executionLegacyUpload } from "@/lib/services/job-execution-http";
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -41,6 +42,9 @@ export async function POST(
   if (assignmentError) {
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
+
+  const issuedResponse = await executionResponse(jobId, () => executionLegacyUpload(request, jobId, cleanerId));
+  if (issuedResponse) return issuedResponse;
 
   try {
     // Room photos are proof the cleaner was in that room during this visit, so

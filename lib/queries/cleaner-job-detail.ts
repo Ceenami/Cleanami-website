@@ -1,4 +1,6 @@
 import "server-only";
+import { getExecutionEvidence } from "@/lib/services/job-execution";
+import { getExecutionContract } from "@/lib/services/job-execution-contract";
 
 import { db } from "@/db";
 import {
@@ -84,6 +86,7 @@ async function signRoomPhotos(
 
 export type CleanerJobDetail = {
   jobId: string;
+  executionProtocol?: string | null;
   status: string;
   propertyAddress: string | null;
   arrivalWindow: string | null;
@@ -197,7 +200,8 @@ export async function getCleanerJobDetail(
     ),
   });
 
-  const checklistFiles = await signChecklistFiles(property?.checklistFiles ?? []);
+  const executionContract = await getExecutionContract(jobId);
+  const checklistFiles = await signChecklistFiles(executionContract ? job.checklistSnapshot?.files ?? [] : property?.checklistFiles ?? []);
 
   // The deduction is derived from the recorded lateness, in dollars — never
   // from `lateEvent.penaltyPoints`, which is a reliability score in points and
@@ -213,13 +217,14 @@ export async function getCleanerJobDetail(
     arrivalDelayMinutes,
     latePenaltyReason: lateEvent
       ? `${lateEvent.eventType.replace("_", " ")} (${lateEvent.notes ?? "reliability event"})`
-      : arrivalDelayMinutes && arrivalDelayMinutes > 0
+      : arrivalDelayMinutes && arrivalDelayMinutes > (executionContract ? 10 : 0)
         ? `Arrived ${arrivalDelayMinutes} min late`
         : null,
   });
 
   return {
     jobId: job.id,
+    executionProtocol: executionContract?.protocol ?? null,
     status: job.status ?? "assigned",
     propertyAddress: property?.address ?? null,
     arrivalWindow: formatDateTime(job.checkInTime),
@@ -247,7 +252,7 @@ export async function getCleanerJobDetail(
     evidence: {
       isChecklistComplete: job.evidencePacket?.isChecklistComplete ?? false,
       status: job.evidencePacket?.status ?? null,
-      hasSubmitted: job.evidencePacket?.isChecklistComplete ?? false,
+      hasSubmitted: executionContract ? !!job.evidencePacket?.finalEvidenceSubmittedAt : job.evidencePacket?.isChecklistComplete ?? false,
     },
   };
 }
@@ -256,6 +261,8 @@ export async function getCleanerEvidenceFormData(
   cleanerId: string,
   jobId: string
 ) {
+  const issuedForm = await getExecutionEvidence(jobId, cleanerId);
+  if (issuedForm) return issuedForm;
   const assignment = await db.query.jobsToCleaners.findFirst({
     where: and(
       eq(jobsToCleaners.cleanerId, cleanerId),

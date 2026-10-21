@@ -1,3 +1,5 @@
+import { executionResponse } from "@/lib/services/job-execution-http";
+import { ExecutionError, saveExecutionDraft } from "@/lib/services/job-execution";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
@@ -92,6 +94,20 @@ export async function PATCH(
   }
 
   try {
+    const issuedResponse = await executionResponse(jobId, async () => {
+      const body = await request.json();
+      // Compatibility for installed clients: pre-departure PATCH saves a draft;
+      // the established post-departure PATCH is an explicit final submission.
+      const state = await getCleanerEvidenceFormData(cleanerId, jobId);
+      if (!state || !("protocol" in state)) throw new Error("Issued form unavailable");
+      const notes = body.cleanerNotes ?? state.cleanerNotes;
+      if (body.revision === undefined && state.revision > 0) {
+        const same = state.checklistItems.every(item => body.checklistLog?.items?.find((candidate: { id: string; completed: boolean }) => candidate.id === item.id)?.completed === item.completed) && notes === state.cleanerNotes;
+        if (!same) throw new ExecutionError("Saved progress differs from this client. Reload using the updated app or web form before changing it.");
+      }
+      return saveExecutionDraft(jobId, cleanerId, { revision: body.revision ?? state.revision, items: body.checklistLog?.items, notes }, !!state.departureRecorded);
+    });
+    if (issuedResponse) return issuedResponse;
     const body = (await request.json()) as PatchBody;
     const { checklistLog, cleanerNotes } = body;
 

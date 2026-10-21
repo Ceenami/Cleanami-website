@@ -1,3 +1,4 @@
+import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import "server-only";
 
 import { randomUUID } from "crypto";
@@ -777,9 +778,7 @@ export async function completeResidentialBooking(
       if (!property) throw new Error("properties insert returned no rows");
 
       // Synthetic UID keeps this job out of calendar cancellation detection.
-      const [job] = await tx
-        .insert(jobs)
-        .values({
+      const [job] = await insertIssuedJobs(tx, [{
           subscriptionId: null,
           propertyId: property.id,
           serviceType: "residential_one_time",
@@ -795,8 +794,7 @@ export async function completeResidentialBooking(
           // Keep the promo reference with the paid job.
           promoCodeId,
           notes: `[System] Residential one-time clean, prepaid. PaymentIntent ${paymentIntentId}.`,
-        })
-        .returning({ id: jobs.id });
+        }]);
 
       if (!job) throw new Error("jobs insert returned no rows");
 
