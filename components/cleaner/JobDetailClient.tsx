@@ -393,7 +393,15 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
       <RestockRequestCard jobId={jobId} />
 
       <div className="space-y-2">
-        {canCheckIn && job.executionProtocol && <label className="block text-sm">Location override reason (only if location is unavailable)<input className="block w-full rounded border p-2" value={executionOverrideReason} maxLength={500} onChange={e => setExecutionOverrideReason(e.target.value)} /></label>}
+        {canCheckIn && job.executionProtocol && (
+          <label className="block text-sm">
+            Location override reason (10–500 characters)
+            <span className="block text-gray-600">
+              Required if location is unavailable or you are outside the property’s geofence.
+            </span>
+            <input className="block w-full rounded border p-2" value={executionOverrideReason} maxLength={500} onChange={e => setExecutionOverrideReason(e.target.value)} />
+          </label>
+        )}
         {canCheckIn && (
           <button
             type="button"

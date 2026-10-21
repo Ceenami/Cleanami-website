@@ -180,7 +180,7 @@ export async function recordExecutionVisit(
           overrideReason.length > 500)
       )
         throw new ExecutionError(
-          "Location is required at the property; provide a reason of 10–500 characters if location cannot be verified",
+          "Your location is outside the property's geofence or could not be verified. To check in with a location override, enter a reason of 10–500 characters.",
         );
       const siblings = await tx
         .select({ id: jobs.id })
