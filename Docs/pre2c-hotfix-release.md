@@ -113,6 +113,29 @@ their cleaners ineligible and payout transfers disabled.
 These results do not replace an owner review of the production catalog/runtime or
 physical device acceptance. An iOS build still requires macOS/Xcode/CocoaPods.
 
+## Cleaner browser workflow
+
+The issued-job evidence workspace follows the existing portal brand and uses
+three sections: Photos, Checklist, and Finish. Camera and existing-photo controls
+appear side by side on phones, with local previews and separate device/server
+statuses. The checklist retains its issued section labels and task IDs. Desktop
+uses a wider workspace with a progress sidebar; controls have visible focus and
+at least 44px targets. The portal uses a consistent light control palette.
+
+Saving progress remains separate from uploading photos and final submission.
+Refreshing previews or removing a photo retains unsaved checklist/notes edits;
+refreshing an unedited draft adopts the latest saved revision. Conflicting edited
+drafts keep their original revision and explain the need to review the other
+session's changes. Departure requires an explicit confirmation, and final
+submission explains the existing photo/checklist/visit prerequisites.
+
+UI follow-up validation: production-mode build, typecheck and changed-file lint;
+19 browser state/layout checks plus four keyboard checks. Browser widths included
+320, 390 and 1440px. UI write responses were mocked for failure, draft, departure
+and finality states; these checks do not claim new hosted write or device-camera
+acceptance. Existing service/transfer suites also passed. No production migration,
+job rewrite or mobile application change accompanies this presentation update.
+
 ## Rollback
 
 Before any issued jobs exist, the old application can be restored with enrollment
