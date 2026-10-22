@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { deleteProperty, updateProperty } from "@/lib/queries/properties";
+import { ScheduleUpdateError } from "@/lib/services/property-schedule";
 import { deletePropertyParamsSchema } from "@/lib/validations/customer-record";
 import {
   MAX_GEOFENCE_RADIUS_METERS,
@@ -16,7 +17,10 @@ import {
 // Accept HH:MM or HH:MM:SS (some browsers' <input type="time"> omit seconds);
 // normalized to HH:MM:SS before storage so the column format stays consistent.
 const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
-const normalizeTime = (t: string) => (t.length === 5 ? `${t}:00` : t);
+const normalizeTime = (t: string) => {
+  const [hours, minutes, seconds = "00"] = t.split(":");
+  return `${hours.padStart(2, "0")}:${minutes}:${seconds}`;
+};
 
 const updatePropertySchema = z
   .object({
@@ -85,7 +89,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { isAdmin, error } = await getAdminAuth(request);
+  const { isAdmin, userId, error } = await getAdminAuth(request);
   if (!isAdmin) {
     return NextResponse.json({ error: error ?? "Unauthorized" }, { status: 401 });
   }
@@ -112,9 +116,16 @@ export async function PATCH(
     const { confirmOutOfServiceArea, ...fields } = parsed.data;
     const result = await updateProperty(idParsed.data.propertyId, fields, {
       allowOutOfServiceArea: confirmOutOfServiceArea === true,
+      actor: userId ?? "admin",
     });
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
+    if (err instanceof ScheduleUpdateError) {
+      return NextResponse.json(
+        { error: err.message, code: "SCHEDULE_UPDATE_BLOCKED" },
+        { status: err.status }
+      );
+    }
     console.error("[PATCH /api/properties/[id]]", err);
     const message =
       err instanceof Error ? err.message : "Failed to update property";

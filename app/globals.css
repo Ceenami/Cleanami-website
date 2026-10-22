@@ -22,6 +22,55 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+/* Bound native controls without resizing hidden uploads or checkboxes.
+   A 16px mobile font prevents iOS zoom on focus. */
+.dashboard-form :where(
+  input:not([type]),
+  input[type="text"],
+  input[type="search"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="number"],
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  select,
+  textarea
+) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+@media (width < 40rem) {
+  .dashboard-form :where(
+    input:not([type]),
+    input[type="text"],
+    input[type="search"],
+    input[type="email"],
+    input[type="tel"],
+    input[type="url"],
+    input[type="number"],
+    input[type="date"],
+    input[type="time"],
+    input[type="datetime-local"],
+    select,
+    textarea
+  ) {
+    min-block-size: 2.75rem;
+    font-size: 1rem;
+  }
+
+  .dashboard-form input:is([type="date"], [type="time"], [type="datetime-local"]) {
+    inline-size: 100%;
+  }
+
+  .dashboard-form input::-webkit-date-and-time-value {
+    min-block-size: 1.5em;
+    text-align: start;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;

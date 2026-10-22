@@ -40,3 +40,4 @@ export * from './ratings.schema';
 export * from './processedStripeEvents.schema';
 
 export * from "./jobExecution.schema";
+export * from "./jobScheduleRevisions.schema";

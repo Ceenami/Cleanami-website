@@ -7,8 +7,8 @@ process.env.TSX_TSCONFIG_PATH = require("node:path").join(
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://synthetic.supabase.co";
 process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
-process.env.JOB_EXECUTION_SCHEMA_READY = "true";
-process.env.JOB_EXECUTION_ENROLLMENT = "true";
+delete process.env.JOB_EXECUTION_SCHEMA_READY;
+delete process.env.JOB_EXECUTION_ENROLLMENT;
 require("tsx/cjs");
 const fs = require("node:fs"),
   path = require("node:path"),
@@ -201,6 +201,8 @@ async function run() {
         "job_evidence_drafts",
         "evidence_upload_manifest",
         "job_operation_audit",
+        "job_schedule_revisions",
+        "job_schedule_notices",
       ].includes(t.name)
     )
       continue;
@@ -264,6 +266,11 @@ async function run() {
   await test("migration applies and reapplies without rewriting existing rows", async () => {
     await pg.exec(sql);
     await pg.exec(sql);
+    if (process.argv.includes("--with-schedule-upgrade")) {
+      const scheduleSql = fs.readFileSync(path.join(root, "db/supabase/migrations/0053_property_schedule_revisions.sql"), "utf8");
+      await pg.exec(scheduleSql);
+      await pg.exec(scheduleSql);
+    }
     assert.equal(
       JSON.stringify(
         await pg.query("SELECT row_to_json(j) as row FROM jobs j ORDER BY id"),
@@ -298,11 +305,20 @@ async function run() {
     );
     assert.equal(await contracts.getExecutionContract(legacy.id), null);
   });
-  await test("enrollment off leaves a genuine new job legacy", async () => {
-    process.env.JOB_EXECUTION_ENROLLMENT = "false";
-    const j = await make(f);
-    assert.equal(await contracts.getExecutionContract(j.id), null);
-    process.env.JOB_EXECUTION_ENROLLMENT = "true";
+  await test("new jobs enroll with the old environment setting absent or false", async () => {
+    try {
+      for (const setting of [undefined, "false"]) {
+        if (setting === undefined) delete process.env.JOB_EXECUTION_ENROLLMENT;
+        else process.env.JOB_EXECUTION_ENROLLMENT = setting;
+        const j = await make(f);
+        const contract = await contracts.getExecutionContract(j.id);
+        assert.equal(contract.protocol, policy.EXECUTION_PROTOCOL);
+        assert.equal(contract.plannedStart, j.checkInTime.toISOString());
+      }
+      assert.equal(await contracts.getExecutionContract(legacy.id), null);
+    } finally {
+      delete process.env.JOB_EXECUTION_ENROLLMENT;
+    }
   });
   await test("nested booking transaction enrolls its new row atomically", async () => {
     const nested = await db.transaction((tx) =>

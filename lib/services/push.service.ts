@@ -42,7 +42,8 @@ export type PushPayload = {
 export async function sendPushToCleaner(
   cleanerId: string,
   payload: PushPayload,
-  meta?: NotificationMeta
+  meta?: NotificationMeta,
+  options?: { throwOnFailure?: boolean }
 ): Promise<number> {
   const logMeta: NotificationMeta = {
     trigger: "push",
@@ -122,5 +123,6 @@ export async function sendPushToCleaner(
     meta: logMeta,
   });
 
+  if (!sent && lastError && options?.throwOnFailure) throw lastError;
   return sent;
 }

@@ -206,6 +206,18 @@ export async function POST(
     }
 
     await db.transaction(async (tx) => {
+      const [lockedJob] = await tx
+        .select()
+        .from(jobs)
+        .where(eq(jobs.id, jobId))
+        .for("update");
+      if (
+        !lockedJob ||
+        lockedJob.checkInTime?.getTime() !== scheduledCheckIn?.getTime() ||
+        lockedJob.status !== jobBefore?.status
+      ) {
+        throw new Error("BOOKING_SCHEDULE_CHANGED");
+      }
       if (otherInProgressIds.length > 0) {
         await tx
           .update(jobs)
@@ -358,6 +370,12 @@ export async function POST(
     const job = await getCleanerJobDetail(cleanerId, jobId);
     return NextResponse.json({ success: true, job });
   } catch (err) {
+    if (err instanceof Error && err.message === "BOOKING_SCHEDULE_CHANGED") {
+      return NextResponse.json(
+        { error: "The booking changed while you were checking in. Refresh the job and try again." },
+        { status: 409 }
+      );
+    }
     console.error("[POST /api/cleaner/jobs/[id]/check-in]", err);
     return NextResponse.json(
       { error: "Failed to check in" },

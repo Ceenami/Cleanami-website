@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:execution": "node scripts/test-job-execution.cjs && node scripts/test-execution-timezones.cjs && node scripts/test-execution-transfer.cjs"
+    "test:execution": "node scripts/test-job-execution.cjs && node scripts/test-execution-timezones.cjs && node scripts/test-execution-transfer.cjs",
+    "test:property-schedule": "node scripts/test-property-schedule.cjs"
   },
   "dependencies": {
     "@react-email/components": "^1.0.2",

@@ -1,5 +1,5 @@
 import "server-only";
-import { insertIssuedJobs, enrollmentEnabled } from "@/lib/services/job-execution-contract";
+import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import { calendarDay, rentalSchedule } from "@/lib/jobs/execution-policy";
 import type { Database } from "@/db";
 import { schema } from "@/db";
@@ -20,7 +20,6 @@ type NewJob = typeof jobs.$inferInsert;
 type DrizzleDb = Database;
 
 const IANA_TIMEZONE = "America/New_York";
-const DEFAULT_CHECKIN_TIME = "T16:00:00"; // 4:00 PM
 const DEFAULT_CHECKOUT_TIME = "T09:00:00"; // 9:00 AM
 const BATCH_SIZE = 100;
 
@@ -51,10 +50,8 @@ const createFloridaDate = (date: Date, timeStr: string): Date => {
 };
 
 /**
- * The cleaning job's start anchor = the guest checkout time. For date-only
- * events this normalizes to the property's default checkout time in ET.
- * Must match the `jobStartTime` used when jobs are created (see
- * `_processAndSaveEventsInBatches`) so composite UIDs line up.
+ * Keep the legacy 09:00 anchor in calendar IDs even when a booking's start moves.
+ * Cancellation detection must still recognize the same event after a time edit.
  */
 export const getEventJobStartTime = (event: VEvent): Date =>
   isDateOnly(event)
@@ -83,6 +80,8 @@ type SyncContext = {
 };
 
 type PropertyDetails = {
+  id: string;
+  iCalUrl: string | null;
   defaultCheckOutTime?: string | null;
   defaultCheckInTime?: string | null;
   bedCount: number;
@@ -332,44 +331,12 @@ export class ICalService {
     const existingKeys = new Set(existingRows.map(j => j.uid));
     const allJobsToInsert: NewJob[] = filteredEvents.flatMap((event, index) => {
       if (existingKeys.has(getEventCompositeUid(event))) return [];
-      const isEndDateOnly = isDateOnly(event);
-
-      // Arrival window anchor = guest checkout time
-      let jobStartTime: Date = isEndDateOnly
-        ? createFloridaDate(event.end, DEFAULT_CHECKOUT_TIME)
-        : event.end;
-
-      // Calculate the "Standard" deadline (4PM on the day of checkout)
-      const standardDeadline = createFloridaDate(
-        event.end,
-        DEFAULT_CHECKIN_TIME
-      );
-
       const nextEvent = filteredEvents[index + 1];
-
-      // must-finish-before = next guest check-in time (default 4PM if missing)
-      let jobDeadline: Date;
-
-      if (nextEvent) {
-        const isNextStartDateOnly = isDateOnly(nextEvent);
-        const nextCheckIn = isNextStartDateOnly
-          ? createFloridaDate(nextEvent.start, DEFAULT_CHECKIN_TIME)
-          : nextEvent.start;
-
-        // Take the earlier of the two times
-        jobDeadline =
-          nextCheckIn.getTime() < standardDeadline.getTime()
-            ? nextCheckIn
-            : standardDeadline;
-      } else {
-        jobDeadline = standardDeadline;
-      }
-
-      if (enrollmentEnabled()) {
-        const corrected = rentalSchedule(event, nextEvent, property);
-        jobStartTime = corrected.start;
-        jobDeadline = corrected.deadline;
-      }
+      const { start: jobStartTime, deadline: jobDeadline } = rentalSchedule(
+        event,
+        nextEvent,
+        property
+      );
 
       // Calculate details (hours, team size, deep clean status, expected loads)
       const jobDetails = this._calculateJobDetails(
@@ -427,7 +394,12 @@ export class ICalService {
       console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}...`);
 
       try {
-        const result = await insertIssuedJobs(this.db, batch);
+        const result = await insertIssuedJobs(this.db, batch, {
+          id: property.id,
+          iCalUrl: property.iCalUrl,
+          defaultCheckInTime: property.defaultCheckInTime ?? null,
+          defaultCheckOutTime: property.defaultCheckOutTime ?? null,
+        });
 
         totalCreated += result.length;
       } catch (error) {

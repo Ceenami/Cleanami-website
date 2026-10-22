@@ -61,7 +61,10 @@ export const PropertyDetailesRightColumn = ({
     setError(null);
     setAddingLink(true);
     try {
-      const result = await addPropertyChecklistLink(propertyId, linkValue.trim());
+      const result = await addPropertyChecklistLink(
+        propertyId,
+        linkValue.trim(),
+      );
       if (!result.success) {
         setError(result.error ?? "Could not add link");
         return;
@@ -105,6 +108,37 @@ export const PropertyDetailesRightColumn = ({
 
   const busy = uploading || isPending || addingLink;
 
+  const fileActions = (item: ChecklistFileItem) => (
+    <div className="flex shrink-0 items-center justify-center gap-1">
+      {item.url && (
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={item.isLink ? "Open link" : "Download"}
+          aria-label={`${item.isLink ? "Open" : "Download"} ${item.fileName}`}
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-gray-500 hover:bg-teal-50 hover:text-teal-600"
+        >
+          {item.isLink ? (
+            <ExternalLink className="h-4 w-4" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+        </a>
+      )}
+      <button
+        type="button"
+        onClick={() => handleDelete(item.id)}
+        disabled={busy}
+        title="Delete"
+        aria-label={`Delete ${item.fileName}`}
+        className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <Card
@@ -112,9 +146,9 @@ export const PropertyDetailesRightColumn = ({
         title="Checklist Management"
         contentPadding="p-0"
       >
-        <div className="border-b border-gray-100 p-4">
+        <div className="border-b border-gray-100 py-4">
           <label
-            className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 py-3 text-sm font-medium text-gray-600 hover:border-teal-500 hover:text-teal-600 ${
+            className={`flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-3 text-center text-sm font-medium text-gray-600 hover:border-teal-500 hover:text-teal-600 ${
               busy ? "pointer-events-none opacity-60" : ""
             }`}
           >
@@ -141,11 +175,12 @@ export const PropertyDetailesRightColumn = ({
             clean.
           </p>
 
-          <div className="mt-3 flex gap-2">
-            <div className="relative flex-1">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <div className="relative min-w-0 flex-1">
               <LinkIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <input
                 type="url"
+                aria-label="Checklist link"
                 value={linkValue}
                 onChange={(e) => setLinkValue(e.target.value)}
                 placeholder="Or paste a Google Sheet link"
@@ -157,9 +192,13 @@ export const PropertyDetailesRightColumn = ({
               type="button"
               onClick={handleAddLink}
               disabled={busy || addingLink || !linkValue.trim()}
-              className="rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 shrink-0 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {addingLink ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+              {addingLink ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Add"
+              )}
             </button>
           </div>
 
@@ -175,62 +214,71 @@ export const PropertyDetailesRightColumn = ({
             No checklist uploaded for this property yet.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2 text-left font-medium text-gray-500">File</th>
-                  <th className="px-4 py-2 text-left font-medium text-gray-500">Uploaded</th>
-                  <th className="px-4 py-2 text-center font-medium text-gray-500">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {checklistFiles.map((item, index) => (
-                  <tr key={item.id} className={index === 0 ? "bg-teal-50" : ""}>
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      {item.fileName}
+          <>
+            <ul className="divide-y divide-gray-200 sm:hidden">
+              {checklistFiles.map((item, index) => (
+                <li
+                  key={item.id}
+                  className={`space-y-2 py-3 ${index === 0 ? "bg-teal-50" : ""}`}
+                >
+                  <p className="min-w-0 px-2 text-sm font-medium text-gray-900 [overflow-wrap:anywhere]">
+                    {item.fileName}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-2">
+                    <div className="text-xs text-gray-600">
+                      <p>{formatDate(item.createdAt)}</p>
                       {index === 0 && (
-                        <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-                          Current
-                        </span>
+                        <p className="mt-1 font-medium text-teal-700">
+                          Current version
+                        </p>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {formatDate(item.createdAt)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center space-x-3">
-                        {item.url ? (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={item.isLink ? "Open link" : "Download"}
-                            className="text-gray-400 hover:text-teal-600"
-                          >
-                            {item.isLink ? (
-                              <ExternalLink className="h-4 w-4" />
-                            ) : (
-                              <Download className="h-4 w-4" />
-                            )}
-                          </a>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(item.id)}
-                          disabled={busy}
-                          title="Delete"
-                          className="text-gray-400 hover:text-red-600 disabled:opacity-40"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
+                    </div>
+                    {fileActions(item)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden overflow-x-auto sm:block">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-500">
+                      File
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-500">
+                      Uploaded
+                    </th>
+                    <th className="px-4 py-2 text-center font-medium text-gray-500">
+                      Actions
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {checklistFiles.map((item, index) => (
+                    <tr
+                      key={item.id}
+                      className={index === 0 ? "bg-teal-50" : ""}
+                    >
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        {item.fileName}
+                        {index === 0 && (
+                          <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                            Current
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {formatDate(item.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {fileActions(item)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Card>
     </div>

@@ -16,39 +16,41 @@ import {
   isChecklistSnapshot,
 } from "@/lib/cleaner/checklist-snapshot";
 
-export function enrollmentEnabled() {
-  if (
-    process.env.JOB_EXECUTION_ENROLLMENT === "true" &&
-    process.env.JOB_EXECUTION_SCHEMA_READY !== "true"
-  )
-    throw Error("Execution schema must be ready before enrollment");
-  return process.env.JOB_EXECUTION_ENROLLMENT === "true";
-}
-export async function getExecutionContract(jobId: string) {
-  if (process.env.JOB_EXECUTION_SCHEMA_READY !== "true") return null;
-  const [row] = await db
-    .select()
+export async function getExecutionContract(jobId: string, database: Database | Transaction = db) {
+  const [row] = await database
+    .select({ contract: jobExecutionContracts, start: jobs.checkInTime, deadline: jobs.checkOutTime })
     .from(jobExecutionContracts)
+    .innerJoin(jobs, eq(jobs.id, jobExecutionContracts.jobId))
     .where(eq(jobExecutionContracts.jobId, jobId));
   if (!row) return null;
-  if (row.protocol !== EXECUTION_PROTOCOL)
+  if (row.contract.protocol !== EXECUTION_PROTOCOL)
     throw Error("Unsupported issued execution protocol");
-  return issuedTermsSchema.parse(row.terms);
+  const terms = issuedTermsSchema.parse(row.contract.terms);
+  // SQL0053 only permits audited unstarted schedule revisions. Original issued
+  // terms stay immutable; every workflow consumes the same effective schedule.
+  return issuedTermsSchema.parse({ ...terms, plannedStart: row.start?.toISOString(), plannedDeadline: row.deadline?.toISOString() });
 }
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 /** Only rows returned by INSERT DO NOTHING can be enrolled. Contracts and jobs commit together. */
 export async function insertIssuedJobs(
   database: Database | Transaction,
   values: (typeof jobs.$inferInsert)[],
+  expectedProperty?: { id: string; defaultCheckOutTime: string | null; defaultCheckInTime: string | null; iCalUrl: string | null },
 ) {
   if (!values.length) return [];
   return database.transaction(async (tx) => {
+    // A calendar sync computed outside this transaction must not insert a stale
+    // 09:00 schedule after a concurrent property edit committed 10:00.
+    if (expectedProperty) {
+      const [fresh] = await tx.select().from(properties).where(eq(properties.id, expectedProperty.id)).for("share");
+      if (!fresh || fresh.defaultCheckOutTime !== expectedProperty.defaultCheckOutTime || fresh.defaultCheckInTime !== expectedProperty.defaultCheckInTime || fresh.iCalUrl !== expectedProperty.iCalUrl)
+        throw Error("Property times changed during calendar sync; retry the sync");
+    }
     const inserted = await tx
       .insert(jobs)
       .values(values)
       .onConflictDoNothing({ target: jobs.calendarEventUid })
       .returning();
-    if (!enrollmentEnabled()) return inserted;
     for (const job of inserted) {
       if (!job.propertyId || !job.checkInTime || !job.checkOutTime)
         throw Error("New execution job requires a property and planned window");

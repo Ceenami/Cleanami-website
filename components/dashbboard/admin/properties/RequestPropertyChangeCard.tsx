@@ -34,7 +34,7 @@ export const RequestPropertyChangeCard = ({
       </p>
       <a
         href={`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`}
-        className="mt-2 inline-flex w-full items-center justify-center rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700"
+        className="mt-2 inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-teal-600 px-4 py-2 text-center font-semibold text-white hover:bg-teal-700"
       >
         Email us about this property
       </a>

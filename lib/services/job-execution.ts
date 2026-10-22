@@ -85,9 +85,6 @@ async function locked<T>(
     contract: IssuedTerms,
   ) => Promise<T>,
 ) {
-  const contract = await getExecutionContract(jobId);
-  if (!contract)
-    throw new ExecutionError("This job uses the existing workflow", 404);
   return db.transaction(async (tx) => {
     const [job] = await tx
       .select()
@@ -95,6 +92,8 @@ async function locked<T>(
       .where(eq(jobs.id, jobId))
       .for("update");
     if (!job) throw new ExecutionError("Job not found", 404);
+    const contract = await getExecutionContract(jobId, tx);
+    if (!contract) throw new ExecutionError("This job uses the existing workflow", 404);
     await tx
       .select({ id: cleaners.id })
       .from(cleaners)
