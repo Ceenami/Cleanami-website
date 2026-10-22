@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePropertyScheduleRefresh } from "@/hooks/usePropertyScheduleRefresh";
 import { Clock } from "lucide-react";
 import { Card } from "@/components/dashbboard/admin/properties/Card";
 import { PropertyScheduleSync } from "@/components/dashbboard/admin/properties/PropertyScheduleSync";
@@ -20,7 +20,7 @@ export function PropertyTimesForm({
   defaultCheckInTime,
   updatedAt,
 }: Props) {
-  const router = useRouter();
+  const refreshSchedule = usePropertyScheduleRefresh();
   const id = useId();
   const [checkOut, setCheckOut] = useState(defaultCheckOutTime ?? "09:00:00");
   const [checkIn, setCheckIn] = useState(defaultCheckInTime ?? "16:00:00");
@@ -71,7 +71,7 @@ export function PropertyTimesForm({
       setSuccess(
         `Times saved. ${count} upcoming clean${count === 1 ? "" : "s"} updated.${result.preservedBookings ? ` ${result.preservedBookings} kept their schedules.` : ""}`,
       );
-      router.refresh();
+      refreshSchedule();
     } catch (failure) {
       setError(
         failure instanceof Error
@@ -87,8 +87,8 @@ export function PropertyTimesForm({
   return (
     <Card icon={<Clock />} title="Guest check-in and check-out times">
       <p className="text-sm text-gray-600">
-        All times are Eastern. Changes also update upcoming cleans that use your
-        home&apos;s default times.
+        All times are Eastern. Saving updates upcoming cleans that use your
+        home&apos;s default times, even when the times above haven&apos;t changed.
       </p>
       <form onSubmit={save} className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -147,7 +147,7 @@ export function PropertyTimesForm({
         )}
         <button
           type="submit"
-          disabled={saving || !dirty}
+          disabled={saving}
           className="min-h-11 w-full rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
         >
           {saving ? "Saving..." : "Save times"}

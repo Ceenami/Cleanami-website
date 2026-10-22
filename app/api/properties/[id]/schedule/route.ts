@@ -5,10 +5,7 @@ import { db } from "@/db";
 import { properties } from "@/db/schemas";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { customerAuthErrorStatus, getCustomerAuth } from "@/lib/customer-auth";
-import {
-  normalizedPropertyTimes,
-  propertyTimesChanged,
-} from "@/lib/jobs/property-schedule";
+import { normalizedPropertyTimes } from "@/lib/jobs/property-schedule";
 import {
   preparePropertySchedule,
   savePropertySchedule,
@@ -108,13 +105,7 @@ export async function PATCH(
         "The property changed while you were editing it. Refresh the page and try again.",
       );
     const after = normalizedPropertyTimes(input.data);
-    if (!propertyTimesChanged(property, after))
-      return NextResponse.json({
-        success: true,
-        updatedBookings: 0,
-        preservedBookings: 0,
-        updatedAt: property.updatedAt.toISOString(),
-      });
+    // Saving the current defaults must reconcile older inherited bookings too.
     const prepared = await preparePropertySchedule(property, after);
     const updatedAt = new Date();
     const result = await savePropertySchedule({

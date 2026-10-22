@@ -397,7 +397,13 @@ export async function updateProperty(
     defaultCheckOutTime: input.defaultCheckOutTime ?? existing.defaultCheckOutTime,
     defaultCheckInTime: input.defaultCheckInTime ?? existing.defaultCheckInTime,
   };
-  if (propertyTimesChanged(existing, after)) {
+  // An explicit rental-time save also repairs inherited bookings left stale by
+  // older builds. Comparing only the defaults made a successful re-save a no-op.
+  // A calendar URL replacement must still be saved separately before reconciling.
+  const calendarChanged = input.iCalUrl !== undefined && input.iCalUrl !== existing.iCalUrl;
+  const savesRentalTimes = existing.serviceType === 'vacation_rental_subscription'
+    && (input.defaultCheckOutTime !== undefined || input.defaultCheckInTime !== undefined);
+  if (propertyTimesChanged(existing, after) || (savesRentalTimes && !calendarChanged)) {
     if (input.iCalUrl !== undefined && input.iCalUrl !== existing.iCalUrl)
       throw new ScheduleUpdateError('Save the calendar URL separately before changing property times.');
     const prepared = await preparePropertySchedule(existing, after);

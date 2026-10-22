@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePropertyScheduleRefresh } from "@/hooks/usePropertyScheduleRefresh";
 import type { SchedulePlan } from "@/lib/jobs/property-schedule";
 
 type Preview = SchedulePlan & { token: string };
@@ -19,7 +19,7 @@ export function PropertyScheduleSync({
   propertyId: string;
   disabled: boolean;
 }) {
-  const router = useRouter();
+  const refreshSchedule = usePropertyScheduleRefresh();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export function PropertyScheduleSync({
         setMessage(
           `Updated ${result.updatedBookings} upcoming booking${result.updatedBookings === 1 ? "" : "s"}.`,
         );
-        router.refresh();
+        refreshSchedule();
       }
     } catch (failure) {
       setPreview(null);
@@ -65,7 +65,7 @@ export function PropertyScheduleSync({
     <div className="mt-5 border-t border-gray-200 pt-4 text-sm">
       <p className="font-medium text-gray-800">Previously listed bookings</p>
       <p className="mt-1 text-gray-600">
-        Check older upcoming bookings against the home&apos;s saved times. Save
+        Optional: preview booking updates using the home&apos;s saved times. Save
         any changes above first.
       </p>
       <button
