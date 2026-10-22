@@ -81,9 +81,9 @@ one reminder for the revised start.
    ```
 
 4. Deploy the complete compatible source after verifying both migrations.
-   Execution readers, property-time updates and the notice queue are always
-   enabled; no schema-readiness environment settings are required.
-   `JOB_EXECUTION_ENROLLMENT` still controls only new issued-contract enrollment.
+   Execution readers, property-time updates, the notice queue and new-job
+   enrollment are always enabled without environment gates. New jobs and their
+   issued contracts commit together; existing jobs are not enrolled retroactively.
    Inspect existing mismatched bookings through preview and approve their exact
    correction separately.
 5. Confirm customer/cleaner/admin schedules agree, upcoming reminders use the new
@@ -92,9 +92,8 @@ one reminder for the revised start.
    test. No new mobile binary is required for server-authoritative schedule data.
 
 Keep compatible execution readers serving already accepted effective schedules.
-Disabling enrollment stops only future contract enrollment. After any issued
-schedule revision, a rollback to the old immutable-contract reader would use its
-original arrival for lateness/pay.
+After any issued schedule revision, a rollback to the old immutable-contract
+reader would use its original arrival for lateness/pay.
 Use a revision-aware build or fix forward. Do not delete revisions or re-run money.
 
 ## Verification

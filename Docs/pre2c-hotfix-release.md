@@ -7,13 +7,12 @@ backfilled or automatically repaired. Existing normal workflows continue.
 
 ## Enrollment and schema requirements
 
-- Current builds require SQL0052 and SQL0053 before deployment. Schema readers
-  and property-time updates are enabled in code; no readiness settings are needed.
-- `JOB_EXECUTION_ENROLLMENT=false` initially. Only turn on after acceptance. A new
-  job and its issued contract commit together; calendar conflicts and booking
-  retries cannot enroll an existing ID.
-- Once any issued job exists, keep schema readers and the compatible services
-  enabled. Turning enrollment off stops only future enrollment.
+- Current builds require SQL0052 and SQL0053 before deployment. Schema readers,
+  property-time updates and new-job enrollment are enabled in code without
+  environment gates.
+- A new job and its issued contract commit together. Calendar conflicts and
+  booking retries cannot enroll an existing ID; existing jobs keep their workflow.
+- Once issued jobs exist, keep compatible readers and services deployed.
 
 Property time edits now update eligible upcoming bookings through audited
 [schedule revisions](property-schedule-updates.md); original contracts and issued

@@ -7,7 +7,7 @@ process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://synthetic.supabase.co";
 delete process.env.JOB_EXECUTION_SCHEMA_READY;
-process.env.JOB_EXECUTION_ENROLLMENT = "true";
+delete process.env.JOB_EXECUTION_ENROLLMENT;
 delete process.env.PROPERTY_SCHEDULE_UPDATES_READY;
 require("tsx/cjs");
 const fs = require("node:fs"),
@@ -765,9 +765,10 @@ async function run() {
       "10:00:00",
     );
   });
-  await test("obsolete readiness settings cannot disable schedules, issued readers or notices", async () => {
+  await test("obsolete execution settings cannot disable schedules, issued readers or notices", async () => {
     process.env.JOB_EXECUTION_SCHEMA_READY = "false";
     process.env.PROPERTY_SCHEDULE_UPDATES_READY = "false";
+    process.env.JOB_EXECUTION_ENROLLMENT = "false";
     try {
       const f = await seed();
       const j = await job(f, {}, true);
@@ -792,6 +793,7 @@ async function run() {
     } finally {
       delete process.env.JOB_EXECUTION_SCHEMA_READY;
       delete process.env.PROPERTY_SCHEDULE_UPDATES_READY;
+      delete process.env.JOB_EXECUTION_ENROLLMENT;
     }
   });
   await test("DST gaps/folds and invalid proposed dates are refused by the actual planner", async () => {
@@ -822,7 +824,7 @@ async function run() {
       );
     }
   });
-  await test("ordinary calendar sync honors defaults with enrollment off and keeps rescheduled IDs", async () => {
+  await test("calendar sync issues new jobs without environment gates and keeps rescheduled IDs", async () => {
     const f = await seed({ defaultCheckOutTime: "10:00:00" });
     feed = ics([["new-sync", "20301020", "20301023"]]);
     const [subscription] = await db
@@ -837,7 +839,6 @@ async function run() {
       })
       .returning();
     const { ICalService } = require("../lib/services/iCal/ical.service.ts");
-    process.env.JOB_EXECUTION_ENROLLMENT = "false";
     const sync = new ICalService(db);
     await sync.syncCalendar({ subscriptionId: subscription.id });
     let rows = await db
@@ -846,7 +847,10 @@ async function run() {
       .where(eq(schema.jobs.propertyId, f.property.id));
     assert.equal(rows.length, 1);
     assert.equal(+rows[0].checkInTime, +at("2030-10-23", "10:00"));
-    assert.equal(await contracts.getExecutionContract(rows[0].id), null);
+    assert.equal(
+      (await contracts.getExecutionContract(rows[0].id)).plannedStart,
+      at("2030-10-23", "10:00").toISOString(),
+    );
     await updateProperty(f.property.id, { defaultCheckOutTime: "11:00:00" });
     await sync.syncCalendar({ subscriptionId: subscription.id });
     rows = await db
@@ -855,7 +859,10 @@ async function run() {
       .where(eq(schema.jobs.propertyId, f.property.id));
     assert.equal(rows.length, 1);
     assert.equal(+rows[0].checkInTime, +at("2030-10-23", "11:00"));
-    process.env.JOB_EXECUTION_ENROLLMENT = "true";
+    assert.equal(
+      (await contracts.getExecutionContract(rows[0].id)).plannedStart,
+      at("2030-10-23", "11:00").toISOString(),
+    );
   });
   await test("legacy calendar cancellation still archives its job and retains schedule audit", async () => {
     const f = await seed();

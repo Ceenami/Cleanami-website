@@ -8,7 +8,7 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = "https://synthetic.supabase.co";
 process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
 delete process.env.JOB_EXECUTION_SCHEMA_READY;
-process.env.JOB_EXECUTION_ENROLLMENT = "true";
+delete process.env.JOB_EXECUTION_ENROLLMENT;
 require("tsx/cjs");
 const fs = require("node:fs"),
   path = require("node:path"),
@@ -305,11 +305,20 @@ async function run() {
     );
     assert.equal(await contracts.getExecutionContract(legacy.id), null);
   });
-  await test("enrollment off leaves a genuine new job legacy", async () => {
-    process.env.JOB_EXECUTION_ENROLLMENT = "false";
-    const j = await make(f);
-    assert.equal(await contracts.getExecutionContract(j.id), null);
-    process.env.JOB_EXECUTION_ENROLLMENT = "true";
+  await test("new jobs enroll with the old environment setting absent or false", async () => {
+    try {
+      for (const setting of [undefined, "false"]) {
+        if (setting === undefined) delete process.env.JOB_EXECUTION_ENROLLMENT;
+        else process.env.JOB_EXECUTION_ENROLLMENT = setting;
+        const j = await make(f);
+        const contract = await contracts.getExecutionContract(j.id);
+        assert.equal(contract.protocol, policy.EXECUTION_PROTOCOL);
+        assert.equal(contract.plannedStart, j.checkInTime.toISOString());
+      }
+      assert.equal(await contracts.getExecutionContract(legacy.id), null);
+    } finally {
+      delete process.env.JOB_EXECUTION_ENROLLMENT;
+    }
   });
   await test("nested booking transaction enrolls its new row atomically", async () => {
     const nested = await db.transaction((tx) =>

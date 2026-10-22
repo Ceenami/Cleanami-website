@@ -16,9 +16,6 @@ import {
   isChecklistSnapshot,
 } from "@/lib/cleaner/checklist-snapshot";
 
-export function enrollmentEnabled() {
-  return process.env.JOB_EXECUTION_ENROLLMENT === "true";
-}
 export async function getExecutionContract(jobId: string, database: Database | Transaction = db) {
   const [row] = await database
     .select({ contract: jobExecutionContracts, start: jobs.checkInTime, deadline: jobs.checkOutTime })
@@ -54,7 +51,6 @@ export async function insertIssuedJobs(
       .values(values)
       .onConflictDoNothing({ target: jobs.calendarEventUid })
       .returning();
-    if (!enrollmentEnabled()) return inserted;
     for (const job of inserted) {
       if (!job.propertyId || !job.checkInTime || !job.checkOutTime)
         throw Error("New execution job requires a property and planned window");
