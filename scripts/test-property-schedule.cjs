@@ -6,9 +6,9 @@ process.env.TSX_TSCONFIG_PATH = require("node:path").join(
 process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://synthetic.supabase.co";
-process.env.JOB_EXECUTION_SCHEMA_READY = "true";
+delete process.env.JOB_EXECUTION_SCHEMA_READY;
 process.env.JOB_EXECUTION_ENROLLMENT = "true";
-process.env.PROPERTY_SCHEDULE_UPDATES_READY = "true";
+delete process.env.PROPERTY_SCHEDULE_UPDATES_READY;
 require("tsx/cjs");
 const fs = require("node:fs"),
   path = require("node:path"),
@@ -709,7 +709,7 @@ async function run() {
     assert.equal(receipt.metadata.scheduleStart, j.checkInTime.toISOString());
     assert.equal(receipt.message, "old");
   });
-  await test("admin API enforces roles, strict input and scheduling readiness", async () => {
+  await test("admin API enforces roles and strict input without readiness settings", async () => {
     const f = await seed(),
       params = { params: Promise.resolve({ id: f.property.id }) };
     admin = false;
@@ -750,21 +750,7 @@ async function run() {
       ).status,
       400,
     );
-    process.env.PROPERTY_SCHEDULE_UPDATES_READY = "false";
-    assert.equal(
-      (
-        await propertyApi.PATCH(
-          new Request("https://app.example.invalid/api", {
-            method: "PATCH",
-            body: '{"defaultCheckOutTime":"10:00"}',
-          }),
-          params,
-        )
-      ).status,
-      503,
-    );
     await updateProperty(f.property.id, { sqFt: 1000 });
-    process.env.PROPERTY_SCHEDULE_UPDATES_READY = "true";
     const response = await propertyApi.PATCH(
       new Request("https://app.example.invalid/api", {
         method: "PATCH",
@@ -778,6 +764,35 @@ async function run() {
         .defaultCheckOutTime,
       "10:00:00",
     );
+  });
+  await test("obsolete readiness settings cannot disable schedules, issued readers or notices", async () => {
+    process.env.JOB_EXECUTION_SCHEMA_READY = "false";
+    process.env.PROPERTY_SCHEDULE_UPDATES_READY = "false";
+    try {
+      const f = await seed();
+      const j = await job(f, {}, true);
+      await assign(f, j);
+      const result = await updateProperty(f.property.id, {
+        defaultCheckOutTime: "10:00:00",
+      });
+      assert.equal(result.updatedBookings, 1);
+      assert.equal(
+        (await contracts.getExecutionContract(j.id)).plannedStart,
+        at("2030-10-23", "10:00").toISOString(),
+      );
+      const previousPushes = pushCount;
+      await service.sendPendingScheduleNotices();
+      assert.ok(pushCount > previousPushes);
+      const notice = await row(
+        schema.jobScheduleNotices,
+        schema.jobScheduleNotices.cleanerId,
+        f.cleaner.id,
+      );
+      assert.ok(notice.sentAt);
+    } finally {
+      delete process.env.JOB_EXECUTION_SCHEMA_READY;
+      delete process.env.PROPERTY_SCHEDULE_UPDATES_READY;
+    }
   });
   await test("DST gaps/folds and invalid proposed dates are refused by the actual planner", async () => {
     for (const [day, clock] of [

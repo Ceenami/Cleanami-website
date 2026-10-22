@@ -7,7 +7,7 @@ process.env.TSX_TSCONFIG_PATH = require("node:path").join(
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://synthetic.supabase.co";
 process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
-process.env.JOB_EXECUTION_SCHEMA_READY = "true";
+delete process.env.JOB_EXECUTION_SCHEMA_READY;
 process.env.JOB_EXECUTION_ENROLLMENT = "true";
 require("tsx/cjs");
 const fs = require("node:fs"),

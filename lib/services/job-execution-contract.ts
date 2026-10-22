@@ -17,15 +17,9 @@ import {
 } from "@/lib/cleaner/checklist-snapshot";
 
 export function enrollmentEnabled() {
-  if (
-    process.env.JOB_EXECUTION_ENROLLMENT === "true" &&
-    process.env.JOB_EXECUTION_SCHEMA_READY !== "true"
-  )
-    throw Error("Execution schema must be ready before enrollment");
   return process.env.JOB_EXECUTION_ENROLLMENT === "true";
 }
 export async function getExecutionContract(jobId: string, database: Database | Transaction = db) {
-  if (process.env.JOB_EXECUTION_SCHEMA_READY !== "true") return null;
   const [row] = await database
     .select({ contract: jobExecutionContracts, start: jobs.checkInTime, deadline: jobs.checkOutTime })
     .from(jobExecutionContracts)

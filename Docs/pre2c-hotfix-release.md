@@ -5,18 +5,19 @@ This standalone hotfix is based on origin/main, before Phase 2C. It introduces
 packets, schedules, assignments, charges, payouts and reliability events are not
 backfilled or automatically repaired. Existing normal workflows continue.
 
-## Rollout switches
+## Enrollment and schema requirements
 
-- `JOB_EXECUTION_SCHEMA_READY=false` initially. Owner applies SQL0052 first, then
-  enables readers with `true` on every server instance.
+- Current builds require SQL0052 and SQL0053 before deployment. Schema readers
+  and property-time updates are enabled in code; no readiness settings are needed.
 - `JOB_EXECUTION_ENROLLMENT=false` initially. Only turn on after acceptance. A new
   job and its issued contract commit together; calendar conflicts and booking
   retries cannot enroll an existing ID.
 - Once any issued job exists, keep schema readers and the compatible services
   enabled. Turning enrollment off stops only future enrollment.
 
-Property time edits apply to subsequently created jobs. Every issued job retains
-its original arrival/deadline and checklist. Calendar identifiers remain opaque
+Property time edits now update eligible upcoming bookings through audited
+[schedule revisions](property-schedule-updates.md); original contracts and issued
+checklists remain immutable. Calendar identifiers remain opaque
 compatibility identifiers; the embedded historical clock is not an arrival time.
 All-day dates are resolved in America/New_York, with DST gaps/folds refused.
 Insufficient cleaning windows require manual review.

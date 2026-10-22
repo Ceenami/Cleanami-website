@@ -80,26 +80,26 @@ one reminder for the revised start.
    psql --set=ON_ERROR_STOP=1 --file db/supabase/migrations/0053_property_schedule_revisions.sql
    ```
 
-4. Deploy the complete compatible source. Keep `JOB_EXECUTION_SCHEMA_READY=true`
-   once issued jobs exist; execution enrollment remains a separate choice.
-   Enable `PROPERTY_SCHEDULE_UPDATES_READY=true` only after 0053 is verified.
-   Until ready, changed time saves return a clear 503; ordinary property detail
-   saves still work. Inspect the existing mismatched bookings through preview
-   and approve their exact correction separately.
+4. Deploy the complete compatible source after verifying both migrations.
+   Execution readers, property-time updates and the notice queue are always
+   enabled; no schema-readiness environment settings are required.
+   `JOB_EXECUTION_ENROLLMENT` still controls only new issued-contract enrollment.
+   Inspect existing mismatched bookings through preview and approve their exact
+   correction separately.
 5. Confirm customer/cleaner/admin schedules agree, upcoming reminders use the new
    start, queued notices drain normally and assignment conflict responses work.
    Do not fabricate live payments/uploads or force operational crons for a smoke
    test. No new mobile binary is required for server-authoritative schedule data.
 
-Disabling `PROPERTY_SCHEDULE_UPDATES_READY` stops new property-time changes and
-queue draining. Keep this source serving already accepted effective schedules;
-disable no execution readers. After any issued schedule revision, a rollback to
-the old immutable-contract reader would use its original arrival for lateness/pay.
+Keep compatible execution readers serving already accepted effective schedules.
+Disabling enrollment stops only future contract enrollment. After any issued
+schedule revision, a rollback to the old immutable-contract reader would use its
+original arrival for lateness/pay.
 Use a revision-aware build or fix forward. Do not delete revisions or re-run money.
 
 ## Verification
 
-- `npm run test:property-schedule`: 25 in-process PostgreSQL/service/API cases
+- `npm run test:property-schedule`: 26 in-process PostgreSQL/service/API cases
   with calendar, push and authentication mocks.
 - `node scripts/test-job-execution.cjs --with-schedule-upgrade`: 35
   execution cases against 0052 + 0053, including finalization and settlement.

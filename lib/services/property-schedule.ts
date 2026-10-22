@@ -35,16 +35,6 @@ export class ScheduleUpdateError extends Error {
     super(message);
   }
 }
-export function requirePropertyScheduleUpdates() {
-  if (
-    process.env.PROPERTY_SCHEDULE_UPDATES_READY !== "true" ||
-    process.env.JOB_EXECUTION_SCHEMA_READY !== "true"
-  )
-    throw new ScheduleUpdateError(
-      "Property time updates are awaiting the scheduling upgrade. Other property details can still be saved.",
-      503,
-    );
-}
 
 async function calendarEntries(
   url: string | null,
@@ -185,7 +175,6 @@ export async function preparePropertySchedule(
   property: Property,
   after: PropertyTimes = property,
 ) {
-  requirePropertyScheduleUpdates();
   const times = normalizedPropertyTimes(after);
   if (times.defaultCheckOutTime >= times.defaultCheckInTime)
     throw new ScheduleUpdateError(
@@ -429,7 +418,6 @@ export async function savePropertySchedule(input: {
 
 /** Durable in-app notices commit with schedules; this retryable fan-out runs without booking locks. */
 export async function sendPendingScheduleNotices() {
-  if (process.env.PROPERTY_SCHEDULE_UPDATES_READY !== "true") return;
   const expired = new Date(Date.now() - 5 * 60000);
   const available = and(
     isNull(jobScheduleNotices.sentAt),
