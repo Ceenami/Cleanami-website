@@ -9,6 +9,7 @@ import PropertyDetailsLeftColumn from "@/components/dashbboard/admin/properties/
 import { PropertyHeader } from "@/components/dashbboard/admin/properties/PropertyHeader";
 import { getSessionRole } from "@/lib/auth/server-roles";
 import { getCustomerAuth } from "@/lib/customer-auth";
+import { PropertyTimesForm } from "@/components/customer/PropertyTimesForm";
 
 export default async function Page({
   params,
@@ -131,7 +132,17 @@ export default async function Page({
               />
             </>
           ) : (
-            <RequestPropertyChangeCard address={propertyDetails.address} />
+            <>
+              {propertyDetails.serviceType === "vacation_rental_subscription" && (
+                <PropertyTimesForm
+                  propertyId={propertyDetails.id}
+                  defaultCheckOutTime={propertyDetails.defaultCheckOutTime}
+                  defaultCheckInTime={propertyDetails.defaultCheckInTime}
+                  updatedAt={propertyDetails.updatedAt.toISOString()}
+                />
+              )}
+              <RequestPropertyChangeCard address={propertyDetails.address} />
+            </>
           )}
         </div>
       </div>

@@ -41,6 +41,7 @@ replace("db/index.ts", { db, schema });
 let pushCount = 0,
   pushFails = false,
   admin = true;
+let customerId = null;
 replace("lib/services/push.service.ts", {
   sendPushToCleaner: async () => {
     if (pushFails) throw Error("Synthetic push failure");
@@ -54,6 +55,13 @@ replace("lib/admin-auth.ts", {
     userId: "synthetic-admin",
     error: "Unauthorized",
   }),
+});
+replace("lib/customer-auth.ts", {
+  getCustomerAuth: async () => ({
+    customerId,
+    error: customerId ? null : "Unauthorized",
+  }),
+  customerAuthErrorStatus: () => 401,
 });
 replace("lib/services/google-maps/service-area-guard.ts", {
   assertAddressInServiceArea: async () => {
@@ -175,6 +183,15 @@ async function assign(f, j, role = "primary") {
     .update(schema.jobs)
     .set({ status: "assigned" })
     .where(eq(schema.jobs.id, j.id));
+}
+function scheduleRequest(property, method, body) {
+  return recovery[method](
+    new Request("https://app.example.invalid/api", {
+      method,
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: property.id }) },
+  );
 }
 async function setup() {
   const dialect = new PgDialect(),
@@ -763,6 +780,298 @@ async function run() {
       (await row(schema.properties, schema.properties.id, f.property.id))
         .defaultCheckOutTime,
       "10:00:00",
+    );
+  });
+  await test("customer time edits update their issued clean, record the actor and preserve other settings", async () => {
+    const f = await seed({
+      defaultCheckOutTime: "11:30:00",
+      defaultCheckInTime: "17:00:00",
+    });
+    const j = await job(
+      f,
+      {
+        checkInTime: at("2030-10-23", "11:30"),
+        checkOutTime: at("2030-10-23", "17:00"),
+      },
+      true,
+    );
+    await assign(f, j);
+    admin = false;
+    customerId = f.property.customerId;
+    try {
+      const response = await scheduleRequest(f.property, "PATCH", {
+        defaultCheckOutTime: "12:30",
+        defaultCheckInTime: "17:00",
+        expectedUpdatedAt: f.property.updatedAt.toISOString(),
+      });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.updatedBookings, 1);
+      const property = await row(
+        schema.properties,
+        schema.properties.id,
+        f.property.id,
+      );
+      assert.equal(property.defaultCheckOutTime, "12:30:00");
+      assert.equal(property.bedCount, f.property.bedCount);
+      assert.equal(property.customerId, customerId);
+      assert.equal(property.priceOverrideCents, f.property.priceOverrideCents);
+      assert.equal(property.updatedAt.toISOString(), result.updatedAt);
+      assert.equal(
+        (await contracts.getExecutionContract(j.id)).plannedStart,
+        at("2030-10-23", "12:30").toISOString(),
+      );
+      const issued = await row(
+        schema.jobExecutionContracts,
+        schema.jobExecutionContracts.jobId,
+        j.id,
+      );
+      assert.equal(issued.terms.plannedStart, j.checkInTime.toISOString());
+      const revision = await row(
+        schema.jobScheduleRevisions,
+        schema.jobScheduleRevisions.jobId,
+        j.id,
+      );
+      assert.equal(revision.actor, `customer:${customerId}`);
+      assert.equal(
+        (
+          await row(
+            schema.jobScheduleNotices,
+            schema.jobScheduleNotices.revisionId,
+            revision.id,
+          )
+        ).cleanerId,
+        f.cleaner.id,
+      );
+      assert.equal(
+        (
+          await scheduleRequest(f.property, "PATCH", {
+            defaultCheckOutTime: "13:30",
+            defaultCheckInTime: "17:00",
+            expectedUpdatedAt: f.property.updatedAt.toISOString(),
+          })
+        ).status,
+        409,
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("customers cannot edit or preview another owner's property, including with a valid preview token", async () => {
+    const own = await seed(),
+      foreign = await seed();
+    const j = await job(foreign);
+    const preview = await (
+      await scheduleRequest(foreign.property, "POST", { action: "preview" })
+    ).json();
+    admin = false;
+    customerId = own.property.customerId;
+    try {
+      for (const [method, input] of [
+        [
+          "PATCH",
+          {
+            defaultCheckOutTime: "12:30",
+            defaultCheckInTime: "17:00",
+            expectedUpdatedAt: foreign.property.updatedAt.toISOString(),
+          },
+        ],
+        ["POST", { action: "preview" }],
+        ["POST", { action: "apply", token: preview.token }],
+      ])
+        assert.equal(
+          (await scheduleRequest(foreign.property, method, input)).status,
+          404,
+        );
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+        +j.checkInTime,
+      );
+      assert.equal(
+        (await row(schema.properties, schema.properties.id, foreign.property.id))
+          .defaultCheckOutTime,
+        foreign.property.defaultCheckOutTime,
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("customer schedule endpoint rejects unauthenticated access and fields outside guest times", async () => {
+    const f = await seed();
+    const input = {
+      defaultCheckOutTime: "11:30",
+      defaultCheckInTime: "17:00",
+      expectedUpdatedAt: f.property.updatedAt.toISOString(),
+    };
+    admin = false;
+    try {
+      assert.equal(
+        (await scheduleRequest(f.property, "PATCH", input)).status,
+        401,
+      );
+      customerId = f.property.customerId;
+      for (const patch of [
+        { priceOverrideCents: 1 },
+        { customerId: uuid() },
+        { iCalUrl: "https://forged.example.invalid" },
+        { bedCount: 9 },
+      ])
+        assert.equal(
+          (await scheduleRequest(f.property, "PATCH", { ...input, ...patch }))
+            .status,
+          400,
+        );
+      assert.equal(
+        (
+          await propertyApi.PATCH(
+            new Request("https://app.example.invalid/api", {
+              method: "PATCH",
+              body: JSON.stringify({ defaultCheckOutTime: "11:30" }),
+            }),
+            { params: Promise.resolve({ id: f.property.id }) },
+          )
+        ).status,
+        401,
+      );
+      assert.equal(
+        (await row(schema.properties, schema.properties.id, f.property.id))
+          .defaultCheckOutTime,
+        f.property.defaultCheckOutTime,
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("customer invalid windows and short cleans roll back the whole save", async () => {
+    const f = await seed();
+    const j = await job(f, {}, true);
+    admin = false;
+    customerId = f.property.customerId;
+    try {
+      for (const [checkout, checkin, status] of [
+        ["25:00", "17:00", 400],
+        ["17:00", "11:30", 409],
+        ["15:30", "16:00", 409],
+      ]) {
+        const response = await scheduleRequest(f.property, "PATCH", {
+          defaultCheckOutTime: checkout,
+          defaultCheckInTime: checkin,
+          expectedUpdatedAt: f.property.updatedAt.toISOString(),
+        });
+        assert.equal(response.status, status);
+      }
+      assert.equal(
+        (await row(schema.properties, schema.properties.id, f.property.id))
+          .defaultCheckOutTime,
+        f.property.defaultCheckOutTime,
+      );
+      assert.equal(
+        (await contracts.getExecutionContract(j.id)).plannedStart,
+        j.checkInTime.toISOString(),
+      );
+      assert.equal(
+        await row(
+          schema.jobScheduleRevisions,
+          schema.jobScheduleRevisions.jobId,
+          j.id,
+        ),
+        undefined,
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("customer time controls cannot replace residential booking windows", async () => {
+    const f = await seed({ serviceType: "residential_one_time" });
+    admin = false;
+    customerId = f.property.customerId;
+    try {
+      assert.equal(
+        (
+          await scheduleRequest(f.property, "PATCH", {
+            defaultCheckOutTime: "11:30",
+            defaultCheckInTime: "17:00",
+            expectedUpdatedAt: f.property.updatedAt.toISOString(),
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (await scheduleRequest(f.property, "POST", { action: "preview" })).status,
+        400,
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("customers can preview and apply older inherited bookings only for their own home", async () => {
+    const f = await seed({ defaultCheckOutTime: "11:30:00" });
+    feed = ics([["customer-stale", "20301020", "20301023"]]);
+    const j = await job(f, {
+      jobSource: "ical",
+      calendarEventUid: `customer-stale_${at("2030-10-23", "09:00").toISOString()}`,
+    });
+    admin = false;
+    customerId = f.property.customerId;
+    try {
+      const previewResponse = await scheduleRequest(f.property, "POST", {
+        action: "preview",
+      });
+      assert.equal(previewResponse.status, 200);
+      const preview = await previewResponse.json();
+      assert.equal(preview.changes.length, 1);
+      assert.equal(
+        preview.changes[0].start,
+        at("2030-10-23", "11:30").toISOString(),
+      );
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+        +j.checkInTime,
+      );
+      const response = await scheduleRequest(f.property, "POST", {
+        action: "apply",
+        token: preview.token,
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).updatedBookings, 1);
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+        +at("2030-10-23", "11:30"),
+      );
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("a property ownership change invalidates a prepared schedule under the lock", async () => {
+    const f = await seed(),
+      other = await seed();
+    const j = await job(f);
+    const prepared = await service.preparePropertySchedule(f.property, {
+      defaultCheckOutTime: "11:30:00",
+      defaultCheckInTime: "16:00:00",
+    });
+    await db
+      .update(schema.properties)
+      .set({ customerId: other.property.customerId })
+      .where(eq(schema.properties.id, f.property.id));
+    await assert.rejects(
+      service.savePropertySchedule({
+        property: f.property,
+        patch: { defaultCheckOutTime: "11:30:00" },
+        prepared,
+        actor: `customer:${f.property.customerId}`,
+      }),
+      /property changed/,
+    );
+    assert.equal(
+      +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+      +j.checkInTime,
     );
   });
   await test("obsolete execution settings cannot disable schedules, issued readers or notices", async () => {
