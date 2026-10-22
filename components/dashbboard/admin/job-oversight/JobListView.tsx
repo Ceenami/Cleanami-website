@@ -422,14 +422,14 @@ function WhenCell({ job }: { job: JobRecord }) {
     return (
       <div>
         <p className="text-gray-900">
-          {new Date(job.checkInTime).toLocaleDateString()}
+          {new Date(job.checkInTime).toLocaleDateString("en-US", { timeZone: "America/New_York" })}
         </p>
         <p className="text-xs text-gray-500">{window.label}</p>
       </div>
     );
   }
 
-  return <span>{new Date(job.checkInTime).toLocaleString()}</span>;
+  return <span>{new Date(job.checkInTime).toLocaleString("en-US", { timeZone: "America/New_York" })} ET</span>;
 }
 
 export const JobListView = () => {
@@ -592,7 +592,7 @@ export const JobListView = () => {
             <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate font-medium text-gray-900">{job.property?.address ?? "Unknown"}</p>
-                <p className="mt-1 text-sm text-gray-500">{job.checkInTime ? new Date(job.checkInTime).toLocaleString() : "N/A"}</p>
+                <div className="mt-1 text-sm text-gray-500"><WhenCell job={job} /></div>
               </div>
               <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>{job.status}</span>
             </summary>
@@ -600,7 +600,7 @@ export const JobListView = () => {
               <p><span className="text-gray-500">Service: </span>{SERVICE_TYPE_SHORT[job.serviceType ?? "vacation_rental_subscription"]}</p>
               <p><span className="text-gray-500">Cleaner: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}</p>
               <p className="font-mono text-xs text-gray-500">{job.id}</p>
-              <Link href={`/admin/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">Details</Link>
+              <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">Details</Link>
             </div>
           </details>
         ))}

@@ -428,7 +428,7 @@ async function run() {
       defaultCheckOutTime: "10:00:00",
       defaultCheckInTime: "17:00:00",
     });
-    assert.equal(noOp.updatedBookings, undefined);
+    assert.equal(noOp.updatedBookings, 0);
   });
   await test("started jobs, submitted evidence and chosen residential windows are preserved", async () => {
     const f = await seed(),
@@ -575,6 +575,190 @@ async function run() {
     assert.equal(
       +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
       +j.checkInTime,
+    );
+  });
+  await test("admin Save Changes reconciles stale calendar jobs even when defaults are unchanged", async () => {
+    const f = await seed({
+      defaultCheckOutTime: "12:45:00",
+      defaultCheckInTime: "17:30:00",
+    });
+    feed = ics([["unchanged-admin", "20301020", "20301023"]]);
+    const j = await job(
+      f,
+      {
+        jobSource: "ical",
+        calendarEventUid: `unchanged-admin_${at("2030-10-23", "09:00").toISOString()}`,
+      },
+      true,
+    );
+    const original = await row(
+      schema.jobExecutionContracts,
+      schema.jobExecutionContracts.jobId,
+      j.id,
+    );
+    const params = { params: Promise.resolve({ id: f.property.id }) };
+    const save = () =>
+      propertyApi.PATCH(
+        new Request("https://app.example.invalid/api", {
+          method: "PATCH",
+          body: JSON.stringify({
+            defaultCheckOutTime: "12:45",
+            defaultCheckInTime: "17:30",
+          }),
+        }),
+        params,
+      );
+    const response = await save();
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).updatedBookings, 1);
+    const saved = await row(schema.jobs, schema.jobs.id, j.id);
+    assert.equal(+saved.checkInTime, +at("2030-10-23", "12:45"));
+    assert.equal(+saved.checkOutTime, +at("2030-10-23", "17:30"));
+    assert.equal(saved.calendarEventUid, j.calendarEventUid);
+    assert.deepEqual(saved.addonsSnapshot, j.addonsSnapshot);
+    assert.deepEqual(
+      await row(
+        schema.jobExecutionContracts,
+        schema.jobExecutionContracts.jobId,
+        j.id,
+      ),
+      original,
+    );
+    assert.equal(
+      (await contracts.getExecutionContract(j.id)).plannedStart,
+      saved.checkInTime.toISOString(),
+    );
+    assert.equal((await (await save()).json()).updatedBookings, 0);
+    assert.equal(
+      (
+        await db
+          .select()
+          .from(schema.jobScheduleRevisions)
+          .where(eq(schema.jobScheduleRevisions.jobId, j.id))
+      ).length,
+      1,
+    );
+  });
+  await test("customer unchanged save reconciles eligible stale bookings without preview and preserves overrides", async () => {
+    const f = await seed({
+      defaultCheckOutTime: "12:45:00",
+      defaultCheckInTime: "17:30:00",
+    });
+    feed = ics([["unchanged-customer", "20301020", "20301023"]]);
+    const j = await job(
+      f,
+      {
+        jobSource: "ical",
+        calendarEventUid: `unchanged-customer_${at("2030-10-23", "09:00").toISOString()}`,
+      },
+      true,
+    );
+    const custom = await job(f, {
+      checkInTime: at("2030-10-23", "13:15"),
+      checkOutTime: at("2030-10-23", "17:30"),
+    });
+    const started = await job(f, { status: "in-progress" });
+    admin = false;
+    customerId = f.property.customerId;
+    try {
+      const save = (property) =>
+        scheduleRequest(property, "PATCH", {
+          defaultCheckOutTime: "12:45",
+          defaultCheckInTime: "17:30",
+          expectedUpdatedAt: property.updatedAt.toISOString(),
+        });
+      const response = await save(f.property);
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.updatedBookings, 1);
+      assert.equal(result.preservedBookings, 2);
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+        +at("2030-10-23", "12:45"),
+      );
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, custom.id)).checkInTime,
+        +custom.checkInTime,
+      );
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, started.id)).checkInTime,
+        +started.checkInTime,
+      );
+      const revision = await row(
+        schema.jobScheduleRevisions,
+        schema.jobScheduleRevisions.jobId,
+        j.id,
+      );
+      assert.equal(revision.actor, `customer:${customerId}`);
+      const fresh = await row(
+        schema.properties,
+        schema.properties.id,
+        f.property.id,
+      );
+      assert.equal(fresh.defaultCheckOutTime, "12:45:00");
+      assert.equal((await (await save(fresh)).json()).updatedBookings, 0);
+      assert.equal((await save(f.property)).status, 409);
+    } finally {
+      admin = true;
+      customerId = null;
+    }
+  });
+  await test("unchanged save still refuses unverifiable calendars and rolls back all fields", async () => {
+    const f = await seed({ defaultCheckOutTime: "12:45:00" });
+    const j = await job(f, {
+      jobSource: "ical",
+      calendarEventUid: "unverifiable",
+    });
+    feedUnavailable = true;
+    try {
+      await assert.rejects(
+        updateProperty(f.property.id, {
+          defaultCheckOutTime: "12:45:00",
+          bedCount: 3,
+        }),
+        /calendar could not be verified/,
+      );
+      assert.equal(
+        (await row(schema.properties, schema.properties.id, f.property.id))
+          .bedCount,
+        f.property.bedCount,
+      );
+      assert.equal(
+        +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+        +j.checkInTime,
+      );
+    } finally {
+      feedUnavailable = false;
+    }
+  });
+  await test("non-time admin edits and calendar replacement do not implicitly reconcile bookings", async () => {
+    const f = await seed({ defaultCheckOutTime: "12:45:00" });
+    const j = await job(f, {
+      jobSource: "ical",
+      calendarEventUid: "not-in-calendar",
+    });
+    await updateProperty(f.property.id, { bedCount: 3 });
+    await updateProperty(f.property.id, {
+      iCalUrl: "https://calendar.example.invalid/replacement.ics",
+      defaultCheckOutTime: "12:45:00",
+      defaultCheckInTime: "16:00:00",
+    });
+    assert.equal(
+      (await row(schema.properties, schema.properties.id, f.property.id)).iCalUrl,
+      "https://calendar.example.invalid/replacement.ics",
+    );
+    assert.equal(
+      +(await row(schema.jobs, schema.jobs.id, j.id)).checkInTime,
+      +j.checkInTime,
+    );
+    assert.equal(
+      (
+        await db
+          .select()
+          .from(schema.jobScheduleRevisions)
+          .where(eq(schema.jobScheduleRevisions.jobId, j.id))
+      ).length,
+      0,
     );
   });
   await test("already-stale calendar jobs have read-only exact preview and token-bound apply", async () => {

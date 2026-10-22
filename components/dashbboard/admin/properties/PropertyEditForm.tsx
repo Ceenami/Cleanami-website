@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePropertyScheduleRefresh } from "@/hooks/usePropertyScheduleRefresh";
 import { Card } from "./Card";
 import { PencilIcon } from "lucide-react";
 import { PropertyScheduleSync } from "./PropertyScheduleSync";
@@ -26,7 +26,7 @@ interface Props {
 }
 
 export const PropertyEditForm = ({ property }: Props) => {
-  const router = useRouter();
+  const refreshSchedule = usePropertyScheduleRefresh();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -119,7 +119,7 @@ export const PropertyEditForm = ({ property }: Props) => {
           ? "Property updated."
           : `Property updated. ${result.updatedBookings} upcoming bookings updated; ${result.preservedBookings} kept their schedules.`,
       );
-      router.refresh();
+      refreshSchedule();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to update property",
@@ -291,8 +291,9 @@ export const PropertyEditForm = ({ property }: Props) => {
         </div>
 
         <p className="text-sm text-gray-600">
-          Time changes also update upcoming rental bookings that follow this
-          home&apos;s times. Individual overrides and explicit calendar times
+          Times are Eastern. Saving also updates upcoming rental bookings that
+          follow this home&apos;s times, even when the defaults haven&apos;t
+          changed. Individual overrides and explicit calendar times
           are respected. Started bookings and chosen residential windows keep
           their schedules.
         </p>
