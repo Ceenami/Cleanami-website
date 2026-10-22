@@ -92,6 +92,7 @@ export const PropertiesPageClient = () => {
         setDeleteError(
           err instanceof Error ? err.message : "Failed to delete property"
         );
+        throw err;
       } finally {
         setIsDeleting(false);
       }
