@@ -45,6 +45,9 @@ _audit-private/
 # client-facing briefing & proposal docs — keep out of the client's code repo
 _client-docs/
 
+# Local documentation; existing tracked handoff files are retained.
+/[Dd]ocs/
+
 # vercel
 .vercel
 
