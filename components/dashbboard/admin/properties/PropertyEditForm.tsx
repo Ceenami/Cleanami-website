@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "./Card";
 import { PencilIcon } from "lucide-react";
+import { PropertyScheduleSync } from "./PropertyScheduleSync";
 import type { PropertyDetails } from "@/lib/queries/properties";
 import {
   MAX_GEOFENCE_RADIUS_METERS,
@@ -11,6 +12,8 @@ import {
 } from "@/lib/constants/geofence";
 
 type LaundryType = "in_unit" | "off_site" | "none";
+const clockValue = (value: string) =>
+  value.length === 5 ? `${value}:00` : value;
 type DrainCadence =
   | "4_weeks"
   | "6_weeks"
@@ -26,7 +29,7 @@ export const PropertyEditForm = ({ property }: Props) => {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
   const [outOfAreaPrompt, setOutOfAreaPrompt] = useState<string | null>(null);
 
   const [form, setForm] = useState({
@@ -58,7 +61,7 @@ export const PropertyEditForm = ({ property }: Props) => {
   const submit = async (confirmOutOfServiceArea: boolean) => {
     setSaving(true);
     setError(null);
-    setSuccess(false);
+    setSuccess(null);
     if (!confirmOutOfServiceArea) setOutOfAreaPrompt(null);
 
     const payload: Record<string, unknown> = {
@@ -104,16 +107,23 @@ export const PropertyEditForm = ({ property }: Props) => {
         // so this refusal offers a confirm step instead of a dead end.
         if (body.code === "OUT_OF_SERVICE_AREA") {
           setOutOfAreaPrompt(
-            body.error ?? "That address is outside our service area."
+            body.error ?? "That address is outside our service area.",
           );
           return;
         }
         throw new Error(body.error ?? "Failed to update property");
       }
-      setSuccess(true);
+      const result = await res.json();
+      setSuccess(
+        result.updatedBookings === undefined
+          ? "Property updated."
+          : `Property updated. ${result.updatedBookings} upcoming bookings updated; ${result.preservedBookings} kept their schedules.`,
+      );
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update property");
+      setError(
+        err instanceof Error ? err.message : "Failed to update property",
+      );
     } finally {
       setSaving(false);
     }
@@ -141,7 +151,7 @@ export const PropertyEditForm = ({ property }: Props) => {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
           <div>
             <label className={labelClass}>Sq. Ft.</label>
             <input
@@ -177,7 +187,7 @@ export const PropertyEditForm = ({ property }: Props) => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
           <div>
             <label className={labelClass}>Laundry</label>
             <select
@@ -214,7 +224,7 @@ export const PropertyEditForm = ({ property }: Props) => {
         </div>
 
         <div className="flex flex-wrap gap-4">
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
             <input
               type="checkbox"
               checked={form.hasHotTub}
@@ -224,7 +234,7 @@ export const PropertyEditForm = ({ property }: Props) => {
             />
             Has hot tub
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
             <input
               type="checkbox"
               checked={form.hotTubServiceLevel}
@@ -234,7 +244,7 @@ export const PropertyEditForm = ({ property }: Props) => {
             />
             Hot tub service
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
             <input
               type="checkbox"
               checked={form.hotTubDrain}
@@ -280,11 +290,23 @@ export const PropertyEditForm = ({ property }: Props) => {
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <p className="text-sm text-gray-600">
+          Time changes also update upcoming rental bookings that follow this
+          home&apos;s times. Individual overrides and explicit calendar times
+          are respected. Started bookings and chosen residential windows keep
+          their schedules.
+        </p>
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
           <div>
-            <label className={labelClass}>Default Check-in</label>
+            <label
+              className={labelClass}
+              htmlFor={`default-check-in-${property.id}`}
+            >
+              Default Check-in
+            </label>
             <input
               type="time"
+              id={`default-check-in-${property.id}`}
               step={1}
               className={inputClass}
               value={form.defaultCheckInTime}
@@ -294,10 +316,15 @@ export const PropertyEditForm = ({ property }: Props) => {
             />
           </div>
           <div>
-            <p className="text-sm text-gray-600">Time defaults apply to newly created jobs. Existing issued jobs keep their scheduled times.</p>
-            <label className={labelClass}>Default Check-out</label>
+            <label
+              className={labelClass}
+              htmlFor={`default-check-out-${property.id}`}
+            >
+              Default Check-out
+            </label>
             <input
               type="time"
+              id={`default-check-out-${property.id}`}
               step={1}
               className={inputClass}
               value={form.defaultCheckOutTime}
@@ -353,7 +380,9 @@ export const PropertyEditForm = ({ property }: Props) => {
 
         {error && <p className="text-sm text-red-600">{error}</p>}
         {success && (
-          <p className="text-sm text-green-600">Property updated.</p>
+          <p role="status" className="text-sm text-green-600">
+            {success}
+          </p>
         )}
         {outOfAreaPrompt && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -363,12 +392,12 @@ export const PropertyEditForm = ({ property }: Props) => {
               Cleaner matching works from the property&apos;s location, so it
               may find nobody nearby.
             </p>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
               <button
                 type="button"
                 disabled={saving}
                 onClick={() => void submit(true)}
-                className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
+                className="min-h-11 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
               >
                 {saving ? "Saving…" : "Save anyway"}
               </button>
@@ -376,7 +405,7 @@ export const PropertyEditForm = ({ property }: Props) => {
                 type="button"
                 disabled={saving}
                 onClick={() => setOutOfAreaPrompt(null)}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Change the address
               </button>
@@ -387,11 +416,23 @@ export const PropertyEditForm = ({ property }: Props) => {
         <button
           type="submit"
           disabled={saving}
-          className="w-full rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+          className="min-h-11 w-full rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
         >
           {saving ? "Saving..." : "Save Changes"}
         </button>
       </form>
+      <PropertyScheduleSync
+        key={`${property.defaultCheckOutTime}:${property.defaultCheckInTime}:${property.iCalUrl}`}
+        propertyId={property.id}
+        disabled={
+          saving ||
+          clockValue(form.defaultCheckInTime) !==
+            clockValue(property.defaultCheckInTime ?? "16:00:00") ||
+          clockValue(form.defaultCheckOutTime) !==
+            clockValue(property.defaultCheckOutTime ?? "09:00:00") ||
+          form.iCalUrl.trim() !== (property.iCalUrl ?? "")
+        }
+      />
     </Card>
   );
 };

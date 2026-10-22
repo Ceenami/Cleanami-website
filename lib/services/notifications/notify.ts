@@ -34,6 +34,7 @@ export async function notifyCleaner(input: {
   jobId?: string | null;
   url?: string;
   sms?: boolean;
+  metadata?: Record<string, string>;
 }): Promise<void> {
   const userId = await getCleanerUserId(input.cleanerId);
   if (userId) {
@@ -43,7 +44,7 @@ export async function notifyCleaner(input: {
       title: input.title,
       message: input.message,
       jobId: input.jobId ?? null,
-      metadata: { source: "notify" },
+      metadata: { ...input.metadata, source: "notify" },
     });
     await recordNotificationAttempt({
       channel: "in_app",

@@ -1,5 +1,4 @@
-import { format } from "date-fns";
-import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone } from "date-fns-tz";
 
 const TZ = "America/New_York";
 
@@ -10,40 +9,20 @@ const TZ = "America/New_York";
  */
 export const DEFAULT_WINDOW_OPEN_TIME = "09:00:00";
 
-/** `HH:MM` or `HH:MM:SS`, 24-hour. */
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
-
 /**
- * Normalize a `properties.default_check_out_time` value to `HH:MM:SS`.
- * Returns null for anything unparseable so callers fall back rather than
- * building an invalid date.
- */
-function normalizeTime(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const match = TIME_PATTERN.exec(value.trim());
-  if (!match) return null;
-  const [, hours, minutes, seconds] = match;
-  return `${hours}:${minutes}:${seconds ?? "00"}`;
-}
-
-/**
- * The instant the cleaning window opens: the property's guest checkout time on
- * the job's scheduled ET date.
- *
- * Per the functionality spec, "Arrival window anchor = guest checkout time".
- * Resolved in ET (the ops timezone) so it stays correct across DST.
+ * The instant the cleaning window opens is the persisted booking start.
+ * Property defaults are inputs at creation/rescheduling, never live visit gates.
  */
 export function resolveCheckInWindowOpensAt(
   scheduledCheckIn: Date,
-  propertyCheckOutTime: string | null | undefined
+  ..._legacyPropertyTime: [propertyCheckOutTime?: string | null]
 ): Date {
-  const scheduledDateEt = format(toZonedTime(scheduledCheckIn, TZ), "yyyy-MM-dd");
-  const openTime = normalizeTime(propertyCheckOutTime) ?? DEFAULT_WINDOW_OPEN_TIME;
-  return fromZonedTime(`${scheduledDateEt}T${openTime}`, TZ);
+  void _legacyPropertyTime;
+  return new Date(scheduledCheckIn);
 }
 
 export type CheckInWindowEvaluation = {
-  /** When the window opens (guest checkout on the job's scheduled ET date). */
+  /** The booking's persisted cleaning start. */
   opensAt: Date;
   /** Minutes until the window opens; 0 once it is open. */
   minutesEarly: number;

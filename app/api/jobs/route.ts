@@ -325,7 +325,7 @@ export async function POST(request: NextRequest) {
         // of the link back to the original clean — there is no reclean_of
         // column and there is deliberately not going to be one this phase.
         notes: notes ? appendJobNote(systemLine, notes) : systemLine,
-      }]);
+      }], isResidential ? undefined : property);
 
     if (!created) throw new Error("jobs insert returned no rows");
 

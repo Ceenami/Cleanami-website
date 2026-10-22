@@ -175,22 +175,22 @@ export function AddPropertyModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="add-property-title">
       <div
         className="fixed inset-0 bg-gray-500 bg-opacity-75"
         onClick={saving ? undefined : onClose}
       />
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="relative w-full max-w-2xl rounded-lg bg-white shadow-xl">
-          <div className="flex items-center justify-between border-b px-6 py-4">
-            <h3 className="text-lg font-semibold text-gray-800">
+      <div className="flex min-h-full items-start justify-center sm:items-center">
+        <div className="dashboard-form relative max-h-[calc(100dvh-1.5rem)] w-full min-w-0 max-w-2xl scroll-pt-24 overflow-y-auto overscroll-contain rounded-lg bg-white shadow-xl sm:max-h-[calc(100dvh-2rem)]">
+          <div className="sticky top-0 z-10 flex items-start justify-between gap-3 rounded-t-lg border-b bg-white px-4 py-3 sm:px-6 sm:py-4">
+            <h3 id="add-property-title" className="min-w-0 self-center text-lg font-semibold text-gray-800">
               Add a property
             </h3>
             <button
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="text-gray-400 hover:text-gray-600"
+              className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-50 hover:text-gray-600"
               aria-label="Close"
             >
               <svg
@@ -209,7 +209,7 @@ export function AddPropertyModal({
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5">
+          <form onSubmit={handleSubmit} className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
             {error && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 {error}
@@ -228,12 +228,12 @@ export function AddPropertyModal({
                   service. Cleaner matching works from the property&apos;s
                   location, so it may find nobody nearby.
                 </p>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <button
                     type="button"
                     disabled={saving}
                     onClick={() => void submit(true)}
-                    className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
+                    className="min-h-11 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-gray-400"
                   >
                     {saving ? "Saving…" : "Save anyway"}
                   </button>
@@ -241,7 +241,7 @@ export function AddPropertyModal({
                     type="button"
                     disabled={saving}
                     onClick={() => setOutOfAreaPrompt(null)}
-                    className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    className="min-h-11 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
                   >
                     Change the address
                   </button>
@@ -283,7 +283,7 @@ export function AddPropertyModal({
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
               <div>
                 <label className={labelClass}>Sq. Ft.</label>
                 <input
@@ -323,7 +323,7 @@ export function AddPropertyModal({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
               <div>
                 <label className={labelClass}>Laundry</label>
                 <select
@@ -365,7 +365,7 @@ export function AddPropertyModal({
             </div>
 
             <div className="flex flex-wrap gap-4">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+              <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
                 <input
                   type="checkbox"
                   checked={form.hasHotTub}
@@ -377,7 +377,7 @@ export function AddPropertyModal({
               </label>
               {form.hasHotTub && (
                 <>
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
                     <input
                       type="checkbox"
                       checked={form.hotTubServiceLevel}
@@ -390,7 +390,7 @@ export function AddPropertyModal({
                     />
                     Hot tub service
                   </label>
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <label className="flex min-h-11 items-center gap-2 text-sm text-gray-700 sm:min-h-0">
                     <input
                       type="checkbox"
                       checked={form.hotTubDrain}
@@ -427,7 +427,7 @@ export function AddPropertyModal({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
               <div>
                 <label className={labelClass}>Guest check-in time</label>
                 <input
@@ -451,12 +451,11 @@ export function AddPropertyModal({
                     setForm({ ...form, defaultCheckOutTime: e.target.value })
                   }
                 />
-                <p className="mt-1 text-xs text-gray-500">
-                  Cleaners cannot check in before this — the guest is still in
-                  the property.
-                </p>
               </div>
             </div>
+            <p className="text-xs text-gray-500">
+              Cleaners cannot arrive before the guest check-out time — the guest is still in the property.
+            </p>
 
             <div>
               <label className={labelClass}>Calendar (iCal) URL</label>
@@ -472,19 +471,19 @@ export function AddPropertyModal({
               </p>
             </div>
 
-            <div className="flex justify-end gap-3 border-t pt-4">
+            <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={saving}
-                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 {warning ? "Done" : "Cancel"}
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="rounded-md bg-teal-600 px-4 py-2 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-60"
+                className="min-h-11 rounded-md bg-teal-600 px-4 py-2 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-60"
               >
                 {saving ? "Adding…" : "Add property"}
               </button>

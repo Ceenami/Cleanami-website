@@ -63,17 +63,17 @@ export function EditCustomerCard({
   }
 
   return (
-    <div className="bg-white p-6 rounded-lg shadow-md">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">{name}</h2>
-          <p className="text-sm text-gray-500 font-mono">{customerId}</p>
+    <div className="dashboard-form min-w-0 rounded-lg bg-white p-4 shadow-md sm:p-6">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl font-bold text-gray-800 [overflow-wrap:anywhere]">{name}</h2>
+          <p className="break-all font-mono text-xs text-gray-500 sm:text-sm">{customerId}</p>
         </div>
         {!editing && (
           <button
             type="button"
             onClick={startEdit}
-            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             <Pencil className="h-4 w-4" />
             Edit
@@ -110,12 +110,12 @@ export function EditCustomerCard({
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
           </label>
-          <div className="flex flex-wrap gap-2 pt-1">
+          <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:flex-wrap">
             <button
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+              className="min-h-11 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save changes"}
             </button>
@@ -123,15 +123,15 @@ export function EditCustomerCard({
               type="button"
               onClick={() => setEditing(false)}
               disabled={saving}
-              className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="min-h-11 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Cancel
             </button>
           </div>
         </div>
       ) : (
-        <div className="mt-4 flex flex-col gap-2 text-sm text-gray-600 sm:flex-row sm:gap-8">
-          <p>
+        <div className="mt-4 flex flex-col gap-2 text-sm text-gray-600 sm:flex-row sm:flex-wrap sm:gap-x-8">
+          <p className="min-w-0 [overflow-wrap:anywhere]">
             <span className="font-medium text-gray-700">Email:</span> {email}
           </p>
           <p>

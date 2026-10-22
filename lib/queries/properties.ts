@@ -4,6 +4,8 @@ import { db, sequentialQueries } from '@/db';
 import { properties, customers, subscriptions, jobs, checklistFiles } from '@/db/schemas';
 import { eq, sql, and } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
+import { propertyTimesChanged } from '@/lib/jobs/property-schedule';
+import { preparePropertySchedule, savePropertySchedule, ScheduleUpdateError } from '@/lib/services/property-schedule';
 import { assertAddressInServiceArea } from '@/lib/services/google-maps/service-area-guard';
 import {
   assertLaundryLoads,
@@ -315,19 +317,10 @@ export type UpdatePropertyInput = {
 export async function updateProperty(
   propertyId: string,
   input: UpdatePropertyInput,
-  options?: { allowOutOfServiceArea?: boolean }
-): Promise<{ propertyId: string }> {
+  options?: { allowOutOfServiceArea?: boolean; actor?: string }
+): Promise<{ propertyId: string; updatedBookings?: number; preservedBookings?: number }> {
   const existing = await db.query.properties.findFirst({
     where: eq(properties.id, propertyId),
-    // laundryType/laundryLoads are read so the check below can see the MERGED
-    // result of a partial patch — a body that changes only `laundryType` is
-    // exactly the case a per-field schema rule cannot catch.
-    columns: {
-      id: true,
-      address: true,
-      laundryType: true,
-      laundryLoads: true,
-    },
   });
   if (!existing) {
     throw new Error("Property not found");
@@ -400,7 +393,18 @@ export async function updateProperty(
     }
   }
 
-  await db.update(properties).set(patch).where(eq(properties.id, propertyId));
+  const after = {
+    defaultCheckOutTime: input.defaultCheckOutTime ?? existing.defaultCheckOutTime,
+    defaultCheckInTime: input.defaultCheckInTime ?? existing.defaultCheckInTime,
+  };
+  if (propertyTimesChanged(existing, after)) {
+    if (input.iCalUrl !== undefined && input.iCalUrl !== existing.iCalUrl)
+      throw new ScheduleUpdateError('Save the calendar URL separately before changing property times.');
+    const prepared = await preparePropertySchedule(existing, after);
+    return savePropertySchedule({ property: existing, patch, prepared, actor: options?.actor ?? 'admin' });
+  }
+  const [saved] = await db.update(properties).set(patch).where(and(eq(properties.id, propertyId), eq(properties.updatedAt, existing.updatedAt))).returning({ id: properties.id });
+  if (!saved) throw new ScheduleUpdateError('The property changed while you were editing it. Refresh and save again.');
   return { propertyId };
 }
 

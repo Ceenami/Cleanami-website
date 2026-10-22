@@ -56,7 +56,10 @@ export async function sendUpcomingJobReminders(
       where: and(
         eq(notifications.type, "job_reminder"),
         eq(notifications.jobId, job.id),
-        sql`${notifications.metadata}->>'source' = 'notify'`
+        sql`${notifications.metadata}->>'source' = 'notify'`,
+        // An old reminder must not suppress the reminder for a revised start.
+        // Untagged pre-upgrade reminders remain valid until a schedule changes.
+        sql`(${notifications.metadata}->>'scheduleStart' = ${job.checkInTime!.toISOString()} OR ${notifications.metadata}->>'scheduleStart' IS NULL)`
       ),
       columns: { id: true },
     });
@@ -90,6 +93,7 @@ export async function sendUpcomingJobReminders(
         jobId: job.id,
         url: `/cleaner/jobs/${job.id}`,
         sms: true, // time-critical (spec §4 "Log ETA now" nudge)
+        metadata: { scheduleStart: job.checkInTime!.toISOString() },
       });
     }
     reminded += 1;

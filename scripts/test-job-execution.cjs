@@ -201,6 +201,8 @@ async function run() {
         "job_evidence_drafts",
         "evidence_upload_manifest",
         "job_operation_audit",
+        "job_schedule_revisions",
+        "job_schedule_notices",
       ].includes(t.name)
     )
       continue;
@@ -264,6 +266,11 @@ async function run() {
   await test("migration applies and reapplies without rewriting existing rows", async () => {
     await pg.exec(sql);
     await pg.exec(sql);
+    if (process.argv.includes("--with-schedule-upgrade")) {
+      const scheduleSql = fs.readFileSync(path.join(root, "db/supabase/migrations/0053_property_schedule_revisions.sql"), "utf8");
+      await pg.exec(scheduleSql);
+      await pg.exec(scheduleSql);
+    }
     assert.equal(
       JSON.stringify(
         await pg.query("SELECT row_to_json(j) as row FROM jobs j ORDER BY id"),

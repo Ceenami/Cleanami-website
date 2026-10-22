@@ -38,6 +38,7 @@ export async function POST(
 
   try {
     await db.transaction(async (tx) => {
+      await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for("update");
       console.log(
         `[Check-In] Step 1: Finding primary cleaner for job ${jobId}...`
       );
@@ -69,7 +70,6 @@ export async function POST(
         .update(jobs)
         .set({
           status: "in-progress",
-          checkInTime: now,
           updatedAt: now,
         })
         .where(eq(jobs.id, jobId));

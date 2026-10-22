@@ -503,7 +503,7 @@ export async function bookOneOffClean(
         notes: skipPayment
           ? `[System] One-off clean booked with payment skipped (comped account). No charge taken.`
           : `[System] One-off clean prepaid. PaymentIntent ${paymentIntentId}.`,
-      }]);
+      }], isResidential ? undefined : property);
 
     if (!job) throw new Error("jobs insert returned no rows");
   } catch (err) {

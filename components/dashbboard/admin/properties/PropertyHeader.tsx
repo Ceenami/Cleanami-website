@@ -31,19 +31,19 @@ export const PropertyHeader = ({
         <ArrowLeftIcon className="mr-2 h-5 w-5" />
         Back to Properties List
       </Link>
-      <div className="bg-white p-6 rounded-lg shadow-md">
-        <h1 className="text-3xl font-bold text-gray-900">{property.address}</h1>
+      <div className="min-w-0 rounded-lg bg-white p-4 shadow-md sm:p-6">
+        <h1 className="text-2xl font-bold text-gray-900 [overflow-wrap:anywhere] sm:text-3xl">{property.address}</h1>
         {showOwner && (
           <>
-            <p className="text-gray-500 mt-1">
+            <p className="mt-1 text-gray-500 [overflow-wrap:anywhere]">
               Owned by: {customer?.name ?? 'N/A'}
             </p>
-            <div className="mt-3 flex flex-col gap-1 text-sm text-gray-600 sm:flex-row sm:gap-6">
-              <p>
+            <div className="mt-3 flex flex-col gap-1 text-sm text-gray-600 sm:flex-row sm:flex-wrap sm:gap-x-6">
+              <p className="min-w-0 [overflow-wrap:anywhere]">
                 <span className="font-medium text-gray-700">Email:</span>{" "}
                 {formatContactValue(customer?.email)}
               </p>
-              <p>
+              <p className="min-w-0 [overflow-wrap:anywhere]">
                 <span className="font-medium text-gray-700">Phone:</span>{" "}
                 {formatContactValue(customer?.phone)}
               </p>

@@ -112,11 +112,11 @@ export function CreateJobModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
-        <div className="mb-4 flex items-start justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Create a job</h3>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-3 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="create-job-title">
+      <div className="dashboard-form max-h-[calc(100dvh-1.5rem)] w-full min-w-0 max-w-lg overflow-y-auto overscroll-contain rounded-lg bg-white p-4 shadow-xl sm:max-h-[calc(100dvh-2rem)] sm:p-6">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 id="create-job-title" className="text-lg font-semibold text-gray-900">Create a job</h3>
             <p className="mt-1 text-sm text-gray-500">
               For a reclean, a correction, or any clean that did not come from a
               calendar or a booking. No charge is taken.
@@ -125,7 +125,7 @@ export function CreateJobModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full px-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="min-h-11 min-w-11 shrink-0 rounded-full px-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
             aria-label="Close"
           >
             ✕
@@ -260,18 +260,18 @@ export function CreateJobModal({
             </p>
           )}
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:justify-end">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="min-h-11 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting || !propertyId || !date}
-              className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+              className="min-h-11 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-300"
             >
               {submitting ? "Creating…" : "Create and assign"}
             </button>

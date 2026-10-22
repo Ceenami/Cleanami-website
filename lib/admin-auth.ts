@@ -7,6 +7,7 @@ import type { NextRequest } from "next/server";
 
 export type AdminAuthResult = {
   isAdmin: boolean;
+  userId?: string;
   userRole: string | undefined;
   error: string | null;
 };
@@ -65,5 +66,5 @@ export async function getAdminAuth(
     };
   }
 
-  return { isAdmin: true, userRole, error: null };
+  return { isAdmin: true, userId: supabaseUserId, userRole, error: null };
 }

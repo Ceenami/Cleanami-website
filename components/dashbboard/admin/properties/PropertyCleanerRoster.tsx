@@ -153,13 +153,14 @@ export const PropertyCleanerRoster = ({
         {roster.map((r) => (
           <div
             key={r.cleanerId}
-            className="flex items-center gap-2 rounded border border-gray-200 p-2"
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded border border-gray-200 p-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,12rem)_auto]"
           >
-            <span className="flex-1 text-sm text-gray-800">
+            <span className="col-span-2 min-w-0 text-sm text-gray-800 [overflow-wrap:anywhere] xl:col-span-1">
               {r.cleanerName ?? r.cleanerId}
             </span>
             <select
-              className="rounded border border-gray-300 px-2 py-1 text-sm"
+              className="w-full min-w-0 rounded border border-gray-300 px-2 py-1 text-sm"
+              aria-label={`Role for ${r.cleanerName ?? "cleaner"}`}
               value={r.tier}
               onChange={(e) => changeTier(r.cleanerId, e.target.value as Tier)}
             >
@@ -172,8 +173,9 @@ export const PropertyCleanerRoster = ({
             <button
               type="button"
               onClick={() => removeEntry(r.cleanerId)}
-              className="text-gray-400 hover:text-red-600"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-600"
               title="Remove"
+              aria-label={`Remove ${r.cleanerName ?? "cleaner"}`}
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -181,9 +183,10 @@ export const PropertyCleanerRoster = ({
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-end gap-2">
+      <div className="mt-4 grid min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,12rem)_auto] xl:items-end">
         <select
-          className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full min-w-0 rounded border border-gray-300 px-2 py-1 text-sm"
+          aria-label="Cleaner to add"
           value={addCleanerId}
           onChange={(e) => setAddCleanerId(e.target.value)}
         >
@@ -195,7 +198,8 @@ export const PropertyCleanerRoster = ({
           ))}
         </select>
         <select
-          className="rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full min-w-0 rounded border border-gray-300 px-2 py-1 text-sm"
+          aria-label="Role for new cleaner"
           value={addTier}
           onChange={(e) => setAddTier(e.target.value as Tier)}
         >
@@ -209,7 +213,7 @@ export const PropertyCleanerRoster = ({
           type="button"
           onClick={addEntry}
           disabled={!addCleanerId}
-          className="rounded bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+          className="min-h-11 rounded bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50"
         >
           Add
         </button>
@@ -222,7 +226,7 @@ export const PropertyCleanerRoster = ({
         type="button"
         onClick={save}
         disabled={saving}
-        className="mt-4 w-full rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+        className="mt-4 min-h-11 w-full rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
       >
         {saving ? "Saving…" : "Save Hierarchy"}
       </button>

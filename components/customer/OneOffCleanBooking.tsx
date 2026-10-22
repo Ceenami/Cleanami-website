@@ -231,7 +231,7 @@ export function OneOffCleanBooking({
   }
 
   return (
-    <div className="space-y-5 rounded-xl border border-gray-200 bg-white p-6">
+    <div className="dashboard-form min-w-0 space-y-5 rounded-xl border border-gray-200 bg-white p-4 sm:p-6">
       <div>
         <label className="block text-sm font-medium text-gray-700">
           Property
@@ -330,15 +330,15 @@ export function OneOffCleanBooking({
             Promo code <span className="font-normal text-gray-400">(optional)</span>
           </label>
           {promo ? (
-            <div className="mt-1 flex items-center justify-between rounded-md border border-teal-200 bg-teal-50 px-3 py-2">
-              <span className="text-sm font-medium text-teal-800">
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2">
+              <span className="min-w-0 break-words text-sm font-medium text-teal-800">
                 {promo.code} applied
               </span>
               <button
                 type="button"
                 onClick={clearPromo}
                 disabled={submitting}
-                className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                className="min-h-11 text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
               >
                 Remove
               </button>
@@ -388,7 +388,7 @@ export function OneOffCleanBooking({
       )}
 
       <div className="space-y-1 rounded-lg bg-gray-50 p-4">
-        <div className="flex items-center justify-between text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
           <span className="font-medium text-gray-700">Price for this clean</span>
           <span
             className={
