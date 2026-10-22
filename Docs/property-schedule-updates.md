@@ -15,13 +15,22 @@ property edit. An invalid window, insufficient staffing time, unverifiable calen
 source, concurrent edit or working-cleaner overlap rejects the entire save.
 No partial property/job update is reported as success.
 
-The authenticated property editor remains admin-only. This does not add customer
-property-edit permission. Existing customer requests handled through that editor
-now receive the same automatic propagation.
+Customers can edit guest check-in/check-out times on their own vacation rental
+property page. Saving updates eligible upcoming cleans using the same rules as
+the admin editor. Other property settings, including prices, size, laundry and
+cleaner assignments, remain admin-only. Residential bookings retain their chosen
+arrival windows.
+
+`PATCH /api/properties/[id]/schedule` accepts only `defaultCheckOutTime`,
+`defaultCheckInTime` and the loaded property's `expectedUpdatedAt` ISO timestamp.
+The authenticated customer must own the property; stale edits are rejected.
+Ownership is checked again under the property lock before saving. Schedule audit
+rows identify customer changes by their authenticated customer ID.
 
 ## Previously listed bookings
 
-The property's **Preview booking time updates** action compares its saved defaults
+The property's **Preview booking time updates** action, available to its customer
+and admins, compares its saved defaults
 with already-listed upcoming bookings. It shows before/after times in Eastern and
 the number preserved. **Update bookings** applies exactly that preview, bound to
 the property, original schedules and target schedules. A changed property/booking
@@ -98,7 +107,7 @@ Use a revision-aware build or fix forward. Do not delete revisions or re-run mon
 
 ## Verification
 
-- `npm run test:property-schedule`: 26 in-process PostgreSQL/service/API cases
+- `npm run test:property-schedule`: 33 in-process PostgreSQL/service/API cases
   with calendar, push and authentication mocks.
 - `node scripts/test-job-execution.cjs --with-schedule-upgrade`: 35
   execution cases against 0052 + 0053, including finalization and settlement.

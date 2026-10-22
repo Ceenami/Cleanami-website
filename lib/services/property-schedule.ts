@@ -163,6 +163,7 @@ function token(property: Property, plan: SchedulePlan) {
     .update(
       JSON.stringify({
         propertyId: property.id,
+        customerId: property.customerId,
         updatedAt: property.updatedAt,
         times: [property.defaultCheckInTime, property.defaultCheckOutTime],
         url: property.iCalUrl,
@@ -231,6 +232,7 @@ export async function savePropertySchedule(input: {
         .for("no key update");
       if (
         !fresh ||
+        fresh.customerId !== property.customerId ||
         fresh.updatedAt.getTime() !== property.updatedAt.getTime() ||
         fresh.iCalUrl !== property.iCalUrl ||
         fresh.defaultCheckInTime !== property.defaultCheckInTime ||
