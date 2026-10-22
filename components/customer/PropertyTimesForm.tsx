@@ -87,9 +87,8 @@ export function PropertyTimesForm({
   return (
     <Card icon={<Clock />} title="Guest check-in and check-out times">
       <p className="text-sm text-gray-600">
-        All times are Eastern. Changes also update upcoming rental cleans that
-        follow your home&apos;s times. Started cleans, individual overrides and
-        explicit calendar times keep their schedules.
+        All times are Eastern. Changes also update upcoming cleans that use your
+        home&apos;s default times.
       </p>
       <form onSubmit={save} className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

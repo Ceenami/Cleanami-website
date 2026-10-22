@@ -165,7 +165,7 @@ export function CleanerStaffingView() {
     : data.cleaners.filter((cleaner) => cleaner.eligibleForAssignments);
 
   return (
-    <section className="space-y-4">
+    <section className="min-w-0 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Cleaner Staffing</h2>
@@ -177,28 +177,28 @@ export function CleanerStaffingView() {
           <button
             type="button"
             onClick={() => setSelectedRange(shiftRange(data.range, -dates.length))}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Previous
           </button>
           <button
             type="button"
             onClick={() => setSelectedRange(null)}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Current block
           </button>
           <button
             type="button"
             onClick={() => setSelectedRange(shiftRange(data.range, dates.length))}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Next
           </button>
         </div>
       </div>
 
-      <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+      <label className="inline-flex min-h-11 items-center gap-2 text-sm text-gray-700">
         <input
           type="checkbox"
           checked={showInactive}
@@ -207,20 +207,35 @@ export function CleanerStaffingView() {
         Show ineligible and inactive cleaners
       </label>
 
-      <div className="rounded-lg border border-gray-200 bg-white">
+      <div className="min-w-0 max-w-full rounded-lg border border-gray-200 bg-white">
         <div className="border-b border-gray-200 px-4 py-3 text-xs text-gray-600">
           Green: marked available. Blue: assigned clean. Gray “No submission” means
           this period predates the submission ledger or the cleaner has not submitted.
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-max divide-y divide-gray-200 text-sm">
+        <p className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 sm:hidden">
+          Swipe left or right to see more dates.
+        </p>
+        <div
+          role="region"
+          aria-label="Cleaner availability by date"
+          tabIndex={0}
+          className="w-full max-w-full overflow-x-auto overscroll-x-contain rounded-b-lg [--cleaner-column-width:9rem] focus-visible:outline-2 focus-visible:outline-teal-600 sm:[--cleaner-column-width:15rem]"
+        >
+          <table
+            className="table-fixed divide-y divide-gray-200 text-sm"
+            style={{ width: `calc(var(--cleaner-column-width) + ${dates.length * 9}rem)` }}
+          >
+            <colgroup>
+              <col style={{ width: "var(--cleaner-column-width)" }} />
+              {dates.map((date) => <col key={date} style={{ width: "9rem" }} />)}
+            </colgroup>
             <thead className="bg-gray-50">
               <tr>
-                <th className="sticky left-0 z-10 min-w-60 bg-gray-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th scope="col" className="sticky left-0 z-10 bg-gray-50 px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 sm:px-4">
                   Cleaner
                 </th>
                 {dates.map((date) => (
-                  <th key={date} className="min-w-36 px-3 py-3 text-left text-xs font-semibold text-gray-500">
+                  <th key={date} scope="col" className="px-3 py-3 text-left text-xs font-semibold text-gray-500">
                     {displayDay(date)}
                   </th>
                 ))}
@@ -229,7 +244,7 @@ export function CleanerStaffingView() {
             <tbody className="divide-y divide-gray-200">
               {visibleCleaners.map((cleaner) => (
                 <tr key={cleaner.id}>
-                  <td className="sticky left-0 z-10 bg-white px-4 py-3 align-top">
+                  <th scope="row" className="sticky left-0 z-10 break-words bg-white px-3 py-3 text-left align-top font-normal sm:px-4">
                     <p className="font-semibold text-gray-900">{cleaner.fullName}</p>
                     <p className="mt-1 text-xs text-gray-500">
                       {cleaner.eligibleForAssignments ? "Assignment eligible" : "Not assignment eligible"}
@@ -240,7 +255,7 @@ export function CleanerStaffingView() {
                         {submission.lastUpdatedAt !== submission.firstSubmittedAt && ` · changed ${displayTimestamp(submission.lastUpdatedAt)}`}
                       </p>
                     ))}
-                  </td>
+                  </th>
                   {dates.map((date) => {
                     const availability = availabilityByCell.get(`${cleaner.id}:${date}`);
                     const submitted = submissionsByCleaner
