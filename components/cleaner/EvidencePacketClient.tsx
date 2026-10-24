@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -47,6 +47,8 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingRoom, setUploadingRoom] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
+  const uploadInProgress = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -89,7 +91,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
     (req) => (roomPhotos[req.roomKey]?.length ?? 0) >= req.minPhotos
   );
 
-  const canSubmit = allChecklistChecked && allPhotoMinimumsMet && !submitting;
+  const canSubmit = allChecklistChecked && allPhotoMinimumsMet && !submitting && !uploadingRoom;
 
   const toggleChecklistItem = (id: string) => {
     setChecklistItems((items) =>
@@ -99,33 +101,48 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
     );
   };
 
-  const uploadPhoto = useCallback(
-    async (roomKey: string, file: File) => {
+  const uploadPhotos = useCallback(
+    async (roomKey: string, files: File[]) => {
+      if (uploadInProgress.current || files.length === 0) return;
+      uploadInProgress.current = true;
       setUploadingRoom(roomKey);
+      setUploadProgress({ completed: 0, total: files.length });
+      setError(null);
+      const failures: string[] = [];
       try {
-        const body = new FormData();
-        body.append("file", file);
-        body.append("roomKey", roomKey);
+        // Send one image per request; a failed image must not discard the rest.
+        for (const [index, file] of files.entries()) {
+          try {
+            const body = new FormData();
+            body.append("file", file);
+            body.append("roomKey", roomKey);
 
-        const response = await fetch(
-          `/api/cleaner/jobs/${jobId}/evidence/upload`,
-          { method: "POST", body }
-        );
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Upload failed");
+            const response = await fetch(
+              `/api/cleaner/jobs/${jobId}/evidence/upload`,
+              { method: "POST", body }
+            );
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error ?? "Upload failed");
 
-        setRoomPhotos((prev) => ({
-          ...prev,
-          [roomKey]: [...(prev[roomKey] ?? []), data.path as string],
-        }));
-        setRoomPhotoPreviews((prev) => ({
-          ...prev,
-          [roomKey]: [...(prev[roomKey] ?? []), (data.url as string) ?? ""],
-        }));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Upload failed");
+            setRoomPhotos((prev) => ({
+              ...prev,
+              [roomKey]: [...(prev[roomKey] ?? []), data.path as string],
+            }));
+            setRoomPhotoPreviews((prev) => ({
+              ...prev,
+              [roomKey]: [...(prev[roomKey] ?? []), (data.url as string) ?? ""],
+            }));
+          } catch (err) {
+            failures.push(`${file.name}: ${err instanceof Error ? err.message : "Upload failed"}`);
+          }
+          setUploadProgress({ completed: index + 1, total: files.length });
+        }
       } finally {
+        uploadInProgress.current = false;
         setUploadingRoom(null);
+      }
+      if (failures.length > 0) {
+        setError(`Some photos could not be uploaded. Other uploaded photos are retained. ${failures.join("; ")}`);
       }
     },
     [jobId]
@@ -328,16 +345,20 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 py-3 text-sm font-medium text-gray-600 hover:border-brand hover:text-brand">
                 <Upload className="h-4 w-4" />
-                {isUploading ? "Uploading…" : "Add photo"}
+                {isUploading
+                  ? `Uploading ${uploadProgress.completed}/${uploadProgress.total} photos…`
+                  : "Add photos"}
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  aria-label={`Add photos for ${req.label}`}
                   className="sr-only"
-                  disabled={isUploading}
+                  disabled={uploadingRoom !== null || submitting}
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) uploadPhoto(req.roomKey, file);
+                    const files = Array.from(e.target.files ?? []);
                     e.target.value = "";
+                    if (files.length) void uploadPhotos(req.roomKey, files);
                   }}
                 />
               </label>
