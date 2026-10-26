@@ -306,6 +306,9 @@ export async function getCleanerEvidenceFormData(
 
   return {
     jobId,
+    queueOwner: cleanerId,
+    evidenceOpen: !evidence?.finalEvidenceSubmittedAt &&
+      ["in-progress", "completed_pending_evidence"].includes(assignment.job.status ?? ""),
     property: {
       bedCount: property.bedCount,
       bathCount: property.bathCount,

@@ -241,7 +241,17 @@ export async function PATCH(
     const now = new Date();
     const departed = assignment.job.status === "completed_pending_evidence";
 
-    await db.transaction(async (tx) => {
+    const alreadySubmitted = await db.transaction(async (tx) => {
+      // Serialize final submission with direct-upload acknowledgements/removals.
+      const [currentJob] = await tx.select().from(jobs).where(eq(jobs.id, jobId)).for("update");
+      const [currentPacket] = await tx.select().from(evidencePackets).where(eq(evidencePackets.jobId, jobId)).for("update");
+      const [currentAssignment] = await tx.select().from(jobsToCleaners).where(and(eq(jobsToCleaners.jobId, jobId), eq(jobsToCleaners.cleanerId, cleanerId)));
+      if (currentPacket?.finalEvidenceSubmittedAt) return true;
+      if (!currentAssignment || !currentJob ||
+        !["in-progress", "completed_pending_evidence"].includes(currentJob.status ?? ""))
+        throw new ExecutionError("Evidence is no longer open for changes");
+      if ((currentJob.status === "completed_pending_evidence") !== departed)
+        throw new ExecutionError("Job checkout changed. Reload the saved evidence before submitting.");
       await tx
         .update(evidencePackets)
         .set({
@@ -261,7 +271,9 @@ export async function PATCH(
           .set({ status: "awaiting_capture", updatedAt: now })
           .where(eq(jobs.id, jobId));
       }
+      return false;
     });
+    if (alreadySubmitted) return NextResponse.json({ success: true, alreadySubmitted: true });
 
     // Capture never runs in the mobile process. A transient Stripe failure
     // leaves the job in awaiting_capture for the authenticated server cron;
@@ -279,8 +291,8 @@ export async function PATCH(
   } catch (err) {
     console.error("[PATCH /api/cleaner/jobs/[id]/evidence]", err);
     return NextResponse.json(
-      { error: "Failed to submit evidence" },
-      { status: 500 }
+      { error: err instanceof ExecutionError ? err.message : "Failed to submit evidence" },
+      { status: err instanceof ExecutionError ? err.status : 500 }
     );
   }
 }
