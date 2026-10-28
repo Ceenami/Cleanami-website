@@ -89,7 +89,12 @@ export default function Layout({
                 >
                   Privacy Policy
                 </Link>
-                {/* Add more links here if needed, e.g., /services, /contact */}
+                <Link
+                  href="/sms-terms"
+                  className="text-gray-600 hover:text-brand transition-colors duration-200 text-sm"
+                >
+                  SMS Terms
+                </Link>
               </nav>
             </div>
 

@@ -8,6 +8,20 @@ import {
   saveCleanerOnboardingStep,
 } from "@/lib/queries/cleaner-onboarding";
 import { syncStripeOnboardingStatus } from "@/lib/cleaner/stripe-connect";
+import { z } from "zod";
+import { SmsConsentInputError } from "@/lib/services/cleaner-sms-consent";
+
+const onboardingInput = z.object({
+  step: z.number().int().min(1).max(4),
+  phone: z.string().max(50).optional(),
+  address: z.string().max(1000).optional(),
+  experienceYears: z.number().int().min(0).max(100).optional(),
+  hasHotTubCert: z.boolean().optional(),
+  legalDocsAcknowledged: z.boolean().optional(),
+  complete: z.boolean().optional(),
+  smsOptedIn: z.boolean().optional(),
+  smsDisclosureVersion: z.string().max(50).optional(),
+});
 
 export async function GET() {
   const { cleanerId, error } = await getCleanerAuth();
@@ -53,10 +67,16 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
-    const body = await request.json();
-    const updated = await saveCleanerOnboardingStep(cleanerId, body);
+    const parsed = onboardingInput.safeParse(await request.json());
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid onboarding details." }, { status: 400 });
+    }
+    const updated = await saveCleanerOnboardingStep(cleanerId, parsed.data);
     return NextResponse.json({ success: true, cleaner: updated });
   } catch (err) {
+    if (err instanceof SmsConsentInputError || err instanceof SyntaxError) {
+      return NextResponse.json({ error: err instanceof SmsConsentInputError ? err.message : "Invalid request body." }, { status: 400 });
+    }
     console.error("[PATCH /api/cleaner/onboarding]", err);
     return NextResponse.json(
       { error: "Failed to update onboarding" },

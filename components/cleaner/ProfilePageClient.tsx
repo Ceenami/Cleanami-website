@@ -7,6 +7,7 @@ import { useSignOut } from "@/hooks/useSignOut";
 import { CleanerPageMessage } from "@/components/cleaner/CleanerPageMessage";
 import { parseCleanerApiError } from "@/lib/cleaner/parse-api-error";
 import { getReliabilityColor } from "@/lib/cleaner/reliability";
+import { SmsPreferences } from "@/components/cleaner/SmsPreferences";
 
 export type CleanerProfile = {
   fullName: string;
@@ -386,6 +387,8 @@ export function ProfilePageClient() {
           {error}
         </div>
       )}
+
+      <SmsPreferences />
 
       <button
         type="button"

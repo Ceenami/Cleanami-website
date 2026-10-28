@@ -9,6 +9,7 @@ import {
 import { logCleanerAuditEvent } from "@/lib/queries/cleaner-invitations";
 import { syncEligibleForAssignments } from "@/lib/cleaner/eligibility";
 import { eq } from "drizzle-orm";
+import { saveCleanerSmsConsent } from "@/lib/services/cleaner-sms-consent";
 
 export async function getCleanerOnboardingState(cleanerId: string) {
   const cleaner = await db.query.cleaners.findFirst({
@@ -27,6 +28,8 @@ export async function saveCleanerOnboardingStep(
   input: {
     step: number;
     phone?: string;
+    smsOptedIn?: boolean;
+    smsDisclosureVersion?: string;
     address?: string;
     experienceYears?: number;
     hasHotTubCert?: boolean;
@@ -48,7 +51,7 @@ export async function saveCleanerOnboardingStep(
     updatedAt: now,
   };
 
-  if (input.phone !== undefined) patch.phone = input.phone;
+  if (input.phone !== undefined && input.smsOptedIn === undefined) patch.phone = input.phone;
   if (input.address !== undefined) patch.address = input.address;
   if (input.experienceYears !== undefined) {
     patch.experienceYears = input.experienceYears;
@@ -64,6 +67,20 @@ export async function saveCleanerOnboardingStep(
       gpsConsentUrl: "acknowledged",
       contractorAgreementUrl: "acknowledged",
     };
+  }
+
+  if (input.smsOptedIn !== undefined) {
+    // Keep consent independent from document acceptance and completion.
+    // Number and consent are saved in one transaction; invalid consent cannot
+    // partially change the saved phone or complete onboarding.
+    await saveCleanerSmsConsent({
+      cleanerId,
+      phone: input.phone ?? cleaner.phone ?? "",
+      optedIn: input.smsOptedIn,
+      disclosureVersion: input.smsDisclosureVersion,
+      source: "onboarding",
+      phoneToSave: input.phone,
+    });
   }
 
   if (input.complete) {
