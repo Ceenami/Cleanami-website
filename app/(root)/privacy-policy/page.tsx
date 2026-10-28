@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Privacy Policy | CleanNami",
@@ -50,8 +51,8 @@ export default function PrivacyPolicyPage() {
             Privacy Policy
           </h1>
           <p className="mt-4 text-gray-600">
-            Effective Date: August 14, 2026 &nbsp;|&nbsp; Last Updated: August
-            14, 2026
+            Effective Date: August 14, 2026 &nbsp;|&nbsp; Last Updated: October
+            28, 2026
           </p>
         </div>
       </section>
@@ -157,6 +158,11 @@ export default function PrivacyPolicyPage() {
               "Comply with legal, tax, accounting, contractual, and regulatory obligations.",
             ]}
           />
+          <p>
+            CleanNami uses contractor mobile numbers and SMS delivery/consent
+            records to provide operational cleaning notifications, maintain
+            messaging permissions, and respond to support requests.
+          </p>
         </Section>
 
         <Section title="3. How We Share Information">
@@ -169,6 +175,15 @@ export default function PrivacyPolicyPage() {
               "In connection with a business transfer, such as a merger, acquisition, financing, restructuring, or sale of assets, subject to appropriate confidentiality protections.",
             ]}
           />
+          <p>
+            All the above categories exclude text messaging originator opt-in
+            data and consent; this information will not be shared with any third
+            parties.
+          </p>
+          <p>
+            No mobile information will be shared with third parties or affiliates
+            for marketing or promotional purposes.
+          </p>
           <p className="font-semibold text-gray-900">
             We do not sell personal information. We also do not use personal
             information for third-party targeted advertising or cross-app
@@ -216,9 +231,28 @@ export default function PrivacyPolicyPage() {
             items={[
               "We may send operational messages by email, SMS, push notification, phone, or in-app message.",
               "Operational messages may include setup links, booking updates, cleaner assignments, reminders, calendar sync alerts, failed payment notices, job-status alerts, payout information, and support communications.",
-              "You may opt out of non-essential marketing communications where offered. Some operational messages are required to provide the Services.",
+              "You may opt out of non-essential marketing communications where offered. Contractor SMS consent is optional and is not a condition of onboarding. Contractors who opt out must continue monitoring their dashboard or designated email channel for operational updates.",
             ]}
           />
+          <p>
+            Contractor SMS message frequency varies depending on availability
+            and cleaning assignments. Message and data rates may apply. Reply
+            STOP to opt out or HELP for assistance. You may also contact us at{" "}
+            <a
+              href="mailto:cleannami@ceenami.com"
+              className="text-brand underline underline-offset-4 break-words"
+            >
+              cleannami@ceenami.com
+            </a>
+            . See our{" "}
+            <Link
+              href="/sms-terms"
+              className="text-brand underline underline-offset-4"
+            >
+              SMS Terms
+            </Link>
+            .
+          </p>
         </Section>
 
         <Section title="7. Data Retention">

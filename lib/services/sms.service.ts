@@ -1,6 +1,11 @@
 import "server-only";
 
 import twilio from "twilio";
+import { db } from "@/db";
+import { cleaners } from "@/db/schemas";
+import { eq } from "drizzle-orm";
+import { normalizeSmsPhone } from "@/lib/sms/consent";
+import { getCleanerSmsConsentState } from "@/lib/services/cleaner-sms-consent";
 
 import {
   recordNotificationAttempt,
@@ -33,10 +38,11 @@ export function getTwilio(): TwilioClient | null {
 export async function sendSms(
   to: string | null | undefined,
   body: string,
-  meta?: NotificationMeta
+  meta: NotificationMeta & { cleanerId: string }
 ): Promise<boolean> {
   const client = getTwilio();
   const from = process.env.TWILIO_FROM_NUMBER;
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
   const logMeta: NotificationMeta = {
     trigger: "sms",
     ...meta,
@@ -46,14 +52,14 @@ export async function sendSms(
   // Three different reasons for the same silence, and the log tells them
   // apart: no Twilio credentials, no from-number, or a cleaner with no phone
   // on file. The third is an operational problem and the first two are not.
-  if (!client || !from || !to) {
+  if (!client || (!from && !messagingServiceSid) || !to) {
     await recordNotificationAttempt({
       channel: "sms",
       status: "skipped",
       error: !client
         ? "Twilio is not configured"
-        : !from
-          ? "TWILIO_FROM_NUMBER is not set"
+        : !from && !messagingServiceSid
+          ? "No Twilio sender is configured"
           : "no phone number on file for this recipient",
       meta: logMeta,
     });
@@ -61,7 +67,23 @@ export async function sendSms(
   }
 
   try {
-    await client.messages.create({ to, from, body });
+    const normalized = normalizeSmsPhone(to);
+    const [cleaner] = await db.select({ phone: cleaners.phone }).from(cleaners)
+      .where(eq(cleaners.id, meta.cleanerId)).limit(1);
+    const consent = await getCleanerSmsConsentState(meta.cleanerId, cleaner?.phone ?? null);
+    if (!normalized || normalized !== consent.phone || !consent.canSend) {
+      await recordNotificationAttempt({
+        channel: "sms", status: "skipped",
+        error: "No current SMS consent for this number, or carrier opt-out is active",
+        meta: logMeta,
+      });
+      return false;
+    }
+    await client.messages.create({
+      to: normalized,
+      ...(messagingServiceSid ? { messagingServiceSid } : { from }),
+      body: `CleanNami: ${body}\nReply STOP to opt out or HELP for help.`,
+    });
     await recordNotificationAttempt({
       channel: "sms",
       status: "sent",

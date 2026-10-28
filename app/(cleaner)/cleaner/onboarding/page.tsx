@@ -4,6 +4,7 @@ import { isCleanerPortalUnlocked } from "@/lib/cleaner/eligibility";
 import { getCleanerOnboardingState } from "@/lib/queries/cleaner-onboarding";
 import { syncStripeOnboardingStatus } from "@/lib/cleaner/stripe-connect";
 import { redirect } from "next/navigation";
+import { getCleanerSmsConsentState } from "@/lib/services/cleaner-sms-consent";
 
 export default async function CleanerOnboardingPage({
   searchParams,
@@ -27,12 +28,15 @@ export default async function CleanerOnboardingPage({
   }
 
   const legal = cleaner.legalDocsSigned;
+  const smsConsent = await getCleanerSmsConsentState(cleanerId, cleaner.phone);
 
   return (
     <OnboardingWizard
       initial={{
         step: cleaner.onboardingStep ?? 1,
         phone: cleaner.phone ?? "",
+        smsOptedIn: smsConsent.optedIn,
+        smsCarrierBlocked: smsConsent.carrierBlocked,
         address: cleaner.address ?? "",
         experienceYears: cleaner.experienceYears?.toString() ?? "",
         hasHotTubCert: cleaner.hasHotTubCert ?? false,

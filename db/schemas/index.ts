@@ -41,3 +41,4 @@ export * from './processedStripeEvents.schema';
 
 export * from "./jobExecution.schema";
 export * from "./jobScheduleRevisions.schema";
+export * from "./cleanerSmsConsentEvents.schema";

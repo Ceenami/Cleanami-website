@@ -3,10 +3,14 @@
 import { useState } from "react";
 import { Loader } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SmsConsentField } from "@/components/cleaner/SmsConsentField";
+import { SMS_CONSENT_VERSION } from "@/lib/sms/consent";
 
 type OnboardingState = {
   step: number;
   phone: string;
+  smsOptedIn: boolean;
+  smsCarrierBlocked: boolean;
   address: string;
   experienceYears: string;
   hasHotTubCert: boolean;
@@ -30,6 +34,7 @@ export function OnboardingWizard({
 }) {
   const [step, setStep] = useState(initial.step || 1);
   const [phone, setPhone] = useState(initial.phone ?? "");
+  const [smsOptedIn, setSmsOptedIn] = useState(initial.smsOptedIn);
   const [address, setAddress] = useState(initial.address ?? "");
   const [experienceYears, setExperienceYears] = useState(
     initial.experienceYears ?? ""
@@ -58,6 +63,10 @@ export function OnboardingWizard({
         body: JSON.stringify({
           step: nextStep,
           phone,
+          ...(step === 1 ? {
+            smsOptedIn,
+            smsDisclosureVersion: SMS_CONSENT_VERSION,
+          } : {}),
           address,
           experienceYears: experienceYears
             ? Number.parseInt(experienceYears, 10)
@@ -134,11 +143,23 @@ export function OnboardingWizard({
             </label>
             <input
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                setSmsOptedIn(false);
+              }}
+              type="tel"
+              autoComplete="tel"
               className="w-full rounded-lg border px-3 py-2 text-sm"
               placeholder="(555) 555-5555"
             />
           </div>
+          <SmsConsentField checked={smsOptedIn} onChange={setSmsOptedIn} disabled={saving} />
+          {initial.smsCarrierBlocked && (
+            <p className="text-sm text-gray-600">
+              You previously stopped texts with your carrier. To resume, reply
+              START to the CleanNami number and save your SMS consent here.
+            </p>
+          )}
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700">
               Home address

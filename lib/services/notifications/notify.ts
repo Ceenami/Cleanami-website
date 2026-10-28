@@ -89,6 +89,7 @@ export async function notifyCleaner(input: {
       columns: { phone: true },
     });
     await sendSms(cleaner?.phone, `${input.title}: ${input.message}`, {
+      cleanerId: input.cleanerId,
       trigger: input.type,
       userId,
       jobId: input.jobId ?? null,
