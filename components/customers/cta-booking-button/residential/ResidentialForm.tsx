@@ -27,6 +27,7 @@ import { serializeResidentialFormForServer } from "@/lib/validations/residential
 import type { PriceDetails } from "@/lib/validations/bookng-modal";
 import { CUSTOM_QUOTE_RESIDENTIAL_MESSAGE } from "@/lib/pricing/custom-quote-message";
 import type { ArrivalWindowKey } from "@/lib/scheduling/arrival-windows";
+import { trackPaidBooking, type BookingConversion } from "@/lib/analytics";
 
 /**
  * The residential one-time wizard — counterproposal item 4.
@@ -346,10 +347,15 @@ export const ResidentialForm = ({
       const result = (await response.json()) as {
         success?: boolean;
         error?: string;
-        data?: { portalInviteEmailSent?: boolean };
+        data?: { portalInviteEmailSent?: boolean; tracking?: BookingConversion };
       };
 
       if (response.ok && result.success) {
+        // Server-confirmed paid booking; measurement cannot delay session cleanup/confirmation.
+        trackPaidBooking(result.data?.tracking);
+        if (result.data?.tracking) setPaymentData({
+          paymentIntentId, amountInCents: result.data.tracking.amountCents,
+        });
         setPortalInviteEmailSent(result.data?.portalInviteEmailSent !== false);
         try {
           await fetch("/api/onboarding/session", {

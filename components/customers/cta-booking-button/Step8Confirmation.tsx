@@ -1,29 +1,17 @@
 import Link from "next/link";
-import GoogleConversionTracking from "@/components/ConversionTracking";
 import { CheckCircle, Sparkles } from "lucide-react";
 
 interface Step8ConfirmationProps {
   paymentIntentId?: string;
-  amount?: number;
-  currency?: string;
   portalInviteEmailSent?: boolean;
 }
 
 export const Step8Confirmation = ({ 
   paymentIntentId, 
-  amount, 
-  currency = 'CHF',
   portalInviteEmailSent = true,
 }: Step8ConfirmationProps) => {
   return (
     <div className="text-center py-8 px-4">
-      {paymentIntentId && amount && (
-        <GoogleConversionTracking
-          transactionId={paymentIntentId}
-          value={amount}
-          currency={currency}
-        />
-      )}
       <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-green-100">
         <CheckCircle className="h-12 w-12 text-green-600" />
       </div>

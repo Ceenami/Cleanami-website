@@ -17,7 +17,7 @@ interface Props {
   priceDetails: PriceDetails | null;
   formData: SignupFormData;
   setFormData: React.Dispatch<React.SetStateAction<SignupFormData>>;
-  onPaymentSuccess: (paymentIntentId: string) => void;
+  onPaymentSuccess: (paymentIntentId: string, chargedAmountCents: number | null) => void;
   onBookCall?: () => void;
   onContinueSetup?: () => void;
   paymentFinalizing?: boolean;
@@ -214,7 +214,7 @@ export const Step7Payment = ({
 
           {clientSecret && !error ? (
             <Elements options={options} stripe={stripePromise}>
-              <CheckoutForm onPaymentSuccess={onPaymentSuccess} />
+              <CheckoutForm onPaymentSuccess={(id) => onPaymentSuccess(id, amountInCents)} />
             </Elements>
           ) : (
             !error && (

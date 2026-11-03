@@ -1,4 +1,5 @@
 import "server-only";
+import { bookingConversion, type BookingConversion } from "@/lib/analytics";
 import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import { verifySettledPayment } from "@/lib/services/payment/verify-settled-payment";
 
@@ -615,6 +616,7 @@ export type CompleteResidentialResult =
         job: { id: string };
         portalInviteEmailSent: boolean;
         alreadyCompleted?: boolean;
+        tracking?: BookingConversion;
       };
     }
   | { success: false; error: string };
@@ -647,6 +649,7 @@ export async function completeResidentialBooking(
 ): Promise<CompleteResidentialResult> {
   // Refund only after the intent has been verified for this booking.
   let paymentVerified = false;
+  let trackingPayment: Stripe.PaymentIntent | undefined;
   let verifiedDb: ReturnType<typeof getDbOrNull> = null;
 
   try {
@@ -721,6 +724,7 @@ export async function completeResidentialBooking(
 
     // A verified payment is refunded if finalization fails.
     paymentVerified = true;
+    trackingPayment = paymentIntent;
 
     verifiedDb = getDbOrNull();
     if (!verifiedDb) throw new Error(SERVICE_UNAVAILABLE.database);
@@ -748,6 +752,8 @@ export async function completeResidentialBooking(
           job: { id: replayed.id },
           portalInviteEmailSent: invite.success ? invite.emailSent : false,
           alreadyCompleted: true,
+          tracking: replayed.paymentStatus === "captured"
+            ? bookingConversion(paymentIntent.id, paymentIntent.amount_received) : undefined,
         },
       };
     }
@@ -1101,6 +1107,7 @@ export async function completeResidentialBooking(
         portalInviteEmailSent: accountResult.success
           ? accountResult.emailSent
           : false,
+        tracking: bookingConversion(paymentIntent.id, paymentIntent.amount_received),
       },
     };
   } catch (error) {
@@ -1131,6 +1138,8 @@ export async function completeResidentialBooking(
               job: { id: replayed.id },
               portalInviteEmailSent: false,
               alreadyCompleted: true,
+              tracking: replayed.paymentStatus === "captured"
+                ? bookingConversion(trackingPayment?.id, trackingPayment?.amount_received) : undefined,
             },
           };
         }

@@ -29,6 +29,7 @@ import { ResumeSessionPrompt } from "../ResumeSessionPrompt";
 import { Loader } from "lucide-react";
 import { CallBookedConfirmation } from "@/components/CallBookedConfirmation";
 import { BookingServiceHeader } from "./BookingServiceHeader";
+import { bookingConversion, trackPaidBooking } from "@/lib/analytics";
 
 const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
@@ -91,8 +92,6 @@ export const SignupForm = ({
 }: Props) => {
   const [paymentData, setPaymentData] = useState<{
     paymentIntentId: string;
-    amount: number;
-    currency: string;
   } | null>(null);
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -374,11 +373,9 @@ export const SignupForm = ({
   };
 
   // Payment success handler
-  const handlePaymentSuccess = async (paymentIntentId: string) => {
+  const handlePaymentSuccess = async (paymentIntentId: string, chargedAmountCents: number | null) => {
     setPaymentData({
       paymentIntentId,
-      amount: displayedPriceDetails?.totalPerClean || 0,
-      currency: "CHF",
     });
     setIsSaving(true);
     setSaveError(null);
@@ -409,6 +406,7 @@ export const SignupForm = ({
       };
 
       if (response.ok && result.success) {
+        trackPaidBooking(bookingConversion(paymentIntentId, chargedAmountCents));
         setPortalInviteEmailSent(result.data?.portalInviteEmailSent !== false);
         // Complete the onboarding session (non-fatal if it fails)
         try {
@@ -532,8 +530,6 @@ export const SignupForm = ({
         return (
           <Step8Confirmation
             paymentIntentId={paymentData?.paymentIntentId}
-            amount={paymentData?.amount}
-            currency={paymentData?.currency}
             portalInviteEmailSent={portalInviteEmailSent}
           />
         );
