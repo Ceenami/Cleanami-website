@@ -10,6 +10,7 @@ export type AdminAuthResult = {
   userId?: string;
   userRole: string | undefined;
   error: string | null;
+  actorId?: string;
 };
 
 /**
@@ -19,15 +20,14 @@ export type AdminAuthResult = {
  * getUser() fallback for resolving the caller's identity.
  */
 export async function getAdminAuth(
-  request?: NextRequest | Request
+  request?: NextRequest | Request,
 ): Promise<AdminAuthResult> {
   const supabase = await createClient();
 
   const { data: claimsData } = await supabase.auth.getClaims();
   const claims = claimsData?.claims as Record<string, unknown> | undefined;
 
-  let supabaseUserId =
-    typeof claims?.sub === "string" ? claims.sub : undefined;
+  let supabaseUserId = typeof claims?.sub === "string" ? claims.sub : undefined;
   let email = typeof claims?.email === "string" ? claims.email : undefined;
 
   if (!supabaseUserId) {
@@ -66,5 +66,5 @@ export async function getAdminAuth(
     };
   }
 
-  return { isAdmin: true, userId: supabaseUserId, userRole, error: null };
+  return { isAdmin: true, userRole, error: null, userId: supabaseUserId, actorId: supabaseUserId };
 }

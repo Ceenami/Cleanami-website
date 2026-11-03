@@ -13,10 +13,9 @@ import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
  * a third by copy-paste is how the skip-payment and authorized/captured
  * handling drift apart.
  *
- * Best-effort by contract: it never throws. Every caller is already in a
- * failure path, and a void that fails must not mask the original error. It is
- * logged at error level rather than warn because a failed void means real money
- * is stranded with nothing recorded against it.
+ * Recovery callers are best-effort by default so a void failure cannot mask
+ * their original error. Cancellation opts into strict handling: its database
+ * transaction must not record a refund the provider did not accept.
  */
 export async function voidCharge(input: {
   paymentIntentId: string | null;
@@ -24,23 +23,36 @@ export async function voidCharge(input: {
   paymentStatus: string | null;
   /** Included in the log line so a stranded charge can be traced to its caller. */
   context: string;
+  /** Cancellation must not record a refund if the provider did not accept it. */
+  strict?: boolean;
 }): Promise<void> {
   const stripe = getStripe();
-  if (
-    !stripe ||
-    !input.paymentIntentId ||
-    isSkippedPaymentIntent(input.paymentIntentId)
-  ) {
+  if (!input.paymentIntentId || isSkippedPaymentIntent(input.paymentIntentId)) {
+    return;
+  }
+  if (!stripe) {
+    if (
+      input.strict &&
+      ["authorized", "captured"].includes(input.paymentStatus ?? "")
+    )
+      throw new Error(
+        "Payment provider unavailable; cancellation was not completed",
+      );
     return;
   }
 
   if (input.paymentStatus === "authorized") {
     try {
-      await stripe.paymentIntents.cancel(input.paymentIntentId);
+      await stripe.paymentIntents.cancel(
+        input.paymentIntentId,
+        {},
+        { idempotencyKey: `void_${input.paymentIntentId}` },
+      );
     } catch (error) {
+      if (input.strict) throw error;
       console.error(
         `[voidCharge] PI cancel failed (${input.context}, ${input.paymentIntentId}):`,
-        error
+        error,
       );
     }
     return;
@@ -48,11 +60,17 @@ export async function voidCharge(input: {
 
   if (input.paymentStatus === "captured") {
     try {
-      await stripe.refunds.create({ payment_intent: input.paymentIntentId });
+      const refund = await stripe.refunds.create(
+        { payment_intent: input.paymentIntentId },
+        { idempotencyKey: `refund_${input.paymentIntentId}` },
+      );
+      if (input.strict && refund.status !== "succeeded")
+        throw new Error("Refund is pending confirmation or failed; cancellation was not completed");
     } catch (error) {
+      if (input.strict) throw error;
       console.error(
         `[voidCharge] refund failed (${input.context}, ${input.paymentIntentId}):`,
-        error
+        error,
       );
     }
   }

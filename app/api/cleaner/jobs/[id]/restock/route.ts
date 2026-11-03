@@ -18,20 +18,20 @@ const bodySchema = z.object({
 /** Cleaner raises a supply request from a job they are assigned to (task 1.16). */
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   const { id: jobId } = await params;
   const { error: assignmentError } = await requireCleanerJobAssignment(
     cleanerId,
-    jobId
+    jobId,
   );
 
   if (assignmentError) {
@@ -43,7 +43,7 @@ export async function POST(
     if (!parsed.success) {
       return NextResponse.json(
         { error: parsed.error.issues[0]?.message ?? "Invalid request." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -57,12 +57,16 @@ export async function POST(
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, id: result.id });
+    return NextResponse.json({
+      success: true,
+      id: result.id,
+      adminNotificationRecorded: result.adminNotificationRecorded,
+    });
   } catch (err) {
     console.error("[POST /api/cleaner/jobs/[id]/restock]", err);
     return NextResponse.json(
       { error: "Failed to submit restock request" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

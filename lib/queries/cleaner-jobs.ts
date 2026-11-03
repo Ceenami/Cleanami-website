@@ -7,19 +7,21 @@ import {
   properties,
   cleaners,
   swapRequests,
+  payouts,
 } from "@/db/schemas";
 import { and, eq, gte, lte, ne, inArray, asc, desc } from "drizzle-orm";
 import { getCleanerJobWindowEnd } from "@/lib/cleaner/planning-window";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { getJobDisplay } from "@/lib/constants/service-type";
+import { fromZonedTime } from "date-fns-tz";
+import { easternToday } from "@/lib/cleaner/availability-deadline";
 
 /** Mirrors HOURS_BEFORE_JOB in `lib/queries/cleaner-swap.ts`. */
 const SWAP_CUTOFF_HOURS = 24;
 
 export type CleanerJobRole =
-  | "primary"
-  | "backup"
-  | "teamLeader"
-  | "laundryLead";
+  "primary" | "backup" | "teamLeader" | "laundryLead";
 
 export type CleanerJobTeammate = {
   name: string;
@@ -27,6 +29,12 @@ export type CleanerJobTeammate = {
 
 export type CleanerJobSummary = {
   jobId: string;
+  status: string | null;
+  assignmentRole: string;
+  serviceLabel: string;
+  displayStatus: "assigned" | "urgent" | "in-progress" | "completed" | "filled";
+  payoutAmount: number | null;
+  payoutStatus: "pending" | "released" | "held" | null;
   propertyAddress: string | null;
   arrivalWindow: string | null;
   mustFinishBefore: string | null;
@@ -49,6 +57,7 @@ export type CleanerJobSummary = {
    * screen that exists to be scrolled past.
    */
   serviceType: string;
+  cleaningLevel: "standard" | "deep" | null;
   /**
    * 0045 — an admin's manual "this one is a reclean" override. Null on every
    * ordinary job. Carried on the LIST as well as the detail: without it the
@@ -71,9 +80,24 @@ function calculateExpectedPay(
   expectedHours: string | null,
   role: string,
   urgentBonus: boolean | null,
-  laundryLoads?: number | null
+  laundryLoads?: number | null,
+  residentialRateCents?: number | null,
+  residentialPricing?: unknown,
+  assignmentTerms?: unknown,
 ): number {
+  if (role === "backup") return 0;
   const hours = parseFloat(expectedHours || "0");
+  if (residentialRateCents !== undefined) {
+    return computeCleanerPay({
+      residentialPricing,
+      assignmentTerms,
+      expectedHours: hours,
+      hourlyRateCents: residentialRateCents,
+      role,
+      urgentBonus,
+      laundryLoads,
+    }).total;
+  }
   let pay = hours * CLEANER_HOURLY_RATE;
 
   if (urgentBonus) {
@@ -102,15 +126,16 @@ function formatDateTime(date: Date | null): string | null {
 }
 
 export async function getCleanerUpcomingJobs(
-  cleanerId: string
+  cleanerId: string,
+  options?: { history?: boolean },
 ): Promise<CleanerJobSummary[]> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = fromZonedTime(`${easternToday()}T00:00:00`, "America/New_York");
   const windowEnd = getCleanerJobWindowEnd();
 
   const assignments = await db
     .select({
       jobId: jobs.id,
+      status: jobs.status,
       checkInTime: jobs.checkInTime,
       checkOutTime: jobs.checkOutTime,
       expectedHours: jobs.expectedHours,
@@ -122,17 +147,26 @@ export async function getCleanerUpcomingJobs(
       role: jobsToCleaners.role,
       isTeamLeader: jobsToCleaners.isTeamLeader,
       urgentBonus: jobsToCleaners.urgentBonus,
+      hourlyRateCents: cleaners.hourlyRateCents,
+      frozenHourlyRateCents: jobsToCleaners.frozenHourlyRateCents,
+      residentialPayTerms: jobsToCleaners.residentialPayTerms,
     })
     .from(jobsToCleaners)
     .innerJoin(jobs, eq(jobsToCleaners.jobId, jobs.id))
     .leftJoin(properties, eq(jobs.propertyId, properties.id))
+    .leftJoin(cleaners, eq(jobsToCleaners.cleanerId, cleaners.id))
     .where(
       and(
         eq(jobsToCleaners.cleanerId, cleanerId),
-        gte(jobs.checkInTime, today),
+        gte(
+          jobs.checkInTime,
+          options?.history
+            ? new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+            : today,
+        ),
         lte(jobs.checkInTime, windowEnd),
-        ne(jobs.status, "canceled")
-      )
+        ne(jobs.status, "canceled"),
+      ),
     )
     .orderBy(asc(jobs.checkInTime));
 
@@ -170,11 +204,22 @@ export async function getCleanerUpcomingJobs(
       and(
         inArray(swapRequests.jobId, jobIds),
         eq(swapRequests.originalCleanerId, cleanerId),
-        eq(swapRequests.status, "pending")
-      )
+        eq(swapRequests.status, "pending"),
+      ),
     );
 
   const pendingSwapByJob = new Map(pendingSwaps.map((s) => [s.jobId, s.id]));
+  const ownPayouts = await db
+    .select({
+      jobId: payouts.jobId,
+      amount: payouts.amount,
+      status: payouts.status,
+    })
+    .from(payouts)
+    .where(
+      and(eq(payouts.cleanerId, cleanerId), inArray(payouts.jobId, jobIds)),
+    );
+  const payoutByJob = new Map(ownPayouts.map((p) => [p.jobId, p]));
 
   return assignments.map((assignment) => {
     const checkInTime = assignment.checkInTime;
@@ -195,9 +240,34 @@ export async function getCleanerUpcomingJobs(
 
     return {
       jobId: assignment.jobId,
+      status: assignment.status,
+      assignmentRole: assignment.role,
+      serviceLabel: getJobDisplay({
+        serviceType: assignment.serviceType,
+        jobLabel: assignment.jobLabel,
+        cleaningLevel: assignment.addonsSnapshot?.cleaningLevel,
+      }).label,
+      displayStatus: [
+        "completed_pending_evidence",
+        "awaiting_capture",
+        "completed",
+      ].includes(assignment.status ?? "")
+        ? "completed"
+        : assignment.role === "backup"
+          ? "filled"
+          : assignment.status === "in-progress"
+            ? "in-progress"
+            : assignment.urgentBonus
+              ? "urgent"
+              : "assigned",
+      payoutAmount: payoutByJob.has(assignment.jobId)
+        ? Number(payoutByJob.get(assignment.jobId)!.amount)
+        : null,
+      payoutStatus: payoutByJob.get(assignment.jobId)?.status ?? null,
       propertyAddress: assignment.propertyAddress,
       serviceType: assignment.serviceType ?? "vacation_rental_subscription",
       jobLabel: assignment.jobLabel ?? null,
+      cleaningLevel: assignment.addonsSnapshot?.cleaningLevel ?? null,
       petsAllowed: assignment.petsAllowed ?? false,
       arrivalWindow: formatDateTime(checkInTime),
       mustFinishBefore: formatDateTime(assignment.checkOutTime),
@@ -209,7 +279,12 @@ export async function getCleanerUpcomingJobs(
         assignment.expectedHours,
         assignment.role,
         assignment.urgentBonus,
-        assignment.addonsSnapshot?.laundryLoads
+        assignment.addonsSnapshot?.laundryLoads,
+        assignment.serviceType === "residential_one_time"
+          ? (assignment.frozenHourlyRateCents ?? assignment.hourlyRateCents)
+          : undefined,
+        assignment.addonsSnapshot?.residentialPricing,
+        assignment.residentialPayTerms,
       ),
       role: mapRole(assignment.role, assignment.isTeamLeader),
       urgentBonus: assignment.urgentBonus ?? false,
@@ -217,7 +292,6 @@ export async function getCleanerUpcomingJobs(
     };
   });
 }
-
 
 /** How far back the dispute job picker looks. */
 const DISPUTE_JOB_WINDOW_DAYS = 60;
@@ -246,10 +320,10 @@ export type CleanerDisputeJobOption = {
  * cancelled" is a pay dispute, and hiding the job would hide the complaint.
  */
 export async function getCleanerRecentJobsForDispute(
-  cleanerId: string
+  cleanerId: string,
 ): Promise<CleanerDisputeJobOption[]> {
   const since = new Date(
-    Date.now() - DISPUTE_JOB_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    Date.now() - DISPUTE_JOB_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   );
 
   const rows = await db
@@ -262,7 +336,10 @@ export async function getCleanerRecentJobsForDispute(
     .innerJoin(jobs, eq(jobsToCleaners.jobId, jobs.id))
     .leftJoin(properties, eq(jobs.propertyId, properties.id))
     .where(
-      and(eq(jobsToCleaners.cleanerId, cleanerId), gte(jobs.checkInTime, since))
+      and(
+        eq(jobsToCleaners.cleanerId, cleanerId),
+        gte(jobs.checkInTime, since),
+      ),
     )
     .orderBy(desc(jobs.checkInTime))
     .limit(50);
@@ -281,13 +358,16 @@ export async function getCleanerRecentJobsForDispute(
  */
 export async function isJobAssignedToCleaner(
   cleanerId: string,
-  jobId: string
+  jobId: string,
 ): Promise<boolean> {
   const [row] = await db
     .select({ jobId: jobsToCleaners.jobId })
     .from(jobsToCleaners)
     .where(
-      and(eq(jobsToCleaners.jobId, jobId), eq(jobsToCleaners.cleanerId, cleanerId))
+      and(
+        eq(jobsToCleaners.jobId, jobId),
+        eq(jobsToCleaners.cleanerId, cleanerId),
+      ),
     )
     .limit(1);
 

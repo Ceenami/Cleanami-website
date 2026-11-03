@@ -1,9 +1,12 @@
-import { getJobsWithDetails } from '@/lib/queries/jobs';
-import { getDashboardJobDateRange } from '@/lib/queries/dashboard-job-window';
+import { getJobsWithDetails } from "@/lib/queries/jobs";
+import { getDashboardJobDateRange } from "@/lib/queries/dashboard-job-window";
 import { RealTimeJobBoard } from "@/components/dashbboard/admin/RealTimeJobBoard";
-import { PrefetchedInfinitePage } from '@/components/PrefetchedInfinitePage';
-import { getCustomerAuth } from '@/lib/customer-auth';
-import { redirect } from 'next/navigation';
+import { PrefetchedInfinitePage } from "@/components/PrefetchedInfinitePage";
+import { getCustomerAuth } from "@/lib/customer-auth";
+import { redirect } from "next/navigation";
+import { getSessionRole } from "@/lib/auth/server-roles";
+import { CustomerJobList } from "@/components/customer/CustomerJobList";
+import { toCustomerJobListItem } from "@/lib/customer/job-list";
 
 export default async function Page({
   params,
@@ -19,24 +22,49 @@ export default async function Page({
   // /customer/dashboard, before the client's own scoped refetch corrects
   // what's actually rendered.
   let customerId: string | undefined;
-  if (slug === 'customer') {
+  const role = await getSessionRole();
+  if (!["admin", "super_admin", "user"].includes(role ?? ""))
+    redirect("/sign-in");
+  if (slug === "customer" || role === "user") {
     const auth = await getCustomerAuth();
     if (!auth.customerId) {
-      redirect(`/?portalBlocked=1&message=${encodeURIComponent(auth.error ?? 'Portal unavailable')}`);
+      redirect(
+        `/?portalBlocked=1&message=${encodeURIComponent(auth.error ?? "Portal unavailable")}`,
+      );
     }
     customerId = auth.customerId;
   }
+  if (customerId)
+    return (
+      <PrefetchedInfinitePage
+        queryKey={["customer-job-list"]}
+        queryFn={async () => {
+          const result = await getJobsWithDetails({
+            page: 1,
+            limit: 10,
+            customerId,
+            sortByCheckIn: "desc",
+          });
+          return {
+            data: result.data.map(toCustomerJobListItem),
+            nextPage: result.nextPage,
+          };
+        }}
+      >
+        <CustomerJobList />
+      </PrefetchedInfinitePage>
+    );
 
   return (
     <PrefetchedInfinitePage
-      queryKey={['jobs', { dashboard: true }]}
+      queryKey={["jobs", { dashboard: true }]}
       queryFn={async () => {
         const result = await getJobsWithDetails({
           page: 1,
           limit: 20,
           startDate,
           endDate,
-          sortByCheckIn: 'asc',
+          sortByCheckIn: "asc",
           customerId,
         });
         return {

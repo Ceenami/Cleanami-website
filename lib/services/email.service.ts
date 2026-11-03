@@ -1,4 +1,8 @@
-import { getResend, getEmailUnavailableMessage, EMAIL_FROM } from "@/lib/resend";
+import {
+  getResend,
+  getEmailUnavailableMessage,
+  EMAIL_FROM,
+} from "@/lib/resend";
 import CustomerPortalEmail from "../emails/CustomerPortalEmail";
 import ResumeSetupEmail from "../emails/ResumeSetupEmail";
 import TransactionalEmail, {
@@ -52,7 +56,7 @@ export async function sendTransactionalEmail(
   to: string,
   subject: string,
   props: TransactionalEmailProps,
-  meta?: NotificationMeta
+  meta?: NotificationMeta,
 ): Promise<SendResult> {
   const logMeta: NotificationMeta = {
     trigger: "transactional_email",
@@ -110,7 +114,8 @@ export async function sendTransactionalEmail(
   }
 }
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://cleanami.ceenami.com";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://cleanami.ceenami.com";
 
 export function sendBookingConfirmationEmail(params: {
   to: string;
@@ -119,37 +124,48 @@ export function sendBookingConfirmationEmail(params: {
   firstCleanDate: string;
   amount: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, "Your CleanNami booking is confirmed", {
-    previewText: "Your CleanNami booking is confirmed.",
-    heading: "Booking confirmed 🎉",
-    greeting: params.name ? `Hi ${params.name},` : "Hi there,",
-    bodyLines: [
-      `Your cleaning subscription for ${params.propertyAddress} is confirmed.`,
-      `Your first clean is scheduled for ${params.firstCleanDate}.`,
-      `Amount charged for the first clean: ${params.amount}.`,
-    ],
-    ctaLabel: "Open your portal",
-    ctaUrl: `${APP_URL}/customer/dashboard`,
-    footnote: "You can manage or cancel cleans anytime from your portal.",
-  }, { trigger: "booking_confirmation" });
+  return sendTransactionalEmail(
+    params.to,
+    "Your CleanNami booking is confirmed",
+    {
+      previewText: "Your CleanNami booking is confirmed.",
+      heading: "Booking confirmed 🎉",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `Your cleaning subscription for ${params.propertyAddress} is confirmed.`,
+        `Your first clean is scheduled for ${params.firstCleanDate}.`,
+        `Amount charged for the first clean: ${params.amount}.`,
+      ],
+      ctaLabel: "Open your portal",
+      ctaUrl: `${APP_URL}/customer/dashboard`,
+      footnote: "You can manage or cancel cleans anytime from your portal.",
+    },
+    { trigger: "booking_confirmation" },
+  );
 }
 
 export function sendJobCompletionEmail(params: {
   to: string;
   name?: string;
   propertyAddress: string;
+  serviceLabel?: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, "Your clean is complete", {
-    previewText: "Your CleanNami clean is complete.",
-    heading: "Your clean is complete ✨",
-    greeting: params.name ? `Hi ${params.name},` : "Hi there,",
-    bodyLines: [
-      `Your cleaner has finished the turnover at ${params.propertyAddress}.`,
-      "Photo evidence and the completed checklist are available in your portal.",
-    ],
-    ctaLabel: "View details",
-    ctaUrl: `${APP_URL}/customer/dashboard`,
-  }, { trigger: "job_completion" });
+  return sendTransactionalEmail(
+    params.to,
+    "Your clean is complete",
+    {
+      previewText: "Your CleanNami clean is complete.",
+      heading: "Your clean is complete ✨",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `Your ${params.serviceLabel ?? "clean"} at ${params.propertyAddress} is complete.`,
+        "Photo evidence and the completed checklist are available in your portal.",
+      ],
+      ctaLabel: "View details",
+      ctaUrl: `${APP_URL}/customer/dashboard`,
+    },
+    { trigger: "job_completion" },
+  );
 }
 
 /**
@@ -167,6 +183,8 @@ export function sendJobCompletionEmail(params: {
  * path exists. Behind it is `cancelJobAsAdmin()` -> `voidCharge()`.
  */
 export type ResidentialBookingConfirmation = {
+  purchasedScope?: string[];
+  cleaningLevel?: "standard" | "deep";
   to: string;
   name?: string;
   propertyAddress: string;
@@ -186,7 +204,7 @@ export type ResidentialBookingConfirmation = {
  * returns `{ success, error }` and nothing about what it sent.
  */
 export function buildResidentialBookingConfirmationEmail(
-  params: ResidentialBookingConfirmation
+  params: ResidentialBookingConfirmation,
 ): { subject: string; props: TransactionalEmailProps } {
   const cleanDateLabel = formatEasternDateLabel(params.cleanDate);
 
@@ -197,9 +215,10 @@ export function buildResidentialBookingConfirmationEmail(
       heading: "Your clean is booked 🎉",
       greeting: params.name ? `Hi ${params.name},` : "Hi there,",
       bodyLines: [
-        `Service: ${SERVICE_TYPE_LABELS.residential_one_time}.`,
+        `Service: ${SERVICE_TYPE_LABELS.residential_one_time}${params.cleaningLevel ? ` - ${params.cleaningLevel === "deep" ? "Deep" : "Standard"}` : ""}.`,
+        ...(params.purchasedScope ?? []),
         `Address: ${params.propertyAddress}.`,
-        `Date: ${cleanDateLabel}. Your cleaner will arrive between ${params.arrivalWindowLabel}.`,
+        `Date: ${cleanDateLabel}. Arrival: ${params.arrivalWindowLabel}.`,
         `Paid today: ${params.amount}. Your payment is complete — there is nothing to pay on the day.`,
         params.petsAllowed
           ? params.petFeeApplied
@@ -217,7 +236,7 @@ export function buildResidentialBookingConfirmationEmail(
 }
 
 export function sendResidentialBookingConfirmationEmail(
-  params: ResidentialBookingConfirmation
+  params: ResidentialBookingConfirmation,
 ): Promise<SendResult> {
   const { subject, props } = buildResidentialBookingConfirmationEmail(params);
   return sendTransactionalEmail(params.to, subject, props, {
@@ -239,14 +258,19 @@ export function sendAdminAlertEmail(params: {
   message: string;
   url?: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, `[CleanNami admin] ${params.subject}`, {
-    previewText: params.subject,
-    heading: params.subject,
-    greeting: params.name ? `Hi ${params.name},` : "Hi,",
-    bodyLines: [params.message],
-    ctaLabel: params.url ? "Open in the dashboard" : undefined,
-    ctaUrl: params.url ? `${APP_URL}${params.url}` : undefined,
-  }, { trigger: "admin_alert" });
+  return sendTransactionalEmail(
+    params.to,
+    `[CleanNami admin] ${params.subject}`,
+    {
+      previewText: params.subject,
+      heading: params.subject,
+      greeting: params.name ? `Hi ${params.name},` : "Hi,",
+      bodyLines: [params.message],
+      ctaLabel: params.url ? "Open in the dashboard" : undefined,
+      ctaUrl: params.url ? `${APP_URL}${params.url}` : undefined,
+    },
+    { trigger: "admin_alert" },
+  );
 }
 
 export function sendCancellationEmail(params: {
@@ -255,17 +279,22 @@ export function sendCancellationEmail(params: {
   propertyAddress: string;
   detail?: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, "A clean was canceled", {
-    previewText: "A CleanNami clean was canceled.",
-    heading: "Clean canceled",
-    greeting: params.name ? `Hi ${params.name},` : "Hi there,",
-    bodyLines: [
-      `A scheduled clean for ${params.propertyAddress} has been canceled.`,
-      params.detail ?? "No charge applies for an on-time cancellation.",
-    ],
-    ctaLabel: "View your schedule",
-    ctaUrl: `${APP_URL}/customer/dashboard`,
-  }, { trigger: "cancellation" });
+  return sendTransactionalEmail(
+    params.to,
+    "A clean was canceled",
+    {
+      previewText: "A CleanNami clean was canceled.",
+      heading: "Clean canceled",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `A scheduled clean for ${params.propertyAddress} has been canceled.`,
+        params.detail ?? "No charge applies for an on-time cancellation.",
+      ],
+      ctaLabel: "View your schedule",
+      ctaUrl: `${APP_URL}/customer/dashboard`,
+    },
+    { trigger: "cancellation" },
+  );
 }
 
 export function sendPaymentFailedEmail(params: {
@@ -273,17 +302,22 @@ export function sendPaymentFailedEmail(params: {
   name?: string;
   propertyAddress: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, "Action needed: payment failed", {
-    previewText: "A CleanNami payment failed.",
-    heading: "We couldn't process your payment",
-    greeting: params.name ? `Hi ${params.name},` : "Hi there,",
-    bodyLines: [
-      `A payment for your clean at ${params.propertyAddress} failed.`,
-      "Please update your payment method to avoid interruption to your service.",
-    ],
-    ctaLabel: "Update payment",
-    ctaUrl: `${APP_URL}/customer/dashboard`,
-  }, { trigger: "payment_failed" });
+  return sendTransactionalEmail(
+    params.to,
+    "Action needed: payment failed",
+    {
+      previewText: "A CleanNami payment failed.",
+      heading: "We couldn't process your payment",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `A payment for your clean at ${params.propertyAddress} failed.`,
+        "Please update your payment method to avoid interruption to your service.",
+      ],
+      ctaLabel: "Update payment",
+      ctaUrl: `${APP_URL}/customer/dashboard`,
+    },
+    { trigger: "payment_failed" },
+  );
 }
 
 export function sendCleanerAssignmentEmail(params: {
@@ -291,18 +325,24 @@ export function sendCleanerAssignmentEmail(params: {
   name?: string;
   propertyAddress: string;
   jobDate: string;
+  serviceLabel?: string;
 }): Promise<SendResult> {
-  return sendTransactionalEmail(params.to, "You've been assigned a new clean", {
-    previewText: "New CleanNami job assignment.",
-    heading: "New job assigned 🧽",
-    greeting: params.name ? `Hi ${params.name},` : "Hi there,",
-    bodyLines: [
-      `You've been assigned a clean at ${params.propertyAddress}.`,
-      `Scheduled for ${params.jobDate}.`,
-    ],
-    ctaLabel: "View job",
-    ctaUrl: `${APP_URL}/cleaner/jobs`,
-  }, { trigger: "cleaner_assignment" });
+  return sendTransactionalEmail(
+    params.to,
+    "You've been assigned a new clean",
+    {
+      previewText: "New CleanNami job assignment.",
+      heading: "New job assigned 🧽",
+      greeting: params.name ? `Hi ${params.name},` : "Hi there,",
+      bodyLines: [
+        `You've been assigned a ${params.serviceLabel ?? "clean"} at ${params.propertyAddress}.`,
+        `Scheduled for ${params.jobDate}.`,
+      ],
+      ctaLabel: "View job",
+      ctaUrl: `${APP_URL}/cleaner/jobs`,
+    },
+    { trigger: "cleaner_assignment" },
+  );
 }
 
 interface SendResumeEmailParams {
@@ -326,7 +366,10 @@ export async function sendCustomerPortalEmail({
   loginUrl,
   recipientName,
   isNewUser,
-}: SendCustomerPortalEmailParams): Promise<{ success: boolean; error?: string }> {
+}: SendCustomerPortalEmailParams): Promise<{
+  success: boolean;
+  error?: string;
+}> {
   try {
     const resend = getResend();
     if (!resend) {

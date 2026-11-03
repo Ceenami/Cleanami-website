@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  earliestBookableDate,
-  getBookableWindows,
+  earliestBookableDateFromKeys,
+  getBookableWindowsFromKeys,
   RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
-import { getAvailableArrivalWindows } from "@/lib/scheduling/arrival-windows";
+import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { ResidentialLevelChoice } from "@/components/customers/cta-booking-button/residential/ResidentialLevelChoice";
+import type { ResidentialAddonSelection } from "@/components/customers/cta-booking-button/residential/ResidentialAddons";
+import type {
+  ResidentialCleaningLevel,
+  toPublicResidentialQuote,
+} from "@/lib/pricing/residential";
 import {
   SERVICE_TYPE_LABELS,
   type ServiceType,
@@ -18,8 +24,7 @@ type PropertyItem = {
   address: string | null;
   price: number | null;
   serviceType: string;
-  /** Only computed for a home; a rental is not offered windows. */
-  expectedHours: number | null;
+  residentialOptions: ReturnType<typeof toPublicResidentialQuote>[];
 };
 
 function minDate(): string {
@@ -41,11 +46,24 @@ export function OneOffCleanBooking({
   const [propertyId, setPropertyId] = useState(properties[0]?.id ?? "");
   const [date, setDate] = useState("");
   const [arrivalWindow, setArrivalWindow] = useState("");
+  const [cleaningLevel, setCleaningLevel] = useState<
+    ResidentialCleaningLevel | undefined
+  >();
+  const promoSequence = useRef(0);
+  const [addons, setAddons] = useState<ResidentialAddonSelection>({
+    hotTub: "none",
+    inUnitLaundryLoads: 0,
+  });
+  const [scopeQuote, setScopeQuote] = useState<{
+    key: string;
+    quote: ReturnType<typeof toPublicResidentialQuote> | null;
+  }>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<{
     amountCents: number;
     promoCode?: string;
+    serviceLabel: string;
   } | null>(null);
 
   const [promoInput, setPromoInput] = useState("");
@@ -60,36 +78,109 @@ export function OneOffCleanBooking({
 
   const selected = useMemo(
     () => properties.find((p) => p.id === propertyId) ?? null,
-    [properties, propertyId]
+    [properties, propertyId],
   );
   // A home and a rental are scheduled by different rules, and this is the only
   // place the portal needs to know that. The public residential wizard uses
   // these same three helpers, so the two flows cannot drift apart again.
   const isResidential = selected?.serviceType === "residential_one_time";
-  const expectedHours = selected?.expectedHours ?? null;
+  const initialResidentialQuote = selected?.residentialOptions.find(
+    (q) => q.cleaningLevel === cleaningLevel,
+  );
+  const scopeKey = JSON.stringify([
+    propertyId,
+    cleaningLevel,
+    addons.hotTub,
+    addons.inUnitLaundryLoads,
+  ]);
+  const residentialQuote =
+    initialResidentialQuote?.ruleVersion === "residential-v2"
+      ? scopeQuote?.key === scopeKey
+        ? scopeQuote.quote
+        : null
+      : initialResidentialQuote;
+  useEffect(() => {
+    if (
+      initialResidentialQuote?.ruleVersion !== "residential-v2" ||
+      !cleaningLevel
+    )
+      return;
+    let superseded = false;
+    const key = scopeKey;
+    promoSequence.current++;
+    setPromo(null);
+    setPromoChecking(false);
+    void fetch("/api/customer/one-off/quote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        propertyId,
+        cleaningLevel,
+        pricingVersion: "residential-v2",
+        ...addons,
+      }),
+    })
+      .then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error("Quote service unavailable");
+        if (!body.refused && (
+          body.ruleVersion !== "residential-v2" ||
+          !Number.isSafeInteger(body.amountCents) || body.amountCents <= 0 ||
+          typeof body.inputIdentity !== "string" || !body.inputIdentity ||
+          !Array.isArray(body.arrivalWindowKeys) || !body.arrivalWindowKeys.length ||
+          body.arrivalWindowKeys.some((key: string) => !getArrivalWindow(key))
+        )) throw new Error("Invalid quote response");
+        return body;
+      })
+      .then((q) => {
+        if (!superseded) {
+          setScopeQuote({ key, quote: q.refused ? null : q });
+          setError(q.refused ? q.message : null);
+        }
+      })
+      .catch(() => {
+        if (!superseded) {
+          setScopeQuote({ key, quote: null });
+          setError("Could not update your quote.");
+        }
+      });
+    return () => {
+      superseded = true;
+    };
+  }, [
+    scopeKey,
+    initialResidentialQuote?.ruleVersion,
+    propertyId,
+    cleaningLevel,
+    addons,
+  ]);
+  const arrivalWindowKeys = residentialQuote?.arrivalWindowKeys;
 
   const windowsThatFitTheDay = useMemo(
     () =>
-      isResidential && expectedHours != null
-        ? getAvailableArrivalWindows(expectedHours)
+      isResidential && arrivalWindowKeys
+        ? arrivalWindowKeys.flatMap((key) => {
+            const w = getArrivalWindow(key);
+            return w ? [w] : [];
+          })
         : [],
-    [isResidential, expectedHours]
+    [isResidential, arrivalWindowKeys],
   );
 
   const bookableWindows = useMemo(
     () =>
-      isResidential && expectedHours != null && date
-        ? getBookableWindows(date, expectedHours)
+      isResidential && arrivalWindowKeys && date
+        ? getBookableWindowsFromKeys(date, arrivalWindowKeys)
         : [],
-    [isResidential, expectedHours, date]
+    [isResidential, arrivalWindowKeys, date],
   );
 
   const earliest = useMemo(() => {
-    if (isResidential && expectedHours != null) {
-      return earliestBookableDate(expectedHours) ?? minDate();
+    if (isResidential && arrivalWindowKeys) {
+      return earliestBookableDateFromKeys(arrivalWindowKeys) ?? minDate();
     }
     return minDate();
-  }, [isResidential, expectedHours]);
+  }, [isResidential, arrivalWindowKeys]);
 
   // A window chosen for one date can stop being offered on another — the
   // 48-hour rule is per window, not per day — so drop a selection that is no
@@ -99,7 +190,10 @@ export function OneOffCleanBooking({
       if (arrivalWindow) setArrivalWindow("");
       return;
     }
-    if (arrivalWindow && !bookableWindows.some((w) => w.key === arrivalWindow)) {
+    if (
+      arrivalWindow &&
+      !bookableWindows.some((w) => w.key === arrivalWindow)
+    ) {
       setArrivalWindow("");
     }
   }, [isResidential, bookableWindows, arrivalWindow]);
@@ -117,8 +211,8 @@ export function OneOffCleanBooking({
     } catch {
       throw new Error(
         res.status === 502 || res.status === 504
-          ? "The server took too long to respond. Your card has not been charged — please try again in a moment."
-          : `${fallback} (server error ${res.status})`
+          ? "The server took too long to respond. We could not confirm the outcome. Check your upcoming cleans or contact CleanNami before making another payment."
+          : `${fallback} (server error ${res.status})`,
       );
     }
   }
@@ -135,7 +229,9 @@ export function OneOffCleanBooking({
   if (confirmed) {
     return (
       <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
-        <h2 className="text-lg font-semibold text-green-800">Clean booked ✅</h2>
+        <h2 className="text-lg font-semibold text-green-800">
+          {confirmed.serviceLabel} booked
+        </h2>
         <p className="mt-1 text-sm text-green-700">
           We charged ${(confirmed.amountCents / 100).toFixed(2)}
           {confirmed.promoCode ? ` (${confirmed.promoCode} applied)` : ""} and
@@ -147,6 +243,7 @@ export function OneOffCleanBooking({
             setConfirmed(null);
             setDate("");
             setArrivalWindow("");
+            setCleaningLevel(undefined);
           }}
           className="mt-4 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
         >
@@ -158,15 +255,32 @@ export function OneOffCleanBooking({
 
   // A home cannot be booked without a window; a rental has none to choose.
   const canSubmit = Boolean(
-    propertyId && date && !submitting && (!isResidential || arrivalWindow)
+    propertyId &&
+    date &&
+    !submitting &&
+    !promoChecking &&
+    (!isResidential || (arrivalWindow && residentialQuote)),
   );
   // What the button will actually charge.
   const chargeDollars =
-    promo != null ? promo.finalAmountCents / 100 : (selected?.price ?? null);
+    promo != null
+      ? promo.finalAmountCents / 100
+      : isResidential
+        ? residentialQuote
+          ? residentialQuote.amountCents / 100
+          : null
+        : (selected?.price ?? null);
+  const undiscountedDollars = isResidential
+    ? residentialQuote
+      ? residentialQuote.amountCents / 100
+      : null
+    : (selected?.price ?? null);
 
   async function applyPromo() {
     const code = promoInput.trim();
     if (!code || !propertyId) return;
+    if (isResidential && !residentialQuote) return;
+    const sequence = ++promoSequence.current;
 
     setPromoChecking(true);
     setPromoError(null);
@@ -174,9 +288,20 @@ export function OneOffCleanBooking({
       const res = await fetch("/api/customer/one-off/preview-promo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyId, code }),
+        body: JSON.stringify({
+          propertyId,
+          code,
+          ...(isResidential
+            ? {
+                cleaningLevel,
+                pricingVersion: residentialQuote?.ruleVersion,
+                ...addons,
+              }
+            : {}),
+        }),
       });
       const data = await readJson(res, "Could not check that promo code.");
+      if (sequence !== promoSequence.current) return;
       if (!res.ok || !data.valid) {
         setPromo(null);
         throw new Error(data.message ?? "That promo code is not valid.");
@@ -189,15 +314,18 @@ export function OneOffCleanBooking({
       });
       setPromoInput("");
     } catch (e) {
+      if (sequence !== promoSequence.current) return;
       setPromoError(
-        e instanceof Error ? e.message : "That promo code is not valid."
+        e instanceof Error ? e.message : "That promo code is not valid.",
       );
     } finally {
-      setPromoChecking(false);
+      if (sequence === promoSequence.current) setPromoChecking(false);
     }
   }
 
   function clearPromo() {
+    promoSequence.current++;
+    setPromoChecking(false);
     setPromo(null);
     setPromoError(null);
     setPromoInput("");
@@ -215,12 +343,26 @@ export function OneOffCleanBooking({
           propertyId,
           date,
           ...(isResidential && arrivalWindow ? { arrivalWindow } : {}),
+          ...(isResidential
+            ? {
+                cleaningLevel,
+                quoteIdentity: residentialQuote?.inputIdentity,
+                pricingVersion: residentialQuote?.ruleVersion,
+                ...addons,
+              }
+            : {}),
           ...(promo ? { promoCode: promo.code } : {}),
         }),
       });
       const data = await readJson(res, "Could not book the clean.");
       if (!res.ok) throw new Error(data.error ?? "Could not book the clean.");
-      setConfirmed({ amountCents: data.amountCents, promoCode: data.promoCode });
+      setConfirmed({
+        amountCents: data.amountCents,
+        promoCode: data.promoCode,
+        serviceLabel: isResidential
+          ? `One-Time House Clean - ${cleaningLevel === "deep" ? "Deep" : "Standard"}`
+          : "Vacation Rental Turnover",
+      });
       clearPromo();
       router.refresh();
     } catch (e) {
@@ -244,6 +386,8 @@ export function OneOffCleanBooking({
             // and window chosen for the previous one cannot carry over.
             setDate("");
             setArrivalWindow("");
+            setCleaningLevel(undefined);
+            setAddons({ hotTub: "none", inUnitLaundryLoads: 0 });
             // The quote was priced against the previous property.
             clearPromo();
           }}
@@ -260,10 +404,30 @@ export function OneOffCleanBooking({
         </select>
       </div>
 
+      {isResidential && (
+        <ResidentialLevelChoice
+          value={cleaningLevel}
+          pricingVersion={
+            initialResidentialQuote?.ruleVersion ??
+            selected?.residentialOptions[0]?.ruleVersion
+          }
+          disabled={submitting}
+          onChange={(level) => {
+            setCleaningLevel(level);
+            setArrivalWindow("");
+            setError(null);
+            clearPromo();
+          }}
+        />
+      )}
+
       {/* A home big enough to need more time than any window allows cannot be
           scheduled online at all, and the refusal is the client's own wording —
           the same one the public wizard shows. Do not invent a second. */}
-      {isResidential && windowsThatFitTheDay.length === 0 ? (
+      {isResidential &&
+      cleaningLevel &&
+      windowsThatFitTheDay.length === 0 &&
+      initialResidentialQuote?.ruleVersion !== "residential-v2" ? (
         <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
           {RESIDENTIAL_NO_WINDOW_MESSAGE}
         </div>
@@ -292,7 +456,11 @@ export function OneOffCleanBooking({
               <label className="block text-sm font-medium text-gray-700">
                 Arrival window
               </label>
-              {!date ? (
+              {!residentialQuote ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  Arrival windows will appear after your quote is confirmed.
+                </p>
+              ) : !date ? (
                 <p className="mt-1 text-xs text-gray-500">
                   Choose a date to see the available windows.
                 </p>
@@ -324,68 +492,70 @@ export function OneOffCleanBooking({
         </>
       )}
 
-      {selected?.price != null && (
-        <div>
-          <label className="block text-sm font-medium text-gray-700">
-            Promo code <span className="font-normal text-gray-400">(optional)</span>
-          </label>
-          {promo ? (
-            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2">
-              <span className="min-w-0 break-words text-sm font-medium text-teal-800">
-                {promo.code} applied
-              </span>
-              <button
-                type="button"
-                onClick={clearPromo}
-                disabled={submitting}
-                className="min-h-11 text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <div className="mt-1 flex gap-2">
-              <input
-                type="text"
-                value={promoInput}
-                onChange={(e) => {
-                  setPromoInput(e.target.value.toUpperCase());
-                  setPromoError(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void applyPromo();
-                  }
-                }}
-                placeholder="CODE"
-                autoComplete="off"
-                spellCheck={false}
-                className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm uppercase tracking-wide text-gray-800 placeholder:normal-case focus:border-teal-500 focus:outline-none focus:ring-teal-500"
-              />
-              <button
-                type="button"
-                onClick={() => void applyPromo()}
-                disabled={promoChecking || !promoInput.trim()}
-                className="shrink-0 rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:cursor-not-allowed disabled:bg-gray-300"
-              >
-                {promoChecking ? "Checking…" : "Apply"}
-              </button>
-            </div>
-          )}
-          {promoError && (
-            <p className="mt-1 text-xs text-red-600">{promoError}</p>
-          )}
-          {promo?.capped && (
+      {undiscountedDollars != null &&
+        residentialQuote?.ruleVersion !== "residential-v2" && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700">
+              Promo code{" "}
+              <span className="font-normal text-gray-400">(optional)</span>
+            </label>
+            {promo ? (
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2">
+                <span className="min-w-0 break-words text-sm font-medium text-teal-800">
+                  {promo.code} applied
+                </span>
+                <button
+                  type="button"
+                  onClick={clearPromo}
+                  disabled={submitting}
+                  className="min-h-11 text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="mt-1 flex gap-2">
+                <input
+                  type="text"
+                  value={promoInput}
+                  onChange={(e) => {
+                    setPromoInput(e.target.value.toUpperCase());
+                    setPromoError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void applyPromo();
+                    }
+                  }}
+                  placeholder="CODE"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm uppercase tracking-wide text-gray-800 placeholder:normal-case focus:border-teal-500 focus:outline-none focus:ring-teal-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => void applyPromo()}
+                  disabled={promoChecking || !promoInput.trim()}
+                  className="shrink-0 rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:cursor-not-allowed disabled:bg-gray-300"
+                >
+                  {promoChecking ? "Checking…" : "Apply"}
+                </button>
+              </div>
+            )}
+            {promoError && (
+              <p className="mt-1 text-xs text-red-600">{promoError}</p>
+            )}
+            {promo?.capped && (
+              <p className="mt-1 text-xs text-gray-500">
+                Discount reduced to keep the charge above the minimum.
+              </p>
+            )}
             <p className="mt-1 text-xs text-gray-500">
-              Discount reduced to keep the charge above the minimum.
+              One code per customer, applied to this clean only.
             </p>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            One code per customer, applied to this clean only.
-          </p>
-        </div>
-      )}
+          </div>
+        )}
 
       <div className="space-y-1 rounded-lg bg-gray-50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -397,8 +567,8 @@ export function OneOffCleanBooking({
                 : "font-semibold text-gray-900"
             }
           >
-            {selected?.price != null
-              ? `$${selected.price.toFixed(2)}`
+            {undiscountedDollars != null
+              ? `$${undiscountedDollars.toFixed(2)}`
               : "Custom quote — contact us"}
           </span>
         </div>
@@ -429,7 +599,7 @@ export function OneOffCleanBooking({
       <button
         type="button"
         onClick={submit}
-        disabled={!canSubmit || selected?.price == null}
+        disabled={!canSubmit || chargeDollars == null}
         className="w-full rounded-lg bg-teal-600 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-400"
       >
         {submitting

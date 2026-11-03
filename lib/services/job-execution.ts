@@ -11,11 +11,13 @@ import {
   jobs,
   jobsToCleaners,
   reliabilityEvents,
+  evidenceDrafts,
 } from "@/db/schemas";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import sharp from "sharp";
 import { getExecutionContract } from "./job-execution-contract";
+import { effectiveChecklist } from "./effective-checklist";
 import {
   assertCaptureWindow,
   type IssuedTerms,
@@ -68,6 +70,7 @@ const draftSchema = z.object({
     .array(z.object({ id: z.string().max(200), completed: z.boolean() }))
     .max(500),
   notes: z.string().max(10000).default(""),
+  explanations: z.record(z.string().regex(/^[a-z0-9-]{1,64}$/), z.string().trim().max(1000)).optional(),
 });
 const sha = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -508,6 +511,8 @@ export async function saveExecutionDraft(
 ) {
   const input = draftSchema.parse(raw);
   return locked(jobId, cleanerId, async (tx, job, packet, issued) => {
+    if (input.explanations && Object.keys(input.explanations).some(room => !issued.rooms.some(r => r.roomKey === room)))
+      throw new ExecutionError("Unknown evidence room explanation", 400);
     const items = issued.checklist.map((item) => ({
       ...item,
       completed: input.items.find((i) => i.id === item.id)?.completed === true,
@@ -599,6 +604,12 @@ export async function saveExecutionDraft(
       finalHash: finalize ? hash : null,
       updatedAt: now,
     };
+    if (input.explanations !== undefined) await tx.insert(evidenceDrafts).values({
+      jobId, cleanerId, explanations: input.explanations,
+      state: { checklistLog: { items, roomPhotos: {} }, cleanerNotes: input.notes },
+    }).onConflictDoUpdate({ target: [evidenceDrafts.jobId, evidenceDrafts.cleanerId], set: {
+      explanations: input.explanations, updatedAt: now,
+    } });
     await tx
       .insert(jobEvidenceDrafts)
       .values(value)
@@ -664,6 +675,9 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
     .select()
     .from(evidenceUploadManifest)
     .where(eq(evidenceUploadManifest.jobId, jobId));
+  const [explanationDraft] = await db.select().from(evidenceDrafts).where(and(
+    eq(evidenceDrafts.jobId, jobId), eq(evidenceDrafts.cleanerId, cleanerId),
+  ));
   const roomPhotos: Record<string, string[]> = {},
     roomPhotoPreviews: Record<string, string[]> = {};
   const photos = [];
@@ -693,7 +707,8 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
     columns: { checklistSnapshot: true },
   });
   const checklistFiles = [];
-  for (const file of issuedJob?.checklistSnapshot?.files ?? [])
+  const checklist = await effectiveChecklist(jobId, issuedJob?.checklistSnapshot);
+  for (const file of checklist?.files ?? [])
     checklistFiles.push({
       id: file.id,
       fileName: file.fileName,
@@ -715,6 +730,7 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
     roomPhotoPreviews,
     photos,
     cleanerNotes: draft?.notes ?? "",
+    explanations: explanationDraft?.explanations ?? {},
     revision: draft?.revision ?? 0,
     draftSaved: !!draft,
     arrivalRecorded: !!packet?.gpsCheckInTimestamp,

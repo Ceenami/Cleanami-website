@@ -50,6 +50,7 @@ async function apiSession(
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10000),
     });
     const json = (await res.json()) as SessionSnapshot;
     return {
@@ -65,14 +66,15 @@ async function apiSession(
 
 export function useResidentialSession(options: {
   debounceMs?: number;
+  skipInitialLoad?: boolean;
   onSessionLoaded?: (data: {
     formData: ResidentialFormData;
     currentStep: number;
   }) => void;
 }) {
-  const { debounceMs = 1500, onSessionLoaded } = options;
+  const { debounceMs = 1500, onSessionLoaded, skipInitialLoad = false } = options;
 
-  const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [isLoadingSession, setIsLoadingSession] = useState(!skipInitialLoad);
   const [hasExistingSession, setHasExistingSession] = useState(false);
   const [existingSessionData, setExistingSessionData] =
     useState<SessionSnapshot | null>(null);
@@ -86,7 +88,7 @@ export function useResidentialSession(options: {
   }, [onSessionLoaded]);
 
   useEffect(() => {
-    if (hasInitializedRef.current) return;
+    if (hasInitializedRef.current || skipInitialLoad) return;
     hasInitializedRef.current = true;
 
     void (async () => {
@@ -107,7 +109,7 @@ export function useResidentialSession(options: {
       }
       setIsLoadingSession(false);
     })();
-  }, []);
+  }, [skipInitialLoad]);
 
   const acceptExistingSession = useCallback(() => {
     if (existingSessionData?.success) {
@@ -128,7 +130,7 @@ export function useResidentialSession(options: {
 
   const doSave = useCallback(
     async (formData: ResidentialFormData, currentStep: number) => {
-      await apiSession("PATCH", {
+      const result = await apiSession("PATCH", {
         formData: {
           ...serializeResidentialFormForServer(formData),
           // The routing key. Written on every save so a session abandoned
@@ -138,6 +140,7 @@ export function useResidentialSession(options: {
         currentStep,
         priceDetails: null,
       });
+      return result.success;
     },
     []
   );
@@ -155,7 +158,7 @@ export function useResidentialSession(options: {
   const saveProgressNow = useCallback(
     async (formData: ResidentialFormData, currentStep: number) => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      await doSave(formData, currentStep);
+      return doSave(formData, currentStep);
     },
     [doSave]
   );

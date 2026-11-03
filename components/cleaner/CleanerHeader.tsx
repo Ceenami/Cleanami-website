@@ -1,81 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 import { Bell, Loader2, LogOut, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSignOut } from "@/hooks/useSignOut";
 import { cn } from "@/lib/utils";
-
-type Notification = {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-  jobId: string | null;
-};
+import { useNotificationInbox } from "@/hooks/useNotificationInbox";
 
 export function CleanerHeader() {
   const signOut = useSignOut();
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [initialLoading, setInitialLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const { data, isLoading: initialLoading, isFetching: refreshing, isError, refetch, markRead } =
+    useNotificationInbox("cleaner");
+  const notifications = data?.notifications ?? [];
+  const unreadCount = data?.unreadCount ?? 0;
   const [acceptingJobId, setAcceptingJobId] = useState<string | null>(null);
-
-  const loadNotifications = useCallback(async (isRefresh = false) => {
-    if (isRefresh) {
-      setRefreshing(true);
-    } else {
-      setInitialLoading(true);
-    }
-
-    try {
-      const response = await fetch("/api/cleaner/notifications");
-      const data = (await response.json()) as {
-        notifications?: Notification[];
-        unreadCount?: number;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        if (!isRefresh) {
-          setNotifications([]);
-          setUnreadCount(0);
-        }
-        return;
-      }
-
-      setNotifications(data.notifications ?? []);
-      setUnreadCount(data.unreadCount ?? 0);
-    } finally {
-      setInitialLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadNotifications(false);
-    const interval = setInterval(() => loadNotifications(true), 30_000);
-
-    function onFocus() {
-      loadNotifications(true);
-    }
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [loadNotifications]);
-
-  async function handleMarkAllRead() {
-    await fetch("/api/cleaner/notifications", { method: "PATCH" });
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    setUnreadCount(0);
-  }
 
   async function handleAcceptUrgent(jobId: string) {
     setAcceptingJobId(jobId);
@@ -87,23 +28,12 @@ export function CleanerHeader() {
 
       if (!response.ok) {
         toast.error(data.error ?? "Could not accept this job");
-        setNotifications((prev) =>
-          prev.filter(
-            (n) =>
-              !(n.type === "swap_available" && n.jobId === jobId)
-          )
-        );
-        await loadNotifications(true);
+        await refetch();
         return;
       }
 
       toast.success(data.message ?? "Urgent job accepted");
-      setNotifications((prev) =>
-        prev.filter(
-          (n) => !(n.type === "swap_available" && n.jobId === jobId)
-        )
-      );
-      await loadNotifications(true);
+      await refetch();
     } catch {
       toast.error("Could not accept this job");
     } finally {
@@ -142,7 +72,7 @@ export function CleanerHeader() {
               type="button"
               onClick={() => {
                 setOpen(true);
-                loadNotifications(true);
+                refetch();
               }}
               className="relative rounded-full p-2 text-gray-600 hover:bg-gray-100"
               aria-label="Notifications"
@@ -159,7 +89,7 @@ export function CleanerHeader() {
       </header>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className="fixed inset-0 z-[60] flex justify-end">
           <button
             type="button"
             className="absolute inset-0 bg-black/30"
@@ -189,8 +119,9 @@ export function CleanerHeader() {
               <div className="border-b px-4 py-2">
                 <button
                   type="button"
-                  onClick={handleMarkAllRead}
-                  className="text-sm font-medium text-brand hover:underline"
+                  onClick={() => markRead.mutate(undefined)}
+                  disabled={markRead.isPending}
+                  className="text-sm font-medium text-brand hover:underline disabled:opacity-50"
                 >
                   Mark all read
                 </button>
@@ -198,9 +129,11 @@ export function CleanerHeader() {
             )}
 
             <div className="flex-1 overflow-y-auto">
+              {isError && <p role="alert" className="p-4 text-sm text-red-600">Could not load notifications. <button type="button" className="underline" onClick={() => refetch()}>Retry</button></p>}
+              {markRead.isError && <p role="alert" className="p-4 text-sm text-red-600">{markRead.error.message}</p>}
               {initialLoading && notifications.length === 0 ? (
                 <p className="p-4 text-sm text-gray-500">Loading…</p>
-              ) : notifications.length === 0 ? (
+              ) : notifications.length === 0 && !isError ? (
                 <p className="p-4 text-sm text-gray-500">No notifications yet.</p>
               ) : (
                 <ul className="divide-y divide-gray-100">
@@ -219,6 +152,9 @@ export function CleanerHeader() {
                       <p className="mt-1 text-xs text-gray-400">
                         {formatTime(n.createdAt)}
                       </p>
+                      {n.url && (
+                        <Link href={n.url as Route} onClick={() => setOpen(false)} className="mt-1 inline-block text-xs font-semibold text-brand hover:underline">View</Link>
+                      )}
                       {n.type === "swap_available" && n.jobId && (
                         <button
                           type="button"

@@ -19,7 +19,7 @@ import type { ResidentialFormData } from "./index";
 export type SerializableResidentialFormData = ResidentialFormData;
 
 export function serializeResidentialFormForServer(
-  formData: ResidentialFormData
+  formData: ResidentialFormData,
 ): SerializableResidentialFormData {
   return { ...formData };
 }
@@ -49,7 +49,8 @@ function optionalText(value: unknown): string | undefined {
  * a booking is rejected after the customer has already been charged.
  */
 export function normalizeResidentialFormData(
-  data: ResidentialFormData
+  data: ResidentialFormData,
+  strictV2 = data.pricingVersion === "residential-v2",
 ): ResidentialFormData {
   return {
     ...data,
@@ -58,10 +59,26 @@ export function normalizeResidentialFormData(
     emailConfirm: optionalText(data.emailConfirm)?.toLowerCase(),
     phoneNumber: optionalText(data.phoneNumber),
     address: optionalText(data.address),
-    bedrooms: Number(data.bedrooms) || 0,
-    bathrooms: Number(data.bathrooms) || 0,
-    sqft: Number(data.sqft) || 0,
-    petsAllowed: toBooleanish(data.petsAllowed),
+    bedrooms: strictV2
+      ? typeof data.bedrooms === "number"
+        ? data.bedrooms
+        : NaN
+      : Number(data.bedrooms) || 0,
+    bathrooms: strictV2
+      ? typeof data.bathrooms === "number"
+        ? data.bathrooms
+        : NaN
+      : Number(data.bathrooms) || 0,
+    sqft: strictV2
+      ? typeof data.sqft === "number"
+        ? data.sqft
+        : NaN
+      : Number(data.sqft) || 0,
+    petsAllowed: strictV2
+      ? typeof data.petsAllowed === "boolean"
+        ? data.petsAllowed
+        : undefined
+      : toBooleanish(data.petsAllowed),
     isAddressInServiceArea: toBooleanish(data.isAddressInServiceArea),
     entryMethod: data.entryMethod,
     entryInstructions: optionalText(data.entryInstructions),

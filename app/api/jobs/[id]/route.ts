@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJobDetails } from "@/lib/queries/jobs";
+import { loadCustomerJobReport } from "@/lib/services/customer-report";
 import { getSessionRole } from "@/lib/auth/server-roles";
 import {
   customerAuthErrorStatus,
@@ -9,7 +10,7 @@ import {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const userRole = await getSessionRole();
@@ -23,12 +24,14 @@ export async function GET(
 
     const { id } = await params;
 
-    if (isCustomer) {
+    const customerView =
+      isCustomer || request.nextUrl.searchParams.get("ownerScope") === "1";
+    if (customerView) {
       const { customerId, error } = await getCustomerAuth();
       if (!customerId) {
         return NextResponse.json(
           { error: error ?? "Unauthorized" },
-          { status: customerAuthErrorStatus(error) }
+          { status: customerAuthErrorStatus(error) },
         );
       }
 
@@ -38,13 +41,14 @@ export async function GET(
       }
     }
 
-    const job = await getJobDetails(id);
-    return NextResponse.json(job);
+    return NextResponse.json(
+      customerView ? await loadCustomerJobReport(id) : await getJobDetails(id),
+    );
   } catch (error) {
     console.error("Error fetching job details:", error);
     return NextResponse.json(
       { error: "Failed to fetch job details" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

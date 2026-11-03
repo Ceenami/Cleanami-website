@@ -24,7 +24,7 @@ function getHoldReason(
     isChecklistComplete: boolean | null;
     status: string | null;
     photoUrls: string[] | null;
-  } | null
+  } | null,
 ): string | null {
   if (status !== "held") return null;
 
@@ -45,6 +45,8 @@ export async function getCleanerPayouts(cleanerId: string): Promise<{
       id: payouts.id,
       jobId: payouts.jobId,
       amount: payouts.amount,
+      payReceipt: payouts.payReceipt,
+      addonsSnapshot: jobs.addonsSnapshot,
       status: payouts.status,
       urgentBonusAmount: payouts.urgentBonusAmount,
       laundryBonusAmount: payouts.laundryBonusAmount,
@@ -111,6 +113,8 @@ export async function getCleanerPayouts(cleanerId: string): Promise<{
       laundryBonusAmount,
       holdReason: getHoldReason(status, evidence),
       payBreakdown: buildPayBreakdownFromPayout({
+        payReceipt: row.payReceipt,
+        pricingVersion: row.addonsSnapshot?.residentialPricing?.ruleVersion,
         amount,
         urgentBonusAmount,
         laundryBonusAmount,

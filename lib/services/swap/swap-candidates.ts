@@ -6,6 +6,7 @@ import type { PropertyCleanerTier } from "@/db/schemas";
 import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getAvailableCleanersForJob } from "@/lib/queries/cleaners-proximity";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
+import { assignmentEligibility } from "@/lib/services/assignment/eligibility";
 import { toEasternDateString } from "@/lib/time/eastern";
 import { eq } from "drizzle-orm";
 
@@ -47,17 +48,6 @@ function scoreOf(reliabilityScore: string | number | null): number {
 }
 
 /**
- * A hot-tub property needs a hot-tub-capable cleaner on the job, so a swap may
- * only hand the clean to someone who can service it.
- */
-function jobRequiresHotTub(
-  addonsSnapshot: { hotTubServiceLevel?: string | null } | null | undefined
-): boolean {
-  const level = addonsSnapshot?.hotTubServiceLevel;
-  return !!level && level !== "none";
-}
-
-/**
  * Who may take over a clean, per the swap rules: a cleaner who has submitted
  * availability for that day, has no conflicting assignment, and meets the job's
  * requirements.
@@ -72,7 +62,7 @@ function jobRequiresHotTub(
 export async function getSwapCandidates(
   jobId: string,
   originalCleanerId: string,
-  options?: { limit?: number }
+  options?: { limit?: number },
 ): Promise<SwapCandidateResult> {
   const limit = options?.limit ?? SWAP_NOTIFY_LIMIT;
 
@@ -89,7 +79,10 @@ export async function getSwapCandidates(
   });
 
   if (!job?.checkInTime || !job.propertyId) {
-    return { candidates: [], emptyReason: "This job has no scheduled start time yet." };
+    return {
+      candidates: [],
+      emptyReason: "This job has no scheduled start time yet.",
+    };
   }
 
   // Anyone already on the job cannot also be the replacement.
@@ -108,14 +101,16 @@ export async function getSwapCandidates(
   // for the date the rota simply has no data for it, and gating on it would
   // refuse every swap for a reason that has nothing to do with who is free —
   // so fall back to the same pool the assignment engine draws from.
-  const enforceAvailability = submittedAvailability.size > 0;
+  const enforceAvailability = true;
 
   const pool = await buildOrderedPool(jobId, job.propertyId, excluded);
   if (pool.length === 0) {
-    return { candidates: [], emptyReason: "No other cleaners are set up for assignments right now." };
+    return {
+      candidates: [],
+      emptyReason: "No other cleaners are set up for assignments right now.",
+    };
   }
 
-  const needsHotTub = jobRequiresHotTub(job.addonsSnapshot);
   const rejected = { reliability: 0, availability: 0, hotTub: 0, conflict: 0 };
   const candidates: Candidate[] = [];
 
@@ -126,11 +121,20 @@ export async function getSwapCandidates(
       rejected.reliability += 1;
       continue;
     }
-    if (enforceAvailability && !submittedAvailability.has(candidate.cleanerId)) {
+    if (
+      enforceAvailability &&
+      !submittedAvailability.has(candidate.cleanerId)
+    ) {
       rejected.availability += 1;
       continue;
     }
-    if (needsHotTub && !candidate.hotTubCapable) {
+    if (
+      !(
+        await assignmentEligibility(candidate.cleanerId, jobId, {
+          replaceCleanerId: originalCleanerId,
+        })
+      ).eligible
+    ) {
       rejected.hotTub += 1;
       continue;
     }
@@ -159,7 +163,7 @@ export async function getSwapCandidates(
 export async function canCleanerCoverSwap(
   cleanerId: string,
   jobId: string,
-  originalCleanerId: string
+  originalCleanerId: string,
 ): Promise<boolean> {
   // Ask for the whole pool rather than a short list: the cleaner checking may
   // rank below the broadcast cut-off yet still be a legitimate taker if the
@@ -174,7 +178,7 @@ export async function canCleanerCoverSwap(
 async function buildOrderedPool(
   jobId: string,
   propertyId: string,
-  excluded: Set<string>
+  excluded: Set<string>,
 ): Promise<Candidate[]> {
   const roster = await db
     .select({
@@ -200,7 +204,8 @@ async function buildOrderedPool(
   const ordered: Candidate[] = [];
 
   const add = (candidate: Candidate) => {
-    if (excluded.has(candidate.cleanerId) || seen.has(candidate.cleanerId)) return;
+    if (excluded.has(candidate.cleanerId) || seen.has(candidate.cleanerId))
+      return;
     seen.add(candidate.cleanerId);
     ordered.push(candidate);
   };
@@ -218,7 +223,7 @@ async function buildOrderedPool(
         fullName: r.fullName,
         reliability: scoreOf(r.reliabilityScore),
         hotTubCapable: r.hasHotTubCert ?? false,
-      })
+      }),
     );
 
   try {
@@ -237,7 +242,7 @@ async function buildOrderedPool(
     // Property not geocoded — the roster alone can still cover the swap.
     console.warn(
       `[swap-candidates] proximity ranking failed for job ${jobId}:`,
-      err instanceof Error ? err.message : err
+      err instanceof Error ? err.message : err,
     );
   }
 

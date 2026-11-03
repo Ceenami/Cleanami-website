@@ -1,9 +1,9 @@
 import "server-only";
 
 import { db } from "@/db";
-import { cleaners, propertyCleaners } from "@/db/schemas";
+import { cleaners, propertyCleaners, propertyExclusions } from "@/db/schemas";
 import type { PropertyCleanerTier } from "@/db/schemas";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray, and, sql } from "drizzle-orm";
 
 export type RosterEntry = {
   cleanerId: string;
@@ -26,7 +26,7 @@ export class MainPrimaryConflictError extends Error {
 }
 
 export async function getPropertyRoster(
-  propertyId: string
+  propertyId: string,
 ): Promise<RosterEntry[]> {
   const rows = await db
     .select({
@@ -51,7 +51,7 @@ export async function getPropertyRoster(
 /** Replace the whole roster for a property in one transaction. */
 export async function setPropertyRoster(
   propertyId: string,
-  entries: RosterInput[]
+  entries: RosterInput[],
 ): Promise<{ propertyId: string; count: number }> {
   // De-dupe by cleanerId (unique constraint is per property+cleaner).
   const seen = new Set<string>();
@@ -65,6 +65,29 @@ export async function setPropertyRoster(
   }
 
   await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`property:${propertyId}`},0))`,
+    );
+    if (
+      deduped.length &&
+      (
+        await tx
+          .select()
+          .from(propertyExclusions)
+          .where(
+            and(
+              eq(propertyExclusions.propertyId, propertyId),
+              inArray(
+                propertyExclusions.cleanerId,
+                deduped.map((e) => e.cleanerId),
+              ),
+            ),
+          )
+      ).length
+    )
+      throw new Error(
+        "A do-not-assign cleaner cannot be added to this roster. Remove the exclusion explicitly first.",
+      );
     await tx
       .delete(propertyCleaners)
       .where(eq(propertyCleaners.propertyId, propertyId));
@@ -76,7 +99,7 @@ export async function setPropertyRoster(
           cleanerId: e.cleanerId,
           tier: e.tier,
           sortOrder: e.sortOrder ?? idx,
-        }))
+        })),
       );
     }
   });

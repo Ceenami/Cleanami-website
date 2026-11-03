@@ -13,13 +13,13 @@ const bodySchema = z.object({
 /** Admin moves a restock request along the queue (task 1.16). */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { isAdmin, error } = await getAdminAuth(request);
   if (!isAdmin) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
@@ -33,7 +33,7 @@ export async function PATCH(
     if (!parsed.success) {
       return NextResponse.json(
         { error: parsed.error.issues[0]?.message ?? "Invalid status." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -45,15 +45,21 @@ export async function PATCH(
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: 404 });
+      return NextResponse.json(
+        { error: result.error },
+        { status: result.conflict ? 409 : 404 },
+      );
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      notificationStatus: result.notificationStatus,
+    });
   } catch (err) {
     console.error("[PATCH /api/restock-requests/[id]]", err);
     return NextResponse.json(
       { error: "Failed to update restock request" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

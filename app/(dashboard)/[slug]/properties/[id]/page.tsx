@@ -10,6 +10,10 @@ import { PropertyHeader } from "@/components/dashbboard/admin/properties/Propert
 import { getSessionRole } from "@/lib/auth/server-roles";
 import { getCustomerAuth } from "@/lib/customer-auth";
 import { PropertyTimesForm } from "@/components/customer/PropertyTimesForm";
+import { PropertyChecklistBuilder } from "@/components/checklists/PropertyChecklistBuilder";
+import { PropertyExclusions } from "@/components/operations/PropertyExclusions";
+import { PropertyAssignmentPolicy } from "@/components/operations/PropertyAssignmentPolicy";
+import { PropertyRestockingSummary } from "@/components/dashbboard/admin/restocking/RestockRequestsPanel";
 
 export default async function Page({
   params,
@@ -39,13 +43,13 @@ export default async function Page({
   // null = deliberate unscoped read (admin). A customer is always scoped to
   // their own id, so a property they do not own resolves to notFound().
   let scopeCustomerId: string | null = null;
-  if (!isAdminRole) {
+  if (!isAdminRole || slug === "customer") {
     const { customerId, error } = await getCustomerAuth();
     if (!customerId) {
       redirect(
         `/?portalBlocked=1&message=${encodeURIComponent(
-          error ?? "Portal unavailable"
-        )}`
+          error ?? "Portal unavailable",
+        )}`,
       );
     }
     scopeCustomerId = customerId;
@@ -76,11 +80,11 @@ export default async function Page({
     // Link-based checklist rows (a pasted Google Sheet URL) have no storage
     // path to sign — only uploaded files go through createSignedUrls.
     const uploadedChecklistFiles = propertyDetails.checklistFiles.filter(
-      (f) => f.storagePath
+      (f) => f.storagePath,
     );
     const checklistSignedUrls = await createSignedUrls(
       CHECKLISTS_BUCKET,
-      uploadedChecklistFiles.map((f) => f.storagePath!)
+      uploadedChecklistFiles.map((f) => f.storagePath!),
     );
     let signedUrlIndex = 0;
     checklistFiles = propertyDetails.checklistFiles.map((f) => {
@@ -124,8 +128,11 @@ export default async function Page({
         <div className="min-w-0 space-y-6">
           {showAdminControls ? (
             <>
+              <PropertyRestockingSummary propertyId={propertyDetails.id} />
               <PropertyEditForm property={propertyDetails} />
               <PropertyCleanerRoster propertyId={propertyDetails.id} />
+              <PropertyExclusions propertyId={propertyDetails.id} />
+              <PropertyAssignmentPolicy propertyId={propertyDetails.id} />
               <PropertyDetailesRightColumn
                 propertyId={propertyDetails.id}
                 checklistFiles={checklistFiles}
@@ -146,6 +153,9 @@ export default async function Page({
           )}
         </div>
       </div>
+      {propertyDetails.serviceType !== "residential_one_time" && (
+        <PropertyChecklistBuilder propertyId={id} admin={showAdminControls} />
+      )}
     </div>
   );
 }

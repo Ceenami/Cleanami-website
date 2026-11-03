@@ -14,6 +14,7 @@ import { R3When } from "./R3When";
 import { R4GettingIn } from "./R4GettingIn";
 import { R5Payment } from "./R5Payment";
 import { R6Confirmation } from "./R6Confirmation";
+import { BookingServiceHeader } from "../BookingServiceHeader";
 
 import { cn } from "@/lib/utils";
 import { isServiceUnavailableMessage } from "@/lib/env/messages";
@@ -25,6 +26,7 @@ import {
 import { serializeResidentialFormForServer } from "@/lib/validations/residential/serialize";
 import type { PriceDetails } from "@/lib/validations/bookng-modal";
 import { CUSTOM_QUOTE_RESIDENTIAL_MESSAGE } from "@/lib/pricing/custom-quote-message";
+import type { ArrivalWindowKey } from "@/lib/scheduling/arrival-windows";
 
 /**
  * The residential one-time wizard — counterproposal item 4.
@@ -64,7 +66,14 @@ const RESUME_STEP_NAMES: Record<number, string> = {
 
 const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
-  2: ["address", "isAddressInServiceArea", "sqft", "bedrooms", "bathrooms"],
+  2: [
+    "cleaningLevel",
+    "address",
+    "isAddressInServiceArea",
+    "sqft",
+    "bedrooms",
+    "bathrooms",
+  ],
   3: ["cleanDate", "arrivalWindow"],
   // R4 is entirely optional (items 5 and 6 are optional on both flows), so it
   // has no required fields — a customer who will let the cleaner in themselves
@@ -77,12 +86,14 @@ interface Props {
   onClose: () => void;
   /** Present only when the service-type question is enabled. */
   onChangeServiceType?: () => void;
+  initialData?: { formData: ResidentialFormData; currentStep: number };
 }
 
 export const ResidentialForm = ({
   isOpen,
   onClose,
   onChangeServiceType,
+  initialData,
 }: Props) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState<ResidentialFormData>({
@@ -95,19 +106,29 @@ export const ResidentialForm = ({
     bedrooms: 3,
     bathrooms: 2,
     petsAllowed: false,
+    hotTub: "none",
+    inUnitLaundryLoads: 0,
     isAddressInServiceArea: false,
   });
-  const [errors, setErrors] = useState<Record<string, string[] | undefined>>({});
+  const [errors, setErrors] = useState<Record<string, string[] | undefined>>(
+    {},
+  );
 
   const [priceDetails, setPriceDetails] = useState<PriceDetails | null>(null);
   const [quoteRefusal, setQuoteRefusal] = useState<string | null>(null);
   const [pricedSnapshot, setPricedSnapshot] = useState<string | null>(null);
+  const [arrivalWindowKeys, setArrivalWindowKeys] = useState<
+    ArrivalWindowKey[]
+  >([]);
+  const [quoteRetry, setQuoteRetry] = useState(0);
+  const [quoteFailed, setQuoteFailed] = useState(false);
 
   const [paymentData, setPaymentData] = useState<{
     paymentIntentId: string;
     amountInCents: number | null;
   } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isChangingServiceType, setIsChangingServiceType] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [portalInviteEmailSent, setPortalInviteEmailSent] = useState(true);
 
@@ -117,9 +138,9 @@ export const ResidentialForm = ({
       // Never resume onto the confirmation step: that session's booking is
       // already paid for, and re-entering the wizard there would show a
       // "booked" screen with no payment behind it.
-      setCurrentStep(Math.min(data.currentStep, TOTAL_STEPS - 1));
+      setCurrentStep(Math.max(1, Math.min(data.currentStep, TOTAL_STEPS - 1)));
     },
-    []
+    [],
   );
 
   const {
@@ -130,24 +151,56 @@ export const ResidentialForm = ({
     startFreshSession,
     saveProgress,
     saveProgressNow,
-  } = useResidentialSession({ debounceMs: 1500, onSessionLoaded });
+  } = useResidentialSession({ debounceMs: 1500, onSessionLoaded, skipInitialLoad: !!initialData });
+
+  useEffect(() => {
+    if (initialData) onSessionLoaded(initialData);
+  }, [initialData, onSessionLoaded]);
 
   useEffect(() => {
     if (hasExistingSession || isLoadingSession) return;
     saveProgress(formData, currentStep);
-  }, [formData, currentStep, saveProgress, hasExistingSession, isLoadingSession]);
+  }, [
+    formData,
+    currentStep,
+    saveProgress,
+    hasExistingSession,
+    isLoadingSession,
+  ]);
 
   // The snapshot the quote is fetched for. The residential quote is more than a
   // price — the server answers "can we sell this at all?", because a home can
   // price fine and still be unstaffable.
   const quoteSnapshot = useMemo(
-    () => JSON.stringify(serializeResidentialFormForServer(formData)),
-    [formData]
+    () =>
+      JSON.stringify({
+        bedrooms: formData.bedrooms,
+        bathrooms: formData.bathrooms,
+        sqft: formData.sqft,
+        cleaningLevel: formData.cleaningLevel,
+        petsAllowed: formData.petsAllowed,
+        hotTub: formData.hotTub ?? "none",
+        inUnitLaundryLoads: formData.inUnitLaundryLoads ?? 0,
+      }),
+    [
+      formData.bedrooms,
+      formData.bathrooms,
+      formData.sqft,
+      formData.cleaningLevel,
+      formData.petsAllowed,
+      formData.hotTub,
+      formData.inUnitLaundryLoads,
+    ],
   );
 
   useEffect(() => {
     let superseded = false;
     const snapshot = quoteSnapshot;
+    setPriceDetails(null);
+    setPricedSnapshot(null);
+    setQuoteRefusal(null);
+    setQuoteFailed(false);
+    setArrivalWindowKeys([]);
 
     const timerId = setTimeout(() => {
       void (async () => {
@@ -157,13 +210,16 @@ export const ResidentialForm = ({
             headers: { "Content-Type": "application/json" },
             body: snapshot,
           });
-          if (superseded || !res.ok) return;
+          if (superseded) return;
+          if (!res.ok) throw new Error("Quote unavailable");
 
           const result = (await res.json()) as {
             refused?: boolean;
+            ruleVersion?: "residential-v1" | "residential-v2";
             reason?: string;
             message?: string;
             priceDetails?: PriceDetails;
+            arrivalWindowKeys?: ArrivalWindowKey[];
           };
           if (superseded) return;
 
@@ -177,14 +233,27 @@ export const ResidentialForm = ({
               result.reason === "pricing_unavailable" ||
               result.reason === "no_window";
             setQuoteRefusal(isSellability ? (result.message ?? null) : null);
-            if (isSellability) setPriceDetails(null);
+            setPriceDetails(null);
           } else if (result.priceDetails) {
+            if (result.ruleVersion)
+              setFormData((prev) =>
+                prev.pricingVersion === result.ruleVersion
+                  ? prev
+                  : { ...prev, pricingVersion: result.ruleVersion },
+              );
             setQuoteRefusal(null);
             setPriceDetails(result.priceDetails);
+            setArrivalWindowKeys(result.arrivalWindowKeys ?? []);
           }
           setPricedSnapshot(snapshot);
         } catch {
-          // Non-fatal — keep the last good price on screen.
+          if (superseded) return;
+          setPriceDetails(null);
+          setArrivalWindowKeys([]);
+          setQuoteFailed(true);
+          setQuoteRefusal(
+            "We could not update your price. Check your connection and try again.",
+          );
         }
       })();
     }, 250);
@@ -193,10 +262,9 @@ export const ResidentialForm = ({
       superseded = true;
       clearTimeout(timerId);
     };
-  }, [quoteSnapshot]);
+  }, [quoteSnapshot, quoteRetry]);
 
-  const isPriceStale =
-    pricedSnapshot !== null && pricedSnapshot !== quoteSnapshot;
+  const isPriceStale = pricedSnapshot !== quoteSnapshot;
 
   const handleStepChange = async (newStep: number) => {
     setCurrentStep(newStep);
@@ -210,7 +278,7 @@ export const ResidentialForm = ({
       return true;
     }
 
-    const result = residentialFormSchema.partial().safeParse(formData);
+    const result = residentialFormSchema.safeParse(formData);
     if (result.success) {
       setErrors({});
       return true;
@@ -236,7 +304,8 @@ export const ResidentialForm = ({
     // A home we cannot price or cannot staff never reaches the payment step.
     // The refusal is shown where the price would be; there is nothing to
     // continue to, so the button simply does not advance.
-    if (quoteRefusal) return;
+    if (quoteRefusal || (currentStep >= 2 && (isPriceStale || !priceDetails)))
+      return;
     if (validateStep(currentStep)) {
       void handleStepChange(Math.min(currentStep + 1, TOTAL_STEPS));
     }
@@ -249,7 +318,7 @@ export const ResidentialForm = ({
 
   const handlePaymentSuccess = async (
     paymentIntentId: string,
-    chargedAmountCents: number | null
+    chargedAmountCents: number | null,
   ) => {
     setPaymentData({
       paymentIntentId,
@@ -300,12 +369,12 @@ export const ResidentialForm = ({
       }
 
       setSaveError(
-        `Your payment was successful, but there was an issue finalizing your booking. Our team has been notified. For your records, your transaction ID is: ${paymentIntentId}. Please contact support if you have any questions.`
+        `Your payment was successful, but there was an issue finalizing your booking. Our team has been notified. For your records, your transaction ID is: ${paymentIntentId}. Please contact support if you have any questions.`,
       );
     } catch (error) {
       console.error("Residential booking finalize failed:", error);
       setSaveError(
-        `Your payment was successful, but we could not reach the server to finalize your booking. For your records, your transaction ID is: ${paymentIntentId}. Please contact support.`
+        `Your payment was successful, but we could not reach the server to finalize your booking. For your records, your transaction ID is: ${paymentIntentId}. Please contact support.`,
       );
     } finally {
       setIsSaving(false);
@@ -320,7 +389,6 @@ export const ResidentialForm = ({
             formData={formData}
             setFormData={setFormData}
             errors={errors}
-            onChangeServiceType={onChangeServiceType}
           />
         );
       case 2:
@@ -334,6 +402,7 @@ export const ResidentialForm = ({
       case 3:
         return (
           <R3When
+            arrivalWindowKeys={arrivalWindowKeys}
             formData={formData}
             setFormData={setFormData}
             errors={errors}
@@ -355,6 +424,7 @@ export const ResidentialForm = ({
               setFormData={setFormData}
               onPaymentSuccess={handlePaymentSuccess}
               paymentFinalizing={isSaving}
+              quoteReady={!isPriceStale && !!priceDetails && !quoteRefusal}
             />
             {isSaving && (
               <p className="text-center mt-4 text-sm text-gray-500 animate-pulse">
@@ -362,13 +432,19 @@ export const ResidentialForm = ({
               </p>
             )}
             {saveError && (
-              <p className="text-center mt-4 text-sm text-red-600">{saveError}</p>
+              <p className="text-center mt-4 text-sm text-red-600">
+                {saveError}
+              </p>
             )}
           </div>
         );
       case CONFIRMATION_STEP:
         return (
           <R6Confirmation
+            cleaningLevel={formData.cleaningLevel}
+            pricingVersion={formData.pricingVersion}
+            hotTub={formData.hotTub}
+            inUnitLaundryLoads={formData.inUnitLaundryLoads}
             paymentIntentId={paymentData?.paymentIntentId}
             amountInCents={paymentData?.amountInCents}
             promoCode={formData.promoCode ?? null}
@@ -384,6 +460,23 @@ export const ResidentialForm = ({
 
   const isConfirmation = currentStep === CONFIRMATION_STEP;
   const showPriceSummary = currentStep >= 2 && !isConfirmation;
+  const canChangeService = !!onChangeServiceType && currentStep < 5 && !isSaving && !paymentData;
+  const changeService = async () => {
+    if (isChangingServiceType) return;
+    setIsChangingServiceType(true);
+    try {
+      if (!isLoadingSession && !hasExistingSession) {
+        const saved = await saveProgressNow(formData, currentStep);
+        if (!saved) {
+          toast.error("We could not save your progress. Please try changing the cleaning type again.");
+          return;
+        }
+      }
+      onChangeServiceType?.();
+    } finally {
+      setIsChangingServiceType(false);
+    }
+  };
 
   // A refusal replaces the price entirely rather than sitting beside it. The
   // component already renders a custom-quote card, so feeding it a null price
@@ -435,6 +528,7 @@ export const ResidentialForm = ({
             <ProgressBar
               currentStep={currentStep}
               totalSteps={TOTAL_STEPS - 1}
+              stepLabels={stepTitles.slice(0, -1)}
             />
           </div>
         )}
@@ -443,6 +537,15 @@ export const ResidentialForm = ({
 
         <div>
           <div>{renderStep()}</div>
+          {quoteFailed && (
+            <button
+              type="button"
+              className="mt-3 text-sm font-medium text-teal-700"
+              onClick={() => setQuoteRetry((retry) => retry + 1)}
+            >
+              Retry price
+            </button>
+          )}
 
           {!isConfirmation && (
             <div className="sticky bottom-0 z-10 mt-8 border-t bg-white/95 py-4 backdrop-blur">
@@ -453,7 +556,7 @@ export const ResidentialForm = ({
                   disabled={currentStep === 1}
                   className={cn(
                     "py-2 px-4 rounded-md text-sm font-medium text-white bg-brand hover:bg-brand/60",
-                    currentStep === 1 ? "invisible" : "visible"
+                    currentStep === 1 ? "invisible" : "visible",
                   )}
                 >
                   Back
@@ -463,7 +566,10 @@ export const ResidentialForm = ({
                   <button
                     type="button"
                     onClick={nextStep}
-                    disabled={!!quoteRefusal}
+                    disabled={
+                      !!quoteRefusal ||
+                      (currentStep >= 2 && (isPriceStale || !priceDetails))
+                    }
                     className="py-2 px-4 rounded-md text-sm font-medium text-white bg-brand hover:bg-brand/60 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Next
@@ -480,6 +586,7 @@ export const ResidentialForm = ({
   return (
     <ModalLayout
       isOpen={isOpen}
+      compact={!showPriceSummary || isLoadingSession || hasExistingSession}
       onClose={onClose}
       title={
         isLoadingSession
@@ -507,6 +614,9 @@ export const ResidentialForm = ({
         quoteRefusal ?? CUSTOM_QUOTE_RESIDENTIAL_MESSAGE
       }
     >
+      {!isConfirmation && (
+        <BookingServiceHeader serviceType="residential_one_time" onChange={canChangeService ? changeService : undefined} isChanging={isChangingServiceType} />
+      )}
       {renderContent()}
     </ModalLayout>
   );

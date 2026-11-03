@@ -14,6 +14,7 @@ import {
 import {
   canCancelJob,
   canCancelSubscription,
+  isLateCancellation,
 } from "@/lib/cancellation/rules";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import {
@@ -24,10 +25,20 @@ import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-inpu
 import { PricingService } from "@/lib/services/pricing.service";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { voidCharge } from "@/lib/services/payment/void-charge";
-import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
 import { sendCancellationEmail } from "@/lib/services/email.service";
 import { appendJobNote } from "@/lib/jobs/job-notes";
+import { verifySettledPayment } from "./payment/verify-settled-payment";
+import { authorizeRentalCharge } from "./payment/rental-authorization";
+import { freezeRentalCharge } from "./payment/freeze-rental-charge";
+import { buildRentalCharge, readRentalCharge, rentalJobPricingInput, RentalPricingError } from "@/lib/pricing/rental-charge";
+import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
+import { resolvePromoCodeById, recordPromoRedemption } from "./promo-code.service";
 import { and, eq, gt, inArray, ne } from "drizzle-orm";
+
+type CancellationWriter =
+  typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const pricingService = new PricingService();
 const CANCELABLE_STATUSES = ["unassigned", "assigned"] as const;
@@ -47,8 +58,8 @@ export type CancelSubscriptionResult = {
   message: string;
 };
 
-async function loadJobContext(jobId: string) {
-  return db.query.jobs.findFirst({
+async function loadJobContext(jobId: string, reader: CancellationWriter = db) {
+  return reader.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
     with: {
       cleaners: true,
@@ -60,41 +71,52 @@ async function loadJobContext(jobId: string) {
   });
 }
 
-function cleanersToPay(assignments: { role: string; cleanerId: string; urgentBonus?: boolean | null }[]) {
-  const primaries = assignments.filter((a) => a.role === "primary");
-  if (primaries.length > 0) return primaries;
-  return assignments.filter((a) => a.role !== "backup" && a.role !== "on-call");
-}
+type PayAssignment = {
+  role: string;
+  cleanerId: string;
+  urgentBonus: boolean | null;
+  frozenHourlyRateCents?: number | null;
+  residentialPayTerms?: unknown;
+};
 
 async function createCleanerPayouts(
   jobId: string,
   expectedHours: string | null,
-  assignments: { role: string; cleanerId: string; urgentBonus: boolean | null }[]
+  assignments: PayAssignment[],
+  writer: CancellationWriter = db,
+  laundryLoads = 0,
+  residentialPricing?: unknown,
 ) {
-  const payTargets = cleanersToPay(assignments);
-  if (payTargets.length === 0) return 0;
-
-  const hours = parseFloat(expectedHours || "0");
-  const basePay = hours * CLEANER_HOURLY_RATE;
-
-  // Insert sequentially; the production pooler cannot pipeline DB writes.
-  for (const assignment of payTargets) {
-    let total = basePay;
-    let urgentBonus: string | null = null;
-    if (assignment.urgentBonus) {
-      urgentBonus = "10.00";
-      total += 10;
-    }
-    await db.insert(payouts).values({
-      jobId,
-      cleanerId: assignment.cleanerId,
-      amount: total.toFixed(2),
-      urgentBonusAmount: urgentBonus,
-      status: "pending",
+  const workers = assignments.filter((a) =>
+    ["primary", "laundry_lead"].includes(a.role),
+  );
+  for (const assignment of workers) {
+    const pay = computeCleanerPay({
+      residentialPricing,
+      assignmentTerms: assignment.residentialPayTerms,
+      settlement: "late_cancellation",
+      expectedHours: Number(expectedHours ?? 0),
+      hourlyRateCents: assignment.frozenHourlyRateCents,
+      role: assignment.role,
+      laundryLoads,
+      urgentBonus: assignment.urgentBonus,
     });
+    await writer
+      .insert(payouts)
+      .values({
+        jobId,
+        cleanerId: assignment.cleanerId,
+        amount: pay.total.toFixed(2),
+        payReceipt: pay.receipt ?? null,
+        urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
+        laundryBonusAmount: pay.laundryBonus
+          ? pay.laundryBonus.toFixed(2)
+          : null,
+        status: "pending",
+      })
+      .onConflictDoNothing({ target: [payouts.jobId, payouts.cleanerId] });
   }
-
-  return payTargets.length;
+  return workers.length;
 }
 
 async function voidCustomerCharge(job: {
@@ -106,6 +128,7 @@ async function voidCustomerCharge(job: {
     paymentIntentId: job.paymentIntentId,
     paymentStatus: job.paymentStatus,
     context: "cancelJob",
+    strict: true,
   });
 }
 
@@ -115,6 +138,9 @@ async function chargeCustomerForLateCancel(
     paymentIntentId: string | null;
     paymentStatus: string | null;
     addonsSnapshot: unknown;
+    jobSource?: string | null;
+    serviceType?: string | null;
+    rentalCharge?: unknown;
   },
   property: {
     bedCount: number;
@@ -132,57 +158,96 @@ async function chargeCustomerForLateCancel(
   },
   stripeCustomerId: string | null,
   skipPayment: boolean,
-  subscriptionMonths: number
+  subscriptionMonths: number,
+  writer: CancellationWriter = db,
 ): Promise<boolean> {
-  if (skipPayment || customerSkipsBilling({ skipPayment })) return false;
+  if (
+    skipPayment ||
+    customerSkipsBilling({ skipPayment }) ||
+    isSkippedPaymentIntent(job.paymentIntentId) ||
+    (job.jobSource === "manual" && !job.paymentIntentId)
+  )
+    return false;
 
   const stripe = getStripe();
   if (!stripe) {
     throw new Error(SERVICE_UNAVAILABLE.stripe);
   }
 
-  if (job.paymentStatus === "captured") {
+  const residential = readResidentialSnapshot(job.addonsSnapshot);
+  if (residential.kind === "v2") {
+    // Residential is prepaid. Never reconstruct a cancellation price from rental tables.
+    if (!job.paymentIntentId) throw new Error("Residential cancellation payment needs review");
+    let intent = await stripe.paymentIntents.retrieve(job.paymentIntentId);
+    if (intent.status === "requires_capture")
+      intent = await stripe.paymentIntents.capture(job.paymentIntentId, {}, {
+        idempotencyKey: `late_cancel_capture_${jobId}`,
+      });
+    await verifySettledPayment(stripe, intent, residential.terms.amountChargedCents);
+    await writer.update(jobs).set({ paymentStatus: "captured", updatedAt: new Date() }).where(eq(jobs.id, jobId));
     return true;
   }
 
-  // A skip-payment sentinel is not a Stripe PaymentIntent.
-  if (
-    job.paymentStatus === "authorized" &&
-    job.paymentIntentId &&
-    !isSkippedPaymentIntent(job.paymentIntentId)
-  ) {
-    await stripe.paymentIntents.capture(job.paymentIntentId);
-    await db
-      .update(jobs)
-      .set({ paymentStatus: "captured", updatedAt: new Date() })
+  const rental = job.serviceType === "vacation_rental_subscription";
+  const frozen = rental ? readRentalCharge(job.rentalCharge) : null;
+  if (frozen?.skippedPayment) return false;
+  if (job.paymentIntentId) {
+    // Local captured/authorized flags are not proof of current provider truth.
+    let intent = await stripe.paymentIntents.retrieve(job.paymentIntentId);
+    const expected = frozen?.chargeAmountCents ?? intent.amount;
+    if (intent.amount !== expected || intent.currency !== "usd")
+      throw new RentalPricingError("Cancellation payment differs from its frozen charge; billing review is required");
+    if (intent.status === "requires_capture")
+      intent = await stripe.paymentIntents.capture(job.paymentIntentId, {}, {
+        idempotencyKey: `late_cancel_capture_${jobId}`,
+      });
+    await verifySettledPayment(stripe, intent, expected);
+    await writer.update(jobs).set({ paymentStatus: "captured", updatedAt: new Date() })
       .where(eq(jobs.id, jobId));
     return true;
   }
 
-  if (!stripeCustomerId) {
-    return false;
+  if (!stripeCustomerId) throw new Error("Cancellation billing needs a saved Stripe customer");
+  if (rental) {
+    if (!frozen) throw new RentalPricingError("Cancellation requires a recorded rental charge before payment");
+    // The caller holds the job lock. Cron uses the same lock, key and manual
+    // authorization parameters, so uncertain preauthorization cannot double bill.
+    let intent = await authorizeRentalCharge(stripe, jobId, stripeCustomerId, frozen);
+    if (intent.status === "requires_capture")
+      intent = await stripe.paymentIntents.capture(intent.id, {}, {
+        idempotencyKey: `late_cancel_capture_${jobId}`,
+      });
+    await verifySettledPayment(stripe, intent, frozen.chargeAmountCents);
+    await writer.update(jobs).set({ paymentIntentId: intent.id, paymentStatus: "captured", updatedAt: new Date() })
+      .where(eq(jobs.id, jobId));
+    return true;
   }
 
   const priceDetails = await pricingService.calculatePrice(
     buildRecurringPricingInput(
       property,
       // Apply the customer's subscription term to the late-cancel quote.
-      subscriptionMonths
-    ) as never
+      subscriptionMonths,
+    ) as never,
   );
 
   const amountInCents = Math.round(priceDetails.totalPerClean * 100);
-  const paymentIntent = await stripe.paymentIntents.create({
-    amount: amountInCents,
-    currency: "usd",
-    customer: stripeCustomerId,
-    capture_method: "automatic",
-    confirm: true,
-    off_session: true,
-    metadata: { job_id: jobId, reason: "late_customer_cancel" },
-  });
+  const paymentIntent = await stripe.paymentIntents.create(
+    {
+      amount: amountInCents,
+      currency: "usd",
+      customer: stripeCustomerId,
+      capture_method: "automatic",
+      confirm: true,
+      off_session: true,
+      metadata: { job_id: jobId, reason: "late_customer_cancel" },
+    },
+    { idempotencyKey: `late_cancel_${jobId}` },
+  );
 
-  await db
+  await verifySettledPayment(stripe, paymentIntent, amountInCents);
+
+  await writer
     .update(jobs)
     .set({
       paymentIntentId: paymentIntent.id,
@@ -196,7 +261,7 @@ async function chargeCustomerForLateCancel(
 
 export async function cancelJobForCustomer(
   jobId: string,
-  customerId: string
+  customerId: string,
 ): Promise<CancelJobResult> {
   const job = await loadJobContext(jobId);
   if (!job?.property) {
@@ -209,6 +274,7 @@ export async function cancelJobForCustomer(
 
   const issuedExecution = await getExecutionContract(jobId);
   if (issuedExecution && job.status === "canceled") return cancelExecutionJob(jobId, "customer");
+  if (job.status === "canceled") return alreadyCanceled(job.id);
   const eligibility = canCancelJob(job.subscription, job, job.cleaners);
   if (!eligibility.allowed) {
     throw new Error(eligibility.reason ?? "Cannot cancel this clean");
@@ -220,7 +286,7 @@ export async function cancelJobForCustomer(
     eligibility.late,
     "customer",
     // One-time jobs do not have a subscription discount to preserve.
-    job.subscription?.durationMonths ?? 1
+    job.subscription?.durationMonths ?? 1,
   );
 }
 
@@ -234,8 +300,7 @@ export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> 
   }
 
   const late = job.checkInTime
-    ? job.cleaners.length > 0 &&
-      new Date(job.checkInTime).getTime() - Date.now() < 24 * 60 * 60 * 1000
+    ? isLateCancellation(job.checkInTime, job.cleaners)
     : false;
 
   return finalizeJobCancellation(
@@ -243,11 +308,103 @@ export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> 
     late,
     "admin",
     // Use a one-month term for subscription-less jobs.
-    job.subscription?.durationMonths ?? 1
+    job.subscription?.durationMonths ?? 1,
   );
 }
 
+function alreadyCanceled(jobId: string): CancelJobResult {
+  return {
+    jobId,
+    lateCancel: false,
+    cleanersReleased: 0,
+    customerCharged: false,
+    cleanerPaid: false,
+    message: "This clean is already canceled.",
+  };
+}
+
 async function finalizeJobCancellation(
+  job: Parameters<typeof performJobCancellation>[0],
+  lateCancel: boolean,
+  source: "customer" | "admin",
+  subscriptionMonths: number,
+): Promise<CancelJobResult> {
+  let dispatched = false;
+  if (await getExecutionContract(job.id)) return cancelExecutionJob(job.id, source);
+  // Persist outside the cancellation transaction. An ambiguous provider result
+  // must not roll back the charge basis and reprice a later retry.
+  if (lateCancel && job.serviceType === "vacation_rental_subscription" &&
+      !job.paymentIntentId && !readRentalCharge(job.rentalCharge) && job.property &&
+      !job.property.customer?.skipPayment && job.jobSource !== "manual") {
+    const input = rentalJobPricingInput(job.property, subscriptionMonths,
+      job.addonsSnapshot as Parameters<typeof rentalJobPricingInput>[2]);
+    const price = await pricingService.calculatePrice(input);
+    const refusal = rentalQuoteRefusal(price, input);
+    if (refusal) throw new RentalPricingError(refusal);
+    const candidate = buildRentalCharge(price, job.addonsSnapshot as Parameters<typeof buildRentalCharge>[1], false);
+    if (job.promoCodeId) {
+      const { evaluation } = await resolvePromoCodeById(job.promoCodeId,
+        candidate.amountCents, job.property.customer?.email ?? "");
+      if (evaluation.valid) {
+        candidate.chargeAmountCents = evaluation.finalAmountCents;
+        candidate.promo = { promoCodeId: job.promoCodeId, code: evaluation.code,
+          discountAmountCents: evaluation.discountCents };
+      }
+    }
+    await freezeRentalCharge(db, job.id, candidate, job.promoCodeId ?? null);
+  }
+  const result = await db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ status: jobs.status })
+      .from(jobs)
+      .where(eq(jobs.id, job.id))
+      .for("update");
+    if (!current) throw new Error("Job not found");
+    if (current.status === "canceled") return alreadyCanceled(job.id);
+    if (!["assigned", "unassigned"].includes(current.status ?? ""))
+      throw new Error("This clean cannot be canceled in its current state");
+    const locked = await loadJobContext(job.id, tx);
+    if (!locked) throw new Error("Job not found");
+    const canceled = await performJobCancellation(
+      locked,
+      lateCancel,
+      source,
+      subscriptionMonths,
+      tx,
+    );
+    dispatched = true;
+    return canceled;
+  });
+  if (dispatched && result.customerCharged && job.serviceType === "vacation_rental_subscription") {
+    // Redemption bookkeeping runs after the job transaction; no nested pooler
+    // transaction while its row lock is held. It is idempotent on PaymentIntent.
+    try {
+      const saved = await loadJobContext(job.id);
+      const charge = readRentalCharge(saved?.rentalCharge);
+      if (saved?.paymentIntentId && charge?.promo)
+        await recordPromoRedemption({ ...charge.promo, customerEmail: saved.property?.customer?.email ?? "",
+          customerId: saved.property?.customerId, subscriptionId: saved.subscriptionId,
+          jobId: saved.id, paymentIntentId: saved.paymentIntentId,
+          originalAmountCents: charge.amountCents, finalAmountCents: charge.chargeAmountCents });
+    } catch (error) { console.error("[cancellation] promo bookkeeping failed:", error); }
+  }
+  // Only notify after all job/assignment/payout writes have committed.
+  if (dispatched && job.property?.customer?.email) {
+    try {
+      await sendCancellationEmail({
+        to: job.property.customer.email,
+        name: job.property.customer.name,
+        propertyAddress: job.property.address ?? "your property",
+        detail: result.message,
+      });
+    } catch (error) {
+      console.error("[cancellation] email failed:", error);
+    }
+  }
+  return result;
+}
+
+async function performJobCancellation(
   job: {
     id: string;
     expectedHours: string | null;
@@ -256,10 +413,16 @@ async function finalizeJobCancellation(
     /** Read so the cancellation line can be APPENDED rather than clobber it. */
     notes: string | null;
     addonsSnapshot: unknown;
+    jobSource?: string | null;
+    serviceType?: string | null;
+    rentalCharge?: unknown;
+    promoCodeId?: string | null;
     cleaners: {
       role: string;
       cleanerId: string;
       urgentBonus: boolean | null;
+      frozenHourlyRateCents?: number | null;
+      residentialPayTerms?: unknown;
     }[];
     property: {
       bedCount: number;
@@ -284,10 +447,15 @@ async function finalizeJobCancellation(
   },
   lateCancel: boolean,
   source: "customer" | "admin",
-  subscriptionMonths: number
+  subscriptionMonths: number,
+  writer: CancellationWriter,
 ): Promise<CancelJobResult> {
-  if (await getExecutionContract(job.id)) return cancelExecutionJob(job.id, source);
   const assignments = job.cleaners;
+  // Reject explicit corrupt contracts before any refund, charge or pay write.
+  const contract = readResidentialSnapshot(job.addonsSnapshot);
+  // Admin/business cancellation must not levy a customer late-cancellation charge.
+  if (source === "admin" && contract.kind === "v2" && contract.terms.executionPolicy)
+    lateCancel = false;
   let customerCharged = false;
   let cleanerPaid = false;
 
@@ -301,6 +469,16 @@ async function finalizeJobCancellation(
       : null;
 
   if (lateCancel) {
+    if (contract.kind === "v2") {
+      // Validate every frozen worker contract before any financial operation.
+      for (const assignment of assignments.filter(a => ["primary", "laundry_lead"].includes(a.role)))
+        computeCleanerPay({
+          residentialPricing: contract.terms, assignmentTerms: assignment.residentialPayTerms,
+          settlement: "late_cancellation", expectedHours: Number(job.expectedHours ?? 0),
+          hourlyRateCents: assignment.frozenHourlyRateCents, role: assignment.role,
+          urgentBonus: assignment.urgentBonus,
+        });
+    }
     if (!job.property) {
       throw new Error("Property not found for job");
     }
@@ -310,15 +488,25 @@ async function finalizeJobCancellation(
       job.property,
       job.property.customer?.stripeCustomerId ?? null,
       job.property.customer?.skipPayment ?? false,
-      subscriptionMonths
+      subscriptionMonths,
+      writer,
     );
     cleanerPaid =
-      (await createCleanerPayouts(job.id, job.expectedHours, assignments)) > 0;
+      (await createCleanerPayouts(
+        job.id,
+        job.expectedHours,
+        assignments,
+        writer,
+        (job.addonsSnapshot as { laundryLoads?: number } | null)
+          ?.laundryLoads ?? 0,
+        (job.addonsSnapshot as { residentialPricing?: unknown } | null)
+          ?.residentialPricing,
+      )) > 0;
   } else {
     await voidCustomerCharge(job);
   }
 
-  await db.delete(jobsToCleaners).where(eq(jobsToCleaners.jobId, job.id));
+  await writer.delete(jobsToCleaners).where(eq(jobsToCleaners.jobId, job.id));
 
   const notePrefix = lateCancel
     ? `[Late cancel – cleaner paid]`
@@ -333,7 +521,7 @@ async function finalizeJobCancellation(
   // Preserve a prior refund when a cancellation request is retried.
   const alreadyRefunded = job.paymentStatus === "refunded";
 
-  await db
+  await writer
     .update(jobs)
     .set({
       status: "canceled",
@@ -348,24 +536,6 @@ async function finalizeJobCancellation(
           }),
     })
     .where(eq(jobs.id, job.id));
-
-  // Notify the customer their clean was canceled (best-effort).
-  if (job.property?.customer?.email) {
-    try {
-      await sendCancellationEmail({
-        to: job.property.customer.email,
-        name: job.property.customer.name,
-        propertyAddress: job.property.address ?? "your property",
-        detail: lateCancel
-          ? "This was a late cancellation, so the assigned cleaner will still be paid."
-          : refundedIntentId
-            ? "Your payment for this clean has been refunded in full. It can take a few business days to appear on your statement."
-            : "No charge applies for this on-time cancellation.",
-      });
-    } catch (err) {
-      console.error("[cancellation] email failed:", err);
-    }
-  }
 
   return {
     jobId: job.id,
@@ -383,7 +553,7 @@ async function finalizeJobCancellation(
 
 export async function cancelSubscriptionForCustomer(
   subscriptionId: string,
-  customerId: string
+  customerId: string,
 ): Promise<CancelSubscriptionResult> {
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.id, subscriptionId),
@@ -407,7 +577,7 @@ export async function cancelSubscriptionForCustomer(
     where: and(
       eq(jobs.subscriptionId, subscriptionId),
       inArray(jobs.status, [...CANCELABLE_STATUSES]),
-      gt(jobs.checkInTime, new Date())
+      gt(jobs.checkInTime, new Date()),
     ),
     with: {
       cleaners: true,
@@ -418,14 +588,18 @@ export async function cancelSubscriptionForCustomer(
 
   let jobsCanceled = 0;
   for (const upcomingJob of upcomingJobs) {
-    const jobEligibility = canCancelJob(subscription, upcomingJob, upcomingJob.cleaners);
+    const jobEligibility = canCancelJob(
+      subscription,
+      upcomingJob,
+      upcomingJob.cleaners,
+    );
     if (!jobEligibility.allowed) continue;
 
     await finalizeJobCancellation(
       upcomingJob,
       jobEligibility.late,
       "customer",
-      subscription.durationMonths
+      subscription.durationMonths,
     );
     jobsCanceled += 1;
   }
@@ -450,7 +624,7 @@ export async function cancelSubscriptionForCustomer(
  * Unlike the customer path this does not enforce the minimum-term rule.
  */
 export async function cancelSubscriptionAsAdmin(
-  subscriptionId: string
+  subscriptionId: string,
 ): Promise<CancelSubscriptionResult> {
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.id, subscriptionId),
@@ -465,7 +639,7 @@ export async function cancelSubscriptionAsAdmin(
     where: and(
       eq(jobs.subscriptionId, subscriptionId),
       inArray(jobs.status, [...CANCELABLE_STATUSES]),
-      gt(jobs.checkInTime, new Date())
+      gt(jobs.checkInTime, new Date()),
     ),
     with: {
       cleaners: true,
@@ -479,7 +653,7 @@ export async function cancelSubscriptionAsAdmin(
     const jobEligibility = canCancelJob(
       subscription,
       upcomingJob,
-      upcomingJob.cleaners
+      upcomingJob.cleaners,
     );
     // Admin can cancel regardless of the customer notice window; use the
     // late flag purely to decide whether the cleaner is still paid.
@@ -487,7 +661,7 @@ export async function cancelSubscriptionAsAdmin(
       upcomingJob,
       jobEligibility.late,
       "admin",
-      subscription.durationMonths
+      subscription.durationMonths,
     );
     jobsCanceled += 1;
   }
@@ -519,7 +693,7 @@ export type SetSubscriptionStatusResult = {
  * no new work is dispatched while paused. On-time (no cleaner charge).
  */
 export async function pauseSubscriptionAsAdmin(
-  subscriptionId: string
+  subscriptionId: string,
 ): Promise<SetSubscriptionStatusResult> {
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.id, subscriptionId),
@@ -535,7 +709,7 @@ export async function pauseSubscriptionAsAdmin(
     where: and(
       eq(jobs.subscriptionId, subscriptionId),
       inArray(jobs.status, [...CANCELABLE_STATUSES]),
-      gt(jobs.checkInTime, new Date())
+      gt(jobs.checkInTime, new Date()),
     ),
     with: {
       cleaners: true,
@@ -551,7 +725,7 @@ export async function pauseSubscriptionAsAdmin(
       upcomingJob,
       false,
       "admin",
-      subscription.durationMonths
+      subscription.durationMonths,
     );
     jobsAffected += 1;
   }
@@ -574,7 +748,7 @@ export async function pauseSubscriptionAsAdmin(
 
 /** Admin resume: flip a paused subscription back to active. */
 export async function resumeSubscriptionAsAdmin(
-  subscriptionId: string
+  subscriptionId: string,
 ): Promise<SetSubscriptionStatusResult> {
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.id, subscriptionId),
@@ -601,7 +775,7 @@ export async function resumeSubscriptionAsAdmin(
 
 export async function customerOwnsSubscription(
   customerId: string,
-  subscriptionId: string
+  subscriptionId: string,
 ): Promise<boolean> {
   const row = await db
     .select({ id: subscriptions.id })
@@ -609,8 +783,8 @@ export async function customerOwnsSubscription(
     .where(
       and(
         eq(subscriptions.id, subscriptionId),
-        eq(subscriptions.customerId, customerId)
-      )
+        eq(subscriptions.customerId, customerId),
+      ),
     )
     .limit(1);
   return row.length > 0;

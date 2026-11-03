@@ -10,11 +10,20 @@ import { SERVICE_TYPES, type ServiceType } from "@/lib/constants/service-type";
  *
  * **A session saved before this key existed has no value here**, and every one
  * of those is a vacation-rental session, because that was the only wizard.
- * `readSessionServiceType` returning `null` is what the caller reads as "the
- * old product", which is how a customer mid-funnel when this shipped lands back
- * on the step they left rather than on a question they have never seen.
+ * `readSessionServiceType` returning `null` identifies that legacy rental
+ * draft. The customer still sees both service choices before choosing to resume.
  */
 export const SESSION_SERVICE_TYPE_KEY = "serviceType";
+
+/** A freshly created cookie with an empty form is not a booking to resume. */
+export function hasSavedBookingProgress(session: {
+  currentStep?: number;
+  formData?: Record<string, unknown> | null;
+}): boolean {
+  return (session.currentStep ?? 1) > 1 || Object.values(session.formData ?? {}).some(
+    (value) => value !== null && value !== undefined && value !== "",
+  );
+}
 
 export function readSessionServiceType(
   formData: Record<string, unknown> | null | undefined

@@ -1,6 +1,7 @@
-'use client';
+"use client";
 
-import type { EvidenceRoomGroup } from '@/lib/cleaner/evidence';
+import { useState } from "react";
+import type { EvidenceRoomGroup } from "@/lib/cleaner/evidence";
 
 /**
  * The room photos a cleaner submitted, grouped the way they were asked for
@@ -16,17 +17,19 @@ import type { EvidenceRoomGroup } from '@/lib/cleaner/evidence';
 export function EvidencePhotoGallery({
   roomGroups,
   onOpenPhoto,
-  emptyMessage = 'No photos have been submitted for this job yet.',
+  emptyMessage = "No photos have been submitted for this job yet.",
 }: {
-  roomGroups: EvidenceRoomGroup[] | undefined;
+  roomGroups:
+    Array<EvidenceRoomGroup & { unavailablePhotos?: number }> | undefined;
   /** Receives the photo's position in the flattened, in-order photo list. */
   onOpenPhoto: (flatIndex: number) => void;
   emptyMessage?: string;
 }) {
+  const [failedUrls, setFailedUrls] = useState<Set<string>>(() => new Set());
   const groups = roomGroups ?? [];
   const totalPhotos = groups.reduce((sum, g) => sum + g.photos.length, 0);
 
-  if (totalPhotos === 0) {
+  if (totalPhotos === 0 && groups.length === 0) {
     return (
       <div className="bg-white p-6 rounded-lg shadow-md">
         <GalleryHeading count={0} />
@@ -58,20 +61,22 @@ export function EvidencePhotoGallery({
                 </h4>
                 <span
                   className={`text-xs ${
-                    short ? 'text-amber-600 font-medium' : 'text-gray-500'
+                    short ? "text-amber-600 font-medium" : "text-gray-500"
                   }`}
                 >
                   {group.minPhotos > 0
                     ? `${group.photos.length} of ${group.minPhotos} required`
                     : `${group.photos.length} photo${
-                        group.photos.length === 1 ? '' : 's'
+                        group.photos.length === 1 ? "" : "s"
                       }`}
                 </span>
               </div>
 
               {group.photos.length === 0 ? (
                 <p className="text-xs text-gray-400 italic">
-                  No photo submitted for this room.
+                  {group.unavailablePhotos
+                    ? "Submitted photos are unavailable. Refresh photo links."
+                    : "No photo submitted for this room."}
                 </p>
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
@@ -79,17 +84,29 @@ export function EvidencePhotoGallery({
                     <button
                       key={url}
                       type="button"
+                      disabled={failedUrls.has(url)}
                       onClick={() => onOpenPhoto(start + i)}
                       className="group relative aspect-square rounded-md overflow-hidden bg-gray-100 ring-1 ring-gray-200 hover:ring-2 hover:ring-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
                       aria-label={`View ${group.label} photo ${i + 1}`}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element -- signed, short-lived evidence URLs */}
-                      <img
-                        src={url}
-                        alt={`${group.label} photo ${i + 1}`}
-                        loading="lazy"
-                        className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                      />
+                      {failedUrls.has(url) ? (
+                        <span className="block p-2 text-xs text-amber-900">
+                          Photo unavailable. Refresh photo links.
+                        </span>
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element -- signed, short-lived private evidence URLs
+                        <img
+                          src={url}
+                          alt={`${group.label} photo ${i + 1}`}
+                          loading="lazy"
+                          className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                          onError={() =>
+                            setFailedUrls((previous) =>
+                              new Set(previous).add(url),
+                            )
+                          }
+                        />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -125,7 +142,7 @@ function GalleryHeading({ count }: { count: number }) {
         />
       </svg>
       <h3 className="ml-3 text-lg font-semibold text-gray-800">
-        Photos{count > 0 ? ` (${count})` : ''}
+        Photos{count > 0 ? ` (${count})` : ""}
       </h3>
     </div>
   );
@@ -136,9 +153,9 @@ function GalleryHeading({ count }: { count: number }) {
  * Must walk the groups in the same order the gallery renders them.
  */
 export function flattenGalleryPhotos(
-  roomGroups: EvidenceRoomGroup[] | undefined
+  roomGroups: EvidenceRoomGroup[] | undefined,
 ): { url: string; label: string }[] {
   return (roomGroups ?? []).flatMap((group) =>
-    group.photos.map((url) => ({ url, label: group.label }))
+    group.photos.map((url) => ({ url, label: group.label })),
   );
 }

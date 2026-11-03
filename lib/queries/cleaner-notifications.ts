@@ -1,9 +1,23 @@
 import "server-only";
 
 import { db } from "@/db";
-import { cleaners, notifications, users } from "@/db/schemas";
+import { cleaners, notifications, swapRequests, users } from "@/db/schemas";
 import { getClaimableUrgentJobIds } from "@/lib/services/urgent-replacement.service";
-import { and, desc, eq, or } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
+import { cleanerNotificationUrl } from "@/lib/notifications/destination";
+import { recordNotificationAttempt } from "@/lib/services/notifications/notification-log";
 
 export type CleanerNotification = {
   id: string;
@@ -13,9 +27,12 @@ export type CleanerNotification = {
   isRead: boolean;
   createdAt: string;
   jobId: string | null;
+  url: string | null;
 };
 
-export async function getCleanerUserId(cleanerId: string): Promise<string | null> {
+export async function getCleanerUserId(
+  cleanerId: string,
+): Promise<string | null> {
   const cleaner = await db.query.cleaners.findFirst({
     where: eq(cleaners.id, cleanerId),
     columns: { userId: true },
@@ -25,45 +42,94 @@ export async function getCleanerUserId(cleanerId: string): Promise<string | null
 
 export async function getCleanerNotifications(
   cleanerId: string,
-  limit = 20
+  limit = 20,
 ): Promise<{ notifications: CleanerNotification[]; unreadCount: number }> {
   const userId = await getCleanerUserId(cleanerId);
   if (!userId) {
     return { notifications: [], unreadCount: 0 };
   }
 
-  const rows = await db.query.notifications.findMany({
-    where: eq(notifications.userId, userId),
-    orderBy: [desc(notifications.createdAt)],
-    limit,
+  const due = and(
+    eq(notifications.userId, userId),
+    or(
+      isNull(notifications.scheduledFor),
+      lte(notifications.scheduledFor, new Date()),
+    ),
+  );
+  const offers = await db.query.notifications.findMany({
+    where: and(
+      due,
+      inArray(notifications.type, ["swap_available", "swap_requested"]),
+    ),
+    columns: { jobId: true },
   });
-
-  const swapJobIds = rows
-    .filter((n) => n.type === "swap_available" && n.jobId)
-    .map((n) => n.jobId as string);
-
-  const claimableJobIds = await getClaimableUrgentJobIds(swapJobIds);
-
-  const visibleRows = rows.filter((n) => {
-    if (n.type === "swap_available" && n.jobId) {
-      return claimableJobIds.has(n.jobId);
-    }
-    return true;
-  });
-
-  const unreadCount = visibleRows.filter((n) => !n.isRead).length;
+  const offeredJobIds = [
+    ...new Set(offers.flatMap((n) => (n.jobId ? [n.jobId] : []))),
+  ];
+  const claimableJobIds = await getClaimableUrgentJobIds(offeredJobIds);
+  const pendingSwaps = offeredJobIds.length
+    ? await db.query.swapRequests.findMany({
+        where: and(
+          inArray(swapRequests.jobId, offeredJobIds),
+          eq(swapRequests.status, "pending"),
+          gt(swapRequests.expiresAt, new Date()),
+        ),
+        columns: { jobId: true, originalCleanerId: true },
+        with: { job: { columns: { status: true } } },
+      })
+    : [];
+  // These notices lead to the swap list, whose API rechecks current eligibility.
+  const pendingJobIds = pendingSwaps
+    .filter(
+      (s) => s.originalCleanerId !== cleanerId && s.job?.status === "assigned",
+    )
+    .map((s) => s.jobId);
+  const visible = and(
+    due,
+    or(
+      notInArray(notifications.type, ["swap_available", "swap_requested"]),
+      and(
+        eq(notifications.type, "swap_available"),
+        claimableJobIds.size
+          ? inArray(notifications.jobId, [...claimableJobIds])
+          : sql`false`,
+      ),
+      pendingJobIds.length
+        ? inArray(notifications.jobId, pendingJobIds)
+        : sql`false`,
+    ),
+  );
+  // Filter expired offers before pagination; DB queries must stay sequential.
+  const rows =
+    limit > 0
+      ? await db.query.notifications.findMany({
+          where: visible,
+          orderBy: [desc(notifications.createdAt)],
+          limit,
+        })
+      : [];
+  const [unread] = await db
+    .select({ total: count() })
+    .from(notifications)
+    .where(and(visible, eq(notifications.isRead, false)));
 
   return {
-    notifications: visibleRows.map((n) => ({
+    notifications: rows.map((n) => ({
       id: n.id,
-      type: n.type,
+      // Older normal offers used swap_available too. Never give those an urgent-accept action.
+      type:
+        n.type === "swap_available" &&
+        (!n.jobId || !claimableJobIds.has(n.jobId))
+          ? "swap_requested"
+          : n.type,
       title: n.title,
       message: n.message,
       isRead: n.isRead,
       createdAt: n.createdAt.toISOString(),
       jobId: n.jobId,
+      url: cleanerNotificationUrl(n),
     })),
-    unreadCount,
+    unreadCount: unread.total,
   };
 }
 
@@ -75,30 +141,26 @@ export async function markAllNotificationsRead(cleanerId: string) {
     .update(notifications)
     .set({ isRead: true })
     .where(
-      and(eq(notifications.userId, userId), eq(notifications.isRead, false))
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.isRead, false),
+        or(
+          isNull(notifications.scheduledFor),
+          lte(notifications.scheduledFor, new Date()),
+        ),
+      ),
     );
 }
 
 export async function getUnreadNotificationCount(
-  cleanerId: string
+  cleanerId: string,
 ): Promise<number> {
-  const userId = await getCleanerUserId(cleanerId);
-  if (!userId) return 0;
-
-  const rows = await db.query.notifications.findMany({
-    where: and(
-      eq(notifications.userId, userId),
-      eq(notifications.isRead, false)
-    ),
-    columns: { id: true },
-  });
-
-  return rows.length;
+  return (await getCleanerNotifications(cleanerId, 0)).unreadCount;
 }
 
 export async function notifyAdminsOfDispute(
   cleanerName: string,
-  disputeType: string
+  disputeType: string,
 ) {
   const admins = await db
     .select({ id: users.id })
@@ -113,8 +175,8 @@ export async function notifyAdminsOfDispute(
       type: "urgent_job" as const,
       title: "New cleaner dispute",
       message: `${cleanerName} submitted a ${disputeType.replace("_", " ")} dispute.`,
-      metadata: { source: "cleaner_dispute" },
-    }))
+      metadata: { source: "cleaner_dispute", url: "/admin/disputes" },
+    })),
   );
 }
 
@@ -133,13 +195,23 @@ export async function notifyAdminsOfRestockRequest(input: {
   quantity: number;
   urgency: string;
   jobId: string | null;
-}) {
+  propertyId?: string;
+  requestId?: string;
+}): Promise<number> {
   const admins = await db
     .select({ id: users.id })
     .from(users)
     .where(or(eq(users.role, "admin"), eq(users.role, "super_admin")));
 
-  if (admins.length === 0) return;
+  if (admins.length === 0) {
+    await recordNotificationAttempt({
+      channel: "in_app",
+      status: "skipped",
+      error: "no admin users exist",
+      meta: { trigger: "restock_request", jobId: input.jobId },
+    });
+    return 0;
+  }
 
   const urgencyPrefix = input.urgency === "urgent" ? "URGENT: " : "";
 
@@ -150,9 +222,29 @@ export async function notifyAdminsOfRestockRequest(input: {
       title: `${urgencyPrefix}Restock request`,
       message: `${input.cleanerName} requested ${input.quantity} × ${input.item} for ${input.propertyAddress}.`,
       jobId: input.jobId,
-      metadata: { source: "restock_request", urgency: input.urgency },
-    }))
+      metadata: {
+        source: "restock_request",
+        urgency: input.urgency,
+        propertyId: input.propertyId,
+        requestId: input.requestId,
+        url: input.propertyId
+          ? `/admin/restocking/${input.propertyId}${input.requestId ? `?requestId=${input.requestId}` : ""}`
+          : "/admin/restocking",
+      },
+    })),
   );
+  for (const admin of admins)
+    await recordNotificationAttempt({
+      channel: "in_app",
+      status: "sent",
+      meta: {
+        trigger: "restock_request",
+        userId: admin.id,
+        jobId: input.jobId,
+        recipient: admin.id,
+      },
+    });
+  return admins.length;
 }
 
 export async function notifyAdminsOfJobAlert(input: {
@@ -178,7 +270,8 @@ export async function notifyAdminsOfJobAlert(input: {
       metadata: {
         source: "job_reconciliation",
         outcome: input.outcome,
+        url: `/admin/job-oversight/${input.jobId}`,
       },
-    }))
+    })),
   );
 }

@@ -5,6 +5,7 @@ import { notifications, users } from "@/db/schemas";
 import { inArray } from "drizzle-orm";
 import { sendAdminAlertEmail } from "@/lib/services/email.service";
 import { recordNotificationAttempt } from "@/lib/services/notifications/notification-log";
+import { adminNotificationUrl } from "@/lib/notifications/destination";
 
 type AdminNotificationType =
   | "swap_requested"
@@ -45,6 +46,7 @@ export async function notifyAdmins(input: {
    */
   email?: boolean;
 }): Promise<number> {
+  const url = adminNotificationUrl({ ...input, metadata: { url: input.url } });
   try {
     const admins = await db.query.users.findMany({
       where: inArray(users.role, ["admin", "super_admin"]),
@@ -66,28 +68,42 @@ export async function notifyAdmins(input: {
       return 0;
     }
 
-    await db.insert(notifications).values(
-      admins.map((admin) => ({
-        userId: admin.id,
-        type: input.type,
-        title: input.title,
-        message: input.message,
-        jobId: input.jobId ?? null,
-        metadata: { source: "admin_alert", url: input.url ?? null },
-      }))
-    );
-
-    for (const admin of admins) {
-      await recordNotificationAttempt({
-        channel: "in_app",
-        status: "sent",
-        meta: {
-          trigger: input.type,
+    let insertedCount = 0;
+    try {
+      await db.insert(notifications).values(
+        admins.map((admin) => ({
           userId: admin.id,
+          type: input.type,
+          title: input.title,
+          message: input.message,
           jobId: input.jobId ?? null,
-          recipient: admin.id,
-        },
-      });
+          metadata: { source: "admin_alert", url },
+        }))
+      );
+      insertedCount = admins.length;
+
+      for (const admin of admins) {
+        await recordNotificationAttempt({
+          channel: "in_app",
+          status: "sent",
+          meta: {
+            trigger: input.type,
+            userId: admin.id,
+            jobId: input.jobId ?? null,
+            recipient: admin.id,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("[notifyAdmins] in-app write failed:", error);
+      for (const admin of admins) {
+        await recordNotificationAttempt({
+          channel: "in_app", status: "failed", error,
+          meta: { trigger: input.type, userId: admin.id, jobId: input.jobId, recipient: admin.id }
+        });
+      }
+      // Email remains available when the inbox channel fails.
+      if (!input.email) return 0;
     }
 
     if (input.email) {
@@ -102,7 +118,7 @@ export async function notifyAdmins(input: {
             name: admin.name ?? undefined,
             subject: input.title,
             message: input.message,
-            url: input.url ?? undefined,
+            url: url ?? undefined,
           });
         } catch (err) {
           console.error("[notifyAdmins] admin email failed:", err);
@@ -110,7 +126,7 @@ export async function notifyAdmins(input: {
       }
     }
 
-    return admins.length;
+    return insertedCount;
   } catch (error) {
     console.error("[notifyAdmins]", error);
     return 0;

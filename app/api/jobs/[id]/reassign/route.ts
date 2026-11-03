@@ -1,19 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { jobs, jobsToCleaners, swapRequests } from "@/db/schemas";
-import { recalculateJobRoles } from "@/lib/services/assignment/team-roles";
+import { recalculateJobRolesInTransaction } from "@/lib/services/assignment/team-roles";
 import {
   hasOpenUrgentSwap,
   dismissSwapAvailableNotifications,
 } from "@/lib/services/urgent-replacement.service";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { findScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
 import { appendJobNote } from "@/lib/jobs/job-notes";
-import { SERVICE_TYPE_LABELS, type ServiceType } from "@/lib/constants/service-type";
+import {
+  SERVICE_TYPE_LABELS,
+  getJobDisplay,
+  type ServiceType,
+} from "@/lib/constants/service-type";
 import { getSessionIdentity } from "@/lib/auth/server-roles";
 import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { PETS_CLEANER_NOTE } from "@/lib/constants/service-type";
+import { assignmentEligibility } from "@/lib/services/assignment/eligibility";
 
 /** Roles an admin may hand out by hand. */
 const ASSIGNABLE_ROLES = ["primary", "backup", "laundry_lead"] as const;
@@ -41,14 +46,19 @@ function isAssignableRole(value: unknown): value is AssignableRole {
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { isAdmin, userRole, error: authError } = await getAdminAuth(request);
+    const {
+      isAdmin,
+      userRole,
+      actorId,
+      error: authError,
+    } = await getAdminAuth(request);
     if (!isAdmin) {
       return NextResponse.json(
         { error: authError ?? "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -72,14 +82,14 @@ export async function POST(
     if (!cleanerId) {
       return NextResponse.json(
         { error: "Cleaner ID is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!isAssignableRole(role)) {
       return NextResponse.json(
         { error: `Role must be one of: ${ASSIGNABLE_ROLES.join(", ")}` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -89,8 +99,10 @@ export async function POST(
         id: true,
         checkInTime: true,
         expectedHours: true,
+        addonsSnapshot: true,
         notes: true,
         serviceType: true,
+        jobLabel: true,
       },
       with: {
         property: { columns: { address: true, petsAllowed: true } },
@@ -148,7 +160,7 @@ export async function POST(
               },
               overridable: true,
             },
-            { status: 409 }
+            { status: 409 },
           );
         }
 
@@ -161,7 +173,7 @@ export async function POST(
                 "Only a Super Admin can override the one-job-per-day rule.",
               code: "override_forbidden",
             },
-            { status: 403 }
+            { status: 403 },
           );
         }
 
@@ -172,7 +184,7 @@ export async function POST(
               error: "An override requires a reason.",
               code: "override_reason_required",
             },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
@@ -190,6 +202,20 @@ export async function POST(
     }
 
     const isUrgent = await hasOpenUrgentSwap(id);
+    // Backup is shadow coverage; working candidates share the policy used by swaps/urgent.
+    if (role !== "backup") {
+      const policy = await assignmentEligibility(cleanerId, id, {
+        replaceCleanerId,
+        role,
+        allowSameDay: !!overrideNote,
+        requireCompleteTeam: false,
+      });
+      if (!policy.eligible)
+        return NextResponse.json(
+          { error: "Cleaner cannot work this job", reasons: policy.reasons },
+          { status: 409 },
+        );
+    }
     // The $10 bonus is for genuinely last-minute cover, so it only rides along
     // when the job is inside the urgent window at the moment of assignment.
     const withinUrgentWindow = job.checkInTime
@@ -198,54 +224,85 @@ export async function POST(
     const urgentBonus = isUrgent && withinUrgentWindow;
     const now = new Date();
 
-    if (replaceCleanerId) {
-      await db
-        .delete(jobsToCleaners)
-        .where(
-          and(
-            eq(jobsToCleaners.jobId, id),
-            eq(jobsToCleaners.cleanerId, replaceCleanerId)
-          )
+    const working = await db.transaction(async (tx) => {
+      await tx
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(eq(jobs.id, id))
+        .for("update");
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_source','manual',true)`,
+      );
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_actor',${actorId ?? "admin"},true)`,
+      );
+      if (overrideNote)
+        await tx.execute(
+          sql`select set_config('cleannami.assignment_override',${overrideNote},true)`,
         );
-    } else {
-      await db
-        .delete(jobsToCleaners)
-        .where(and(eq(jobsToCleaners.jobId, id), eq(jobsToCleaners.role, role)));
-    }
+      if (overrideNote)
+        await tx.execute(
+          sql`select set_config('cleannami.same_day_override','approved',true)`,
+        );
 
-    // The cleaner may already be on the job in another role, and (job, cleaner)
-    // is the primary key — move them rather than failing the insert.
-    await db
-      .insert(jobsToCleaners)
-      .values({ jobId: id, cleanerId, role, urgentBonus })
-      .onConflictDoUpdate({
-        target: [jobsToCleaners.jobId, jobsToCleaners.cleanerId],
-        set: { role, urgentBonus, updatedAt: now },
+      if (replaceCleanerId) {
+        await tx
+          .delete(jobsToCleaners)
+          .where(
+            and(
+              eq(jobsToCleaners.jobId, id),
+              eq(jobsToCleaners.cleanerId, replaceCleanerId),
+            ),
+          );
+      } else if (
+        (job.addonsSnapshot?.teamSize ?? 1) <= 1 ||
+        !WORKING_ROLES.includes(role as (typeof WORKING_ROLES)[number])
+      ) {
+        await tx
+          .delete(jobsToCleaners)
+          .where(
+            and(eq(jobsToCleaners.jobId, id), eq(jobsToCleaners.role, role)),
+          );
+      }
+
+      // The cleaner may already be on the job in another role, and (job, cleaner)
+      // is the primary key — move them rather than failing the insert.
+      await tx
+        .insert(jobsToCleaners)
+        .values({ jobId: id, cleanerId, role, urgentBonus })
+        .onConflictDoUpdate({
+          target: [jobsToCleaners.jobId, jobsToCleaners.cleanerId],
+          set: { role, urgentBonus, updatedAt: now },
+        });
+
+      const working = await tx.query.jobsToCleaners.findMany({
+        where: and(
+          eq(jobsToCleaners.jobId, id),
+          inArray(jobsToCleaners.role, [...WORKING_ROLES]),
+        ),
+        columns: { cleanerId: true },
       });
+      if (working.length >= (job.addonsSnapshot?.teamSize ?? 1))
+        await recalculateJobRolesInTransaction(tx, id);
 
-    const working = await db.query.jobsToCleaners.findMany({
-      where: and(
-        eq(jobsToCleaners.jobId, id),
-        inArray(jobsToCleaners.role, [...WORKING_ROLES])
-      ),
-      columns: { cleanerId: true },
+      await tx
+        .update(jobs)
+        .set({
+          status:
+            working.length >= (job.addonsSnapshot?.teamSize ?? 1)
+              ? "assigned"
+              : "unassigned",
+          updatedAt: now,
+          // Appended, never assigned — `jobs.notes` is written by seeding, the
+          // crons, capture and reconciliation, none of which know about each
+          // other (see `appendJobNote`).
+          ...(overrideNote
+            ? { notes: appendJobNote(job.notes, overrideNote) }
+            : {}),
+        })
+        .where(eq(jobs.id, id));
+      return working;
     });
-
-    await db
-      .update(jobs)
-      .set({
-        status: working.length > 0 ? "assigned" : "unassigned",
-        updatedAt: now,
-        // Appended, never assigned — `jobs.notes` is written by seeding, the
-        // crons, capture and reconciliation, none of which know about each
-        // other (see `appendJobNote`).
-        ...(overrideNote
-          ? { notes: appendJobNote(job.notes, overrideNote) }
-          : {}),
-      })
-      .where(eq(jobs.id, id));
-
-    await recalculateJobRoles(id);
 
     // Filling the working seat settles any open replacement offer on this job.
     if (isUrgent && working.length > 0) {
@@ -257,7 +314,7 @@ export async function POST(
           updatedAt: now,
         })
         .where(
-          and(eq(swapRequests.jobId, id), eq(swapRequests.status, "urgent"))
+          and(eq(swapRequests.jobId, id), eq(swapRequests.status, "urgent")),
         );
 
       await dismissSwapAvailableNotifications(id);
@@ -290,10 +347,7 @@ export async function POST(
               timeZone: "America/New_York",
             })
           : "soon";
-        const kind =
-          job.serviceType === "residential_one_time"
-            ? SERVICE_TYPE_LABELS.residential_one_time
-            : SERVICE_TYPE_LABELS.vacation_rental_subscription;
+        const kind = getJobDisplay(job).label;
         const petLine = job.property?.petsAllowed
           ? ` ${PETS_CLEANER_NOTE}`
           : "";
@@ -324,7 +378,7 @@ export async function POST(
     console.error("Error reassigning cleaner:", error);
     return NextResponse.json(
       { error: "Failed to reassign cleaner" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

@@ -1,28 +1,24 @@
-import { listRestockRequests } from "@/lib/queries/restock-requests";
+import { redirect } from "next/navigation";
+import { getAdminAuth } from "@/lib/admin-auth";
 import { RestockingClientPage } from "@/components/dashbboard/admin/restocking/RestockingClientPage";
-
-export default async function AdminRestockingPage() {
-  const requests = await listRestockRequests();
-
+export default async function AdminRestockingPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  if (!(await getAdminAuth()).isAdmin) redirect("/sign-in");
+  if ((await params).slug !== "admin") redirect("/admin/restocking");
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-8">
-      <div className="border-b pb-6">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-          Restocking Requests
+    <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+          Restocking requests
         </h1>
         <p className="mt-2 text-sm text-gray-600">
-          Supply requests raised by cleaners from their jobs. These are free
-          operational requests — nothing here bills the customer.
+          Open a property to review its supply requests and source jobs.
         </p>
       </div>
-
-      <RestockingClientPage
-        requests={requests.map((request) => ({
-          ...request,
-          createdAt: request.createdAt.toISOString(),
-          resolvedAt: request.resolvedAt?.toISOString() ?? null,
-        }))}
-      />
+      <RestockingClientPage />
     </div>
   );
 }

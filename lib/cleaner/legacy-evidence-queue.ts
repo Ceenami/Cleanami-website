@@ -1,9 +1,13 @@
 export type LegacyPhoto = {
   uploadId: string; owner: string; jobId: string; roomKey: string;
   fileName: string; blob: Blob; sha256: string; receipt?: string;
+  selectedAt?: string;
+  reportRevision?: number;
+  reportState?: "pending" | "failed" | "discarded";
 };
 export type LegacyDraft = {
   owner: string; jobId: string; items: { id: string; completed: boolean }[]; notes: string;
+  explanations?: Record<string, string>;
 };
 async function action<T>(store: "photos" | "drafts", mode: IDBTransactionMode,
   run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {

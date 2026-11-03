@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { PriceSummary } from "./PriceSummary";
 import { PriceDetails } from "@/lib/validations/bookng-modal";
@@ -12,6 +13,7 @@ interface Props {
   title: string;
   showPriceSummary: boolean;
   priceDetails: PriceDetails | null;
+  compact?: boolean;
   isPriceRecalculating?: boolean;
   /** Passed straight through to `PriceSummary`; see its props for why. */
   priceSummaryTitle?: string;
@@ -26,18 +28,22 @@ export const ModalLayout = ({
   title,
   showPriceSummary,
   priceDetails,
+  compact = false,
   isPriceRecalculating = false,
   priceSummaryTitle,
   priceSummaryCustomQuoteMessage,
   priceSummaryTotalLabel,
 }: Props) => {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
   useEffect(() => {
     if (!isOpen) return;
 
     const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement as HTMLElement | null;
     document.body.style.overflow = "hidden";
     dialogRef.current?.focus();
 
@@ -45,14 +51,15 @@ export const ModalLayout = ({
       if (event.key === "Escape") onClose();
       if (event.key !== "Tab") return;
 
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      const candidates = dialogRef.current?.querySelectorAll<HTMLElement>(
         'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
       );
-      if (!focusable?.length) return;
+      const focusable = Array.from(candidates ?? []).filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
+      if (!focusable.length) return;
 
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current || document.activeElement === dialogRef.current)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -64,13 +71,20 @@ export const ModalLayout = ({
 
     return () => {
       document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    headingRef.current?.focus();
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [isOpen, title]);
 
-  return (
+  if (!isOpen || typeof document === "undefined") return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-gray-950/70 p-0 sm:items-center sm:p-4"
       onClick={onClose}
@@ -81,11 +95,11 @@ export const ModalLayout = ({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="flex max-h-[calc(100dvh-0.5rem)] w-full max-w-4xl flex-col rounded-t-2xl bg-white shadow-xl outline-none sm:max-h-[90dvh] sm:rounded-lg"
+        className={`flex max-h-[calc(100dvh-0.5rem)] w-full ${compact ? "max-w-2xl" : "max-w-4xl"} flex-col rounded-t-2xl bg-white text-left text-gray-900 shadow-xl outline-none sm:max-h-[90dvh] sm:rounded-lg`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b bg-white px-5 py-4 sm:p-5">
-          <h2 id={titleId} className="text-xl font-semibold text-gray-800">{title}</h2>
+          <h2 ref={headingRef} tabIndex={-1} id={titleId} className="text-xl font-semibold text-gray-800 outline-none">{title}</h2>
           <button
             onClick={onClose}
             className="inline-flex h-11 w-11 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
@@ -94,7 +108,7 @@ export const ModalLayout = ({
             <X className="h-6 w-6" />
           </button>
         </div>
-        <div className="min-h-0 flex-grow overflow-y-auto overscroll-contain">
+        <div ref={contentRef} className="min-h-0 flex-grow overflow-y-auto overscroll-contain">
           <div
             className={`grid ${
               showPriceSummary ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"
@@ -115,6 +129,7 @@ export const ModalLayout = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

@@ -44,6 +44,7 @@ export const Step2PropertyInfo = ({
     value ? String(value) : "";
 
   const ServiceAreaFeedback = () => {
+    if (!formData.address) return null;
     if (formData.isAddressInServiceArea === true) {
       return (
         <div className="mt-2 flex items-center text-sm text-green-600">

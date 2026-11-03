@@ -34,7 +34,7 @@ export async function recalculateJobStaffing(options?: {
         "completed_pending_evidence",
       ]),
       isNotNull(jobs.checkInTime),
-      gte(jobs.checkInTime, now)
+      gte(jobs.checkInTime, now),
     );
   }
 
@@ -61,6 +61,9 @@ export async function recalculateJobStaffing(options?: {
 
   for (const row of targetRows) {
     if (await getExecutionContract(row.id)) continue;
+    // Residential terms are issued once (including legacy prepaid terms).
+    // This rental recalculation path cannot rewrite residential history.
+    if (row.serviceType === "residential_one_time") continue;
     const property = row.property;
     if (!property) continue;
 

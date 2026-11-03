@@ -54,6 +54,7 @@ export type ExecutionForm = {
   }[];
   checklistFiles: { id: string; fileName: string; url: string }[];
   cleanerNotes: string;
+  explanations?: Record<string, string>;
   photos: {
     uploadId: string;
     roomKey: string;
@@ -122,24 +123,27 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
       preserveEdits &&
       form &&
       !data.isSubmitted &&
-      savedDraft !== JSON.stringify([form.checklistItems, form.cleanerNotes]);
+      savedDraft !== JSON.stringify([form.checklistItems, form.cleanerNotes, form.explanations]);
     setForm((current) =>
       keepEdits && current
         ? {
             ...data,
             checklistItems: current.checklistItems,
             cleanerNotes: current.cleanerNotes,
+            explanations: current.explanations,
             revision: current.revision,
           }
         : data,
     );
     if (!keepEdits)
-      setSavedDraft(JSON.stringify([data.checklistItems, data.cleanerNotes]));
+      setSavedDraft(JSON.stringify([data.checklistItems, data.cleanerNotes, data.explanations]));
     if (keepEdits && data.revision !== form.revision)
       setError(
         "Saved evidence changed in another session. Your edits are retained here. Reload the page to review the saved version before saving again.",
       );
-    setPhotos(await localPhotos(data.queueOwner, jobId));
+    const local = await localPhotos(data.queueOwner, jobId);
+    setPhotos(local);
+    void (async () => { for (const photo of local) await sendUploadReport(photo); })();
     return data;
   }
   useEffect(() => {
@@ -167,6 +171,28 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
     });
     return () => subscription.unsubscribe();
   }, []);
+  async function sendUploadReport(photo: LocalEvidencePhoto) {
+    if (!photo.selectedAt || !photo.reportRevision || !navigator.onLine) return;
+    try { await fetch(`/api/cleaner/jobs/${jobId}/evidence/upload-status`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ uploadId: photo.uploadId, roomKey: photo.roomKey, capturedAt: photo.selectedAt,
+        revision: photo.reportRevision, state: photo.reportState ?? "pending",
+        issue: photo.reportState === "failed" ? "upload_failed" : null }),
+    }); } catch { /* Retained metadata is retried on reload/reconnect. */ }
+  }
+  async function reportUpload(photo: LocalEvidencePhoto, state: "pending" | "failed" | "discarded") {
+    const latest = (await localPhotos(photo.owner, jobId)).find(p => p.uploadId === photo.uploadId) ?? photo;
+    const next = { ...latest, selectedAt: latest.selectedAt ?? latest.capturedAt ?? new Date().toISOString(),
+      reportRevision: (latest.reportRevision ?? 0) + 1, reportState: state };
+    await putLocalPhoto(next); await sendUploadReport(next);
+  }
+  useEffect(() => {
+    if (!form?.queueOwner || form.isSubmitted) return;
+    const replay = () => { void localPhotos(form.queueOwner, jobId).then(async rows => {
+      for (const photo of rows) await sendUploadReport(photo);
+    }).catch(() => {}); };
+    window.addEventListener("online", replay); return () => window.removeEventListener("online", replay);
+  }, [form?.queueOwner, form?.isSubmitted, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
   async function run(work: () => Promise<void>) {
     if (working.current) return;
     working.current = true;
@@ -230,7 +256,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         source: "camera",
         capturedAt,
         blob,
-        sha256: await photoHash(blob),
+        sha256: await photoHash(blob), selectedAt: new Date().toISOString(),
       };
       // If storage/quota fails, leave the camera open and explain; never claim a durable save.
       await putLocalPhoto(item);
@@ -247,7 +273,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         const blob = await normalizePhoto(file);
         await putLocalPhoto({
           uploadId: crypto.randomUUID(),
-          owner: form.queueOwner,
+          owner: form.queueOwner, selectedAt: new Date().toISOString(),
           jobId,
           roomKey,
           source: "gallery",
@@ -279,6 +305,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
     for (const photo of await localPhotos(form.queueOwner, jobId)) {
       try {
         setProgress((p) => ({ ...p, [photo.uploadId]: "Authorizing" }));
+        await reportUpload(photo, "pending").catch(() => {});
         const reservation = await executionJson<UploadReservation>(path, {
           operation: "reserve",
           uploadId: photo.uploadId,
@@ -312,6 +339,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         await deleteLocalPhoto(photo.uploadId);
         setProgress((p) => ({ ...p, [photo.uploadId]: "Saved to job" }));
       } catch (e) {
+        await reportUpload(photo, "failed").catch(() => {});
         setProgress((p) => ({
           ...p,
           [photo.uploadId]:
@@ -333,9 +361,10 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
       revision: form.revision,
       items: form.checklistItems,
       notes: form.cleanerNotes,
+      explanations: form.explanations,
     });
     setForm({ ...form, revision: saved.revision });
-    setSavedDraft(JSON.stringify([form.checklistItems, form.cleanerNotes]));
+    setSavedDraft(JSON.stringify([form.checklistItems, form.cleanerNotes, form.explanations]));
     setMessage(
       "Checklist and notes saved to job. Device photos need upload separately.",
     );
@@ -705,6 +734,16 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                               </label>
                             </div>
                           )}
+                          {!form.isSubmitted && serverPhotos.filter(p => p.state === "verified").length < r.minPhotos && (
+                            <label className="mt-4 block text-xs text-slate-600">
+                              Missing-photo explanation (saved progress; photo minimums still apply)
+                              <textarea maxLength={1000} disabled={busy}
+                                className="mt-1 block w-full rounded-lg border p-2"
+                                value={form.explanations?.[r.roomKey] ?? ""}
+                                onChange={e => setForm(current => current ? { ...current,
+                                  explanations: { ...current.explanations, [r.roomKey]: e.target.value } } : current)} />
+                            </label>
+                          )}
                           {(serverPhotos.length > 0 || queued.length > 0) && (
                             <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
                               {serverPhotos.map((p, index) => (
@@ -816,6 +855,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                                               : current,
                                           );
                                         }
+                                        await reportUpload(p, "discarded").catch(() => {});
                                         await deleteLocalPhoto(p.uploadId);
                                         setPhotos(
                                           await localPhotos(
@@ -1197,6 +1237,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                               revision: form.revision,
                               items: form.checklistItems,
                               notes: form.cleanerNotes,
+                              explanations: form.explanations,
                             });
                             await load();
                           })

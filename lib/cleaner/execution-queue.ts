@@ -7,6 +7,9 @@ export type LocalEvidencePhoto = {
   capturedAt: string | null;
   blob: Blob;
   sha256: string;
+  selectedAt?: string;
+  reportRevision?: number;
+  reportState?: "pending" | "failed" | "discarded";
 };
 const STORE = "photos";
 function open(): Promise<IDBDatabase> {

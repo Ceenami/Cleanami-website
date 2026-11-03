@@ -7,19 +7,20 @@ import { AlertTriangle, CalendarIcon, Clock } from "lucide-react";
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { RadioCard } from "../RadioCard";
 import { StepFeedback } from "../StepFeedback";
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
 import {
   ARRIVAL_WINDOWS,
-  getAvailableArrivalWindows,
+  getArrivalWindow,
+  type ArrivalWindowKey,
 } from "@/lib/scheduling/arrival-windows";
 import {
-  earliestBookableDate,
-  getBookableWindows,
+  earliestBookableDateFromKeys,
+  getBookableWindowsFromKeys,
   RESIDENTIAL_NOTICE_MESSAGE,
   RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
 
 interface Props {
+  arrivalWindowKeys: readonly ArrivalWindowKey[];
   formData: ResidentialFormData;
   setFormData: React.Dispatch<React.SetStateAction<ResidentialFormData>>;
   errors: Record<string, string[] | undefined>;
@@ -66,35 +67,32 @@ function fromDateKey(key: string | undefined): Date | undefined {
  * why a home whose clean runs long sees none and is told to call — selling a
  * slot nobody has declared themselves available for is the failure this avoids.
  */
-export const R3When = ({ formData, setFormData, errors }: Props) => {
-  const expectedHours = useMemo(() => {
-    if (!formData.bedrooms || !formData.bathrooms) return 0;
-    return calculateJobStaffing({
-      bedCount: formData.bedrooms,
-      bathCount: formData.bathrooms,
-      sqFt: formData.sqft ?? null,
-      laundryType: "none",
-      hotTubServiceLevel: false,
-      hotTubDeepClean: false,
-    }).expectedHoursPerCleaner;
-  }, [formData.bedrooms, formData.bathrooms, formData.sqft]);
-
+export const R3When = ({
+  formData,
+  setFormData,
+  errors,
+  arrivalWindowKeys,
+}: Props) => {
   const windowsThatFitTheDay = useMemo(
-    () => getAvailableArrivalWindows(expectedHours),
-    [expectedHours]
+    () =>
+      arrivalWindowKeys.flatMap((key) => {
+        const window = getArrivalWindow(key);
+        return window ? [window] : [];
+      }),
+    [arrivalWindowKeys],
   );
 
   const earliest = useMemo(
-    () => earliestBookableDate(expectedHours),
-    [expectedHours]
+    () => earliestBookableDateFromKeys(arrivalWindowKeys),
+    [arrivalWindowKeys],
   );
 
   const bookableToday = useMemo(
     () =>
       formData.cleanDate
-        ? getBookableWindows(formData.cleanDate, expectedHours)
+        ? getBookableWindowsFromKeys(formData.cleanDate, arrivalWindowKeys)
         : [],
-    [formData.cleanDate, expectedHours]
+    [formData.cleanDate, arrivalWindowKeys],
   );
 
   const selectedDate = fromDateKey(formData.cleanDate);
@@ -179,7 +177,7 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
               <span className="font-medium text-gray-800">
                 {new Date(`${formData.cleanDate}T12:00:00`).toLocaleDateString(
                   "en-US",
-                  { weekday: "long", month: "long", day: "numeric" }
+                  { weekday: "long", month: "long", day: "numeric" },
                 )}
               </span>
             </div>
@@ -217,8 +215,8 @@ export const R3When = ({ formData, setFormData, errors }: Props) => {
                 </div>
                 {bookableToday.length < ARRIVAL_WINDOWS.length && (
                   <p className="mt-3 text-xs text-gray-500">
-                    Only windows your clean can finish inside our 9:00 AM -
-                    4:00 PM working day are shown.
+                    Only windows your clean can finish inside our 9:00 AM - 4:00
+                    PM working day are shown.
                   </p>
                 )}
               </>

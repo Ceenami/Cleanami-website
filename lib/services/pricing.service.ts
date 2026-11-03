@@ -4,6 +4,7 @@ import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-moda
 import { resolveBasePrice } from "@/lib/pricing/base-price";
 import { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 import { laundryLoadsMissing } from "@/lib/validations/laundry-loads";
+import { classifyPropertySize } from "@/lib/pricing/staffing-logic";
 
 export { getSubscriptionDiscountRate } from "@/lib/pricing/subscription-discount";
 
@@ -167,7 +168,12 @@ export class PricingService {
     // by hand, exactly like an over-ceiling sq ft.
     const isOutOfMatrix = !pricingUnavailable && resolvedBasePrice === null;
 
-    const isCustomQuote = isOverSqftCeiling || isOutOfMatrix;
+    // A supported price-table cell can still have no supported staffing plan
+    // (for example 5 beds / 5 baths). Surface the same refusal in the quote UI
+    // as at checkout. Agreed overrides above retain their calculated price;
+    // automatic booking still requires a reviewed staffing plan.
+    const isCustomQuote = isOverSqftCeiling || isOutOfMatrix ||
+      classifyPropertySize(bedrooms, bathrooms, sqft) === "custom";
 
     // The pet fee sits INSIDE the subtotal, so a 3- or 6-month term discounts it
     // like every other line. Neither the scope nor the counterproposal says

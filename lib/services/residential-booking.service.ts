@@ -1,5 +1,6 @@
-import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import "server-only";
+import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
+import { verifySettledPayment } from "@/lib/services/payment/verify-settled-payment";
 
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
@@ -10,8 +11,12 @@ import {
 import Stripe from "stripe";
 
 import { getDbOrNull } from "@/db";
-import { customers, jobs, properties } from "@/db/schemas";
-import { isUniqueViolation } from "@/lib/db/errors";
+import {
+  customers,
+  jobs,
+  properties,
+  residentialCheckoutAttempts,
+} from "@/db/schemas";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { geocodeAddressResult } from "@/lib/services/google-maps/geocoding";
@@ -30,6 +35,7 @@ import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
 import { inviteCustomerToPortalAfterPayment } from "@/lib/services/auth/customer-account.service";
 import {
   residentialFormSchema,
+  residentialPaidRecoverySchema,
   type ResidentialFormData,
 } from "@/lib/validations/residential";
 import { normalizeResidentialFormData } from "@/lib/validations/residential/serialize";
@@ -49,6 +55,28 @@ import {
   RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
 import type { PriceDetails } from "@/lib/validations/bookng-modal";
+import {
+  evaluateResidentialPrice,
+  buildResidentialJobStaffing,
+  type ResidentialTerms,
+  residentialOperationalHours,
+} from "@/lib/pricing/residential";
+import {
+  evaluateResidentialSale,
+  evaluateResidentialCheckout,
+  activeResidentialSaleVersion,
+} from "@/lib/pricing/residential-sales";
+import { residentialPaymentIdentity } from "@/lib/pricing/residential-payment-identity";
+import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
+import { getJobDisplay } from "@/lib/constants/service-type";
+import {
+  prepareResidentialCheckout,
+  residentialCheckoutSlot,
+  getOrCreateResidentialCheckoutPayment,
+  verifyResidentialCheckoutAttempt,
+  ResidentialCheckoutReviewRequired,
+} from "./residential-checkout.service";
+import { residentialCustomerScope } from "@/lib/customer/residential-scope";
 
 /** Residential one-time booking and payment flow. */
 
@@ -75,6 +103,8 @@ export type ResidentialQuote = {
   /** Must finish before: window end + expected hours. Becomes jobs.check_out_time. */
   deadline: Date;
   amountCents: number;
+  /** Absent only when finalizing an already-paid pre-2C checkout. */
+  residentialTerms?: ResidentialTerms;
 };
 
 export type ResidentialRefusal = {
@@ -90,9 +120,24 @@ export type ResidentialRefusal = {
 /** Validate and price a booking without creating a payment or writing data. */
 export async function evaluateResidentialBooking(
   input: ResidentialFormData,
-  now: Date = new Date()
+  now: Date = new Date(),
+  allowPaidLegacy = false,
+  checkout?: { version: string; configHash?: string; executionPolicy?: import("@/lib/pricing/residential-v2/execution-policy").V2ExecutionPolicy },
 ): Promise<ResidentialQuote | ResidentialRefusal> {
-  const form = normalizeResidentialFormData(input);
+  const form = normalizeResidentialFormData(
+    input,
+    !allowPaidLegacy &&
+      (checkout?.version ?? activeResidentialSaleVersion()) ===
+        "residential-v2",
+  );
+  const evaluation = checkout
+    ? evaluateResidentialCheckout(form, checkout.version, checkout.configHash, checkout.executionPolicy)
+    : allowPaidLegacy
+      ? evaluateResidentialPrice(form)
+      : evaluateResidentialSale(form);
+  if (!allowPaidLegacy && !evaluation.ok) {
+    return { ok: false, reason: evaluation.reason, error: evaluation.error };
+  }
 
   // Check booking rules before schema validation so the UI gets a useful refusal.
   const hasSizing =
@@ -103,14 +148,16 @@ export async function evaluateResidentialBooking(
   const preWindow = getArrivalWindow(form.arrivalWindow);
 
   if (hasSizing && preWindow && form.cleanDate) {
-    const preHours = calculateJobStaffing({
-      bedCount: form.bedrooms!,
-      bathCount: form.bathrooms!,
-      sqFt: form.sqft ?? null,
-      laundryType: "none",
-      hotTubServiceLevel: false,
-      hotTubDeepClean: false,
-    }).expectedHoursPerCleaner;
+    const preHours = evaluation.ok
+      ? residentialOperationalHours(evaluation.terms)
+      : calculateJobStaffing({
+          bedCount: form.bedrooms!,
+          bathCount: form.bathrooms!,
+          sqFt: form.sqft ?? null,
+          laundryType: "none",
+          hotTubServiceLevel: false,
+          hotTubDeepClean: false,
+        }).expectedHoursPerCleaner;
 
     // Enforce window availability on the server.
     if (!windowFitsOperatingDay(preWindow, preHours)) {
@@ -122,7 +169,7 @@ export async function evaluateResidentialBooking(
     }
 
     // Notice is measured from the arrival window in Eastern time.
-    if (!meetsResidentialNotice(form.cleanDate, form.arrivalWindow, now)) {
+    if (!checkout && !allowPaidLegacy && !meetsResidentialNotice(form.cleanDate, form.arrivalWindow, now)) {
       return {
         ok: false,
         reason: "notice",
@@ -133,7 +180,11 @@ export async function evaluateResidentialBooking(
   }
 
   // Validate the submitted shape and schema refinements.
-  const parsed = residentialFormSchema.safeParse(form);
+  const parsed = (
+    allowPaidLegacy
+      ? residentialPaidRecoverySchema.partial({ cleaningLevel: true })
+      : checkout ? residentialPaidRecoverySchema : residentialFormSchema
+  ).safeParse(form);
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors as Record<
       string,
@@ -154,7 +205,9 @@ export async function evaluateResidentialBooking(
     hotTubServiceLevel: false,
     hotTubDeepClean: false,
   });
-  const expectedHours = staffing.expectedHoursPerCleaner;
+  const expectedHours = evaluation.ok
+    ? residentialOperationalHours(evaluation.terms)
+    : staffing.expectedHoursPerCleaner;
 
   const window = getArrivalWindow(data.arrivalWindow);
   if (!window) {
@@ -170,7 +223,7 @@ export async function evaluateResidentialBooking(
   const deadline = getDeadlineInstant(
     data.cleanDate,
     data.arrivalWindow,
-    expectedHours
+    expectedHours,
   );
   if (!arrival || !deadline) {
     console.error("[residential-booking] unusable clean date/window", {
@@ -193,19 +246,23 @@ export async function evaluateResidentialBooking(
     petsAllowed: data.petsAllowed,
   });
   // The shared pricing engine accepts the rental form shape.
-  const priceDetails = await pricingService.calculatePrice(
-    pricingInput as unknown as Parameters<
-      typeof pricingService.calculatePrice
-    >[0]
-  );
+  const priceDetails = evaluation.ok
+    ? evaluation.terms.priceDetails
+    : await pricingService.calculatePrice(
+        pricingInput as unknown as Parameters<
+          typeof pricingService.calculatePrice
+        >[0],
+      );
 
   // Keep quote refusal rules in one place.
-  const refusal = residentialQuoteRefusal(priceDetails, {
-    bedCount: data.bedrooms,
-    bathCount: data.bathrooms,
-    sqFt: data.sqft,
-    petsAllowed: data.petsAllowed,
-  });
+  const refusal = evaluation.ok
+    ? null
+    : residentialQuoteRefusal(priceDetails, {
+        bedCount: data.bedrooms,
+        bathCount: data.bathrooms,
+        sqFt: data.sqft,
+        petsAllowed: data.petsAllowed,
+      });
   if (refusal) {
     return { ok: false, reason: refusal.reason, error: refusal.message };
   }
@@ -229,13 +286,14 @@ export async function evaluateResidentialBooking(
     arrival,
     deadline,
     amountCents,
+    residentialTerms: evaluation.ok ? evaluation.terms : undefined,
   };
 }
 
 async function resolveStripeCustomer(
   stripe: Stripe,
   form: { name?: string; email?: string; phoneNumber?: string },
-  storedStripeCustomerId: string | null
+  storedStripeCustomerId: string | null,
 ): Promise<Stripe.Customer> {
   const profile = { name: form.name, phone: form.phoneNumber };
 
@@ -250,7 +308,7 @@ async function resolveStripeCustomer(
       console.warn(
         "[residential-booking] stored Stripe customer invalid, recovering:",
         storedStripeCustomerId,
-        error
+        error,
       );
     }
   }
@@ -297,9 +355,22 @@ export async function createResidentialPaymentIntent(input: {
   const quote = await evaluateResidentialBooking(input.formData, now);
   if (!quote.ok) return quote;
 
+  if (!input.sessionToken) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      error:
+        "Your booking session has expired. Refresh the page before starting payment.",
+    };
+  }
+
   const stripe = getStripe();
   if (!stripe) {
-    return { ok: false, reason: "unavailable", error: SERVICE_UNAVAILABLE.stripe };
+    return {
+      ok: false,
+      reason: "unavailable",
+      error: SERVICE_UNAVAILABLE.stripe,
+    };
   }
 
   const db = getDbOrNull();
@@ -321,7 +392,7 @@ export async function createResidentialPaymentIntent(input: {
       geocode.status === "ok" &&
       !isPointInServiceArea(
         geocode.coordinates.latitude,
-        geocode.coordinates.longitude
+        geocode.coordinates.longitude,
       )
     ) {
       return {
@@ -343,7 +414,7 @@ export async function createResidentialPaymentIntent(input: {
 
     if (geocode.status === "unavailable") {
       console.error(
-        `[residential-booking] service-area check skipped, geocoding unavailable (${geocode.reason}). Booking allowed WITHOUT service-area validation.`
+        `[residential-booking] service-area check skipped, geocoding unavailable (${geocode.reason}). Booking allowed WITHOUT service-area validation.`,
       );
     }
   }
@@ -362,23 +433,34 @@ export async function createResidentialPaymentIntent(input: {
   const stripeCustomer = await resolveStripeCustomer(
     stripe,
     form,
-    stripeCustomerId
+    stripeCustomerId,
   );
 
   // Resolve promotional pricing before payment.
   let chargeAmountCents = amountCents;
-  let appliedPromo:
-    | { promoCodeId: string; code: string; discountCents: number }
-    | null = null;
+  let appliedPromo: {
+    promoCodeId: string;
+    code: string;
+    discountCents: number;
+  } | null = null;
 
   const submittedPromoCode = form.promoCode?.trim() ?? "";
+  if (
+    submittedPromoCode &&
+    quote.residentialTerms?.ruleVersion === "residential-v2"
+  )
+    return {
+      ok: false,
+      reason: "validation",
+      error: "Promotions are unavailable for this residential pricing version.",
+    };
   if (submittedPromoCode) {
     let resolved;
     try {
       resolved = await resolvePromoCodeForAmount(
         submittedPromoCode,
         amountCents,
-        form.email ?? ""
+        form.email ?? "",
       );
     } catch (error) {
       console.error("[residential-booking] promo code lookup failed", error);
@@ -410,9 +492,33 @@ export async function createResidentialPaymentIntent(input: {
   }
 
   // Keep immutable booking details in Stripe metadata; never include access data.
+  const requestIdentity = residentialPaymentIdentity({
+    inputIdentity: quote.residentialTerms!.inputIdentity,
+    email: form.email!,
+    address: form.address!,
+    cleanDate: form.cleanDate!,
+    arrivalWindow: form.arrivalWindow!,
+    amountCents: chargeAmountCents,
+    promoCode: appliedPromo?.code ?? null,
+    promoDiscountCents: appliedPromo?.discountCents ?? 0,
+  });
   const metadata: Stripe.MetadataParam = {
     type: "residential_one_time",
     service_type: "residential_one_time",
+    cleaning_level: form.cleaningLevel!,
+    residential_rule_version: quote.residentialTerms!.ruleVersion,
+    ...(quote.residentialTerms!.ruleVersion === "residential-v2"
+      ? {
+          residential_config_hash: quote.residentialTerms!.configHash,
+          residential_config_revision: quote.residentialTerms!.configRevision,
+          residential_scope: JSON.stringify(quote.residentialTerms!.input),
+        }
+      : {}),
+    request_identity: requestIdentity,
+    service_label: getJobDisplay({
+      serviceType: "residential_one_time",
+      cleaningLevel: form.cleaningLevel,
+    }).label,
     customer_name: form.name ?? "N/A",
     customer_email: form.email ?? "N/A",
     property_address: form.address ?? "N/A",
@@ -429,22 +535,35 @@ export async function createResidentialPaymentIntent(input: {
 
   let paymentIntent: Stripe.PaymentIntent;
   try {
-    paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount: chargeAmountCents,
-        currency: "usd",
-        customer: stripeCustomer.id,
-        automatic_payment_methods: { enabled: true },
-        metadata,
-      },
-      // Use the onboarding session when available to make retries safe.
-      input.sessionToken
-        ? {
-            idempotencyKey: `res_${input.sessionToken}_${form.cleanDate}_${chargeAmountCents}`,
-          }
-        : undefined
-    );
+    const attempt =
+      quote.residentialTerms?.ruleVersion === "residential-v2"
+        ? await prepareResidentialCheckout({
+            slotKey: residentialCheckoutSlot("public", [input.sessionToken]),
+            requestIdentity,
+            terms: quote.residentialTerms,
+            amountChargedCents: chargeAmountCents,
+          })
+        : null;
+    const create = (idempotencyKey: string) =>
+      stripe.paymentIntents.create(
+        {
+          amount: chargeAmountCents,
+          currency: "usd",
+          customer: stripeCustomer.id,
+          automatic_payment_methods: { enabled: true },
+          metadata: {
+            ...metadata,
+            ...(attempt ? { residential_checkout_attempt: attempt.id } : {}),
+          },
+        },
+        { idempotencyKey },
+      );
+    paymentIntent = attempt
+      ? await getOrCreateResidentialCheckoutPayment(attempt, stripe, create)
+      : await create(`res_${input.sessionToken}_${requestIdentity}`);
   } catch (error) {
+    if (error instanceof ResidentialCheckoutReviewRequired)
+      return { ok: false, reason: "validation", error: error.message };
     console.error("[residential-booking] PaymentIntent create failed", error);
     // Stripe reports idempotency failures through rawType.
     const stripeError = error as { rawType?: string; type?: string } | null;
@@ -506,12 +625,12 @@ function formatUsd(cents: number): string {
 
 /** Return property coordinates when geocoding succeeds. */
 async function geocodeForProperty(
-  address: string
+  address: string,
 ): Promise<{ latitude: string; longitude: string } | null> {
   const result = await geocodeAddressResult(address);
   if (result.status !== "ok") {
     console.warn(
-      `[residential-booking] geocode unusable (${result.status}) for: ${address}`
+      `[residential-booking] geocode unusable (${result.status}) for: ${address}`,
     );
     return null;
   }
@@ -524,7 +643,7 @@ async function geocodeForProperty(
 /** Verify a paid booking and create its customer, property, and job. */
 export async function completeResidentialBooking(
   formData: ResidentialFormData,
-  paymentIntentId: string
+  paymentIntentId: string,
 ): Promise<CompleteResidentialResult> {
   // Refund only after the intent has been verified for this booking.
   let paymentVerified = false;
@@ -551,8 +670,15 @@ export async function completeResidentialBooking(
       };
     }
 
+    // A refunded succeeded intent must never create a replacement paid job.
+    // Refuse before enabling the automatic finalization-failure refund path.
+    try { await verifySettledPayment(stripe, paymentIntent); }
+    catch { return { success: false, error: "This payment needs review or has entered refund processing. Contact CleanNami before paying again." }; }
+
     const stripeCustomerId =
-      typeof paymentIntent.customer === "string" ? paymentIntent.customer : null;
+      typeof paymentIntent.customer === "string"
+        ? paymentIntent.customer
+        : null;
     if (!stripeCustomerId) {
       return {
         success: false,
@@ -562,7 +688,15 @@ export async function completeResidentialBooking(
     }
 
     // Match the submitted booking to immutable checkout metadata.
-    const submitted = normalizeResidentialFormData(formData);
+    const submitted = normalizeResidentialFormData(
+      formData,
+      paymentIntent.metadata?.residential_rule_version === "residential-v2",
+    );
+    const isPaidLegacy =
+      !paymentIntent.metadata?.residential_rule_version &&
+      !paymentIntent.metadata?.cleaning_level;
+    // Legacy intents retain original unlabelled terms regardless of a new form field.
+    if (isPaidLegacy) submitted.cleaningLevel = undefined;
     const expectedPropertyDetails = `${submitted.bedrooms} bed, ${submitted.bathrooms} bath, ${submitted.sqft ?? "N/A"} sqft`;
     if (
       paymentIntent.metadata?.type !== "residential_one_time" ||
@@ -574,7 +708,9 @@ export async function completeResidentialBooking(
       paymentIntent.metadata?.arrival_window !== submitted.arrivalWindow ||
       paymentIntent.metadata?.pets_allowed !==
         (submitted.petsAllowed ? "yes" : "no") ||
-      paymentIntent.metadata?.property_details !== expectedPropertyDetails
+      paymentIntent.metadata?.property_details !== expectedPropertyDetails ||
+      (!isPaidLegacy &&
+        paymentIntent.metadata?.cleaning_level !== submitted.cleaningLevel)
     ) {
       return {
         success: false,
@@ -593,11 +729,13 @@ export async function completeResidentialBooking(
     // Return an existing booking before evaluating current rules.
     const replayed = await db.query.jobs.findFirst({
       where: eq(jobs.paymentIntentId, paymentIntentId),
-      columns: { id: true, propertyId: true },
+      columns: { id: true, propertyId: true, status: true, paymentStatus: true },
       with: { property: { columns: { customerId: true } } },
     });
 
     if (replayed?.propertyId && replayed.property?.customerId) {
+      if (replayed.status === "canceled" || replayed.paymentStatus === "refunded")
+        return { success: false, error: "This payment belongs to a canceled or refunded booking. Contact CleanNami before booking again." };
       const invite = await inviteCustomerToPortalAfterPayment({
         email: submitted.email!,
         name: submitted.name ?? "",
@@ -614,17 +752,60 @@ export async function completeResidentialBooking(
       };
     }
 
-    // Re-check current booking rules before writing.
-    const quote = await evaluateResidentialBooking(formData);
+    // Recovery may cross the new-sale 48-hour cutoff, but it must not silently
+    // create a new job after its accepted arrival has already passed.
+    const acceptedArrival = getArrivalInstant(submitted.cleanDate!, submitted.arrivalWindow!);
+    if (!acceptedArrival || acceptedArrival.getTime() <= Date.now())
+      return { success: false, error: "Your paid booking needs manual recovery because its scheduled arrival has passed. Contact CleanNami before paying again." };
+
+    const pinnedCheckout =
+      paymentIntent.metadata.residential_rule_version === "residential-v2"
+        ? await verifyResidentialCheckoutAttempt(
+            paymentIntent.metadata.residential_checkout_attempt,
+            paymentIntent.id,
+            paymentIntent.metadata.request_identity,
+          )
+        : null;
+    // Recheck the pinned version, independently of active sales.
+    const quote = await evaluateResidentialBooking(
+      submitted,
+      new Date(),
+      isPaidLegacy,
+      isPaidLegacy
+        ? undefined
+        : {
+            version: paymentIntent.metadata.residential_rule_version,
+            configHash: paymentIntent.metadata.residential_config_hash,
+            executionPolicy: pinnedCheckout?.terms.executionPolicy,
+          },
+    );
     if (!quote.ok) throw new Error(quote.error);
 
     const { form, amountCents } = quote;
+    if (
+      quote.residentialTerms?.ruleVersion === "residential-v2" &&
+      paymentIntent.metadata.residential_scope !==
+        JSON.stringify(quote.residentialTerms.input)
+    )
+      throw new Error("Checkout scope differs from the accepted contract");
+    if (
+      pinnedCheckout &&
+      (pinnedCheckout.terms.inputIdentity !==
+        quote.residentialTerms?.inputIdentity ||
+        pinnedCheckout.terms.configHash !==
+          paymentIntent.metadata.residential_config_hash ||
+        pinnedCheckout.amountChargedCents !== paymentIntent.amount)
+    )
+      throw new Error("Pinned checkout economics differ from payment");
 
     const piEmail =
       typeof paymentIntent.metadata?.customer_email === "string"
         ? paymentIntent.metadata.customer_email
         : null;
-    if (!piEmail || piEmail.toLowerCase() !== (form.email ?? "").toLowerCase()) {
+    if (
+      !piEmail ||
+      piEmail.toLowerCase() !== (form.email ?? "").toLowerCase()
+    ) {
       return {
         success: false,
         error:
@@ -638,7 +819,8 @@ export async function completeResidentialBooking(
         : null;
     if (
       !piAddress ||
-      piAddress.trim().toLowerCase() !== (form.address ?? "").trim().toLowerCase()
+      piAddress.trim().toLowerCase() !==
+        (form.address ?? "").trim().toLowerCase()
     ) {
       return {
         success: false,
@@ -649,12 +831,15 @@ export async function completeResidentialBooking(
 
     // Compare the current server quote with the amount charged.
     const metadataDiscountCents = Number(
-      paymentIntent.metadata?.promo_discount_cents ?? 0
+      paymentIntent.metadata?.promo_discount_cents ?? 0,
     );
     const promoCodeId = paymentIntent.metadata?.promo_code_id || null;
     const promoCode = paymentIntent.metadata?.promo_code || null;
 
-    if (!Number.isFinite(metadataDiscountCents) || metadataDiscountCents < 0) {
+    if (
+      !Number.isSafeInteger(metadataDiscountCents) ||
+      metadataDiscountCents < 0
+    ) {
       return {
         success: false,
         error:
@@ -663,6 +848,27 @@ export async function completeResidentialBooking(
     }
 
     const expectedChargeCents = amountCents - metadataDiscountCents;
+    if (
+      !isPaidLegacy &&
+      (!quote.residentialTerms ||
+        paymentIntent.metadata.residential_rule_version !==
+          quote.residentialTerms.ruleVersion ||
+        paymentIntent.metadata.request_identity !==
+          residentialPaymentIdentity({
+            inputIdentity: quote.residentialTerms.inputIdentity,
+            email: form.email!,
+            address: form.address!,
+            cleanDate: form.cleanDate!,
+            arrivalWindow: form.arrivalWindow!,
+            amountCents: expectedChargeCents,
+            promoCode,
+            promoDiscountCents: metadataDiscountCents,
+          }))
+    ) {
+      throw new Error(
+        "Residential checkout terms changed. Please contact support.",
+      );
+    }
     if (paymentIntent.amount !== expectedChargeCents) {
       return {
         success: false,
@@ -676,25 +882,33 @@ export async function completeResidentialBooking(
     // Residential uses these existing fields for its arrival and finish times.
     const windowStartTime = minutesToTimeOfDay(quote.window.startMinutes);
     const mustFinishBeforeTime = minutesToTimeOfDay(
-      mustFinishBeforeMinutes(quote.window, quote.expectedHours)
+      mustFinishBeforeMinutes(quote.window, quote.expectedHours),
     );
 
     // Build staffing before opening the transaction.
-    const hotTubTimeAdditions = await loadHotTubTimeAdditions();
-    const staffing = buildJobStaffingUpdate({
-      property: {
-        bedCount: form.bedrooms!,
-        bathCount: String(form.bathrooms!),
-        sqFt: form.sqft ?? null,
-        laundryType: "none",
-        hotTubServiceLevel: false,
-        hotTubDrainCadence: null,
-        petsAllowed: form.petsAllowed ?? false,
-      },
-      checkInTime: quote.arrival,
-      subscriptionStart: quote.arrival,
-      hotTubTimeAdditions,
-    });
+    const hotTubTimeAdditions = quote.residentialTerms
+      ? null
+      : await loadHotTubTimeAdditions();
+    const staffing = quote.residentialTerms
+      ? buildResidentialJobStaffing(
+          quote.residentialTerms,
+          expectedChargeCents,
+          metadataDiscountCents,
+        )
+      : buildJobStaffingUpdate({
+          property: {
+            bedCount: form.bedrooms!,
+            bathCount: String(form.bathrooms!),
+            sqFt: form.sqft ?? null,
+            laundryType: "none",
+            hotTubServiceLevel: false,
+            hotTubDrainCadence: null,
+            petsAllowed: form.petsAllowed ?? false,
+          },
+          checkInTime: quote.arrival,
+          subscriptionStart: quote.arrival,
+          hotTubTimeAdditions,
+        });
 
     const addonsSnapshot = {
       ...staffing.addonsSnapshot,
@@ -709,9 +923,7 @@ export async function completeResidentialBooking(
       "parkingInstructions",
     ]) {
       if (forbidden in addonsSnapshot) {
-        throw new Error(
-          `addons_snapshot must never carry ${forbidden}`
-        );
+        throw new Error(`addons_snapshot must never carry ${forbidden}`);
       }
     }
 
@@ -789,7 +1001,21 @@ export async function completeResidentialBooking(
           status: "unassigned",
           expectedHours: staffing.expectedHours,
           addonsSnapshot,
+          checklistSnapshot: createChecklistSnapshot(
+            {
+              ...property,
+              useDefaultChecklist: true,
+              serviceType: "residential_one_time",
+              cleaningLevel: form.cleaningLevel,
+              residentialPricing:
+                "residentialPricing" in addonsSnapshot
+                  ? addonsSnapshot.residentialPricing
+                  : undefined,
+            },
+            [],
+          ),
           paymentIntentId,
+          residentialCheckoutAttemptId: pinnedCheckout?.id ?? null,
           paymentStatus: "captured",
           // Keep the promo reference with the paid job.
           promoCodeId,
@@ -797,6 +1023,11 @@ export async function completeResidentialBooking(
         }]);
 
       if (!job) throw new Error("jobs insert returned no rows");
+      if (pinnedCheckout)
+        await tx
+          .update(residentialCheckoutAttempts)
+          .set({ jobId: job.id })
+          .where(eq(residentialCheckoutAttempts.id, pinnedCheckout.id));
 
       return { customer, property, job };
     });
@@ -837,7 +1068,7 @@ export async function completeResidentialBooking(
       } catch (err) {
         console.error(
           "[residential-booking] promo redemption record failed; the booking stands:",
-          err
+          err,
         );
       }
     }
@@ -845,6 +1076,7 @@ export async function completeResidentialBooking(
     // Confirmation email is best-effort.
     try {
       await sendResidentialBookingConfirmationEmail({
+        purchasedScope: residentialCustomerScope(addonsSnapshot),
         to: form.email!,
         name: form.name,
         propertyAddress: form.address!,
@@ -854,6 +1086,7 @@ export async function completeResidentialBooking(
         petsAllowed: form.petsAllowed ?? false,
         petFeeApplied: quote.priceDetails.petFee > 0,
         entryMethod: form.entryMethod ?? null,
+        cleaningLevel: form.cleaningLevel,
       });
     } catch (err) {
       console.error("[residential-booking] confirmation email failed:", err);
@@ -876,18 +1109,20 @@ export async function completeResidentialBooking(
       {
         paymentIntentId,
         error: error instanceof Error ? error.message : String(error),
-      }
+      },
     );
 
     // A concurrent completion may have created the job first.
-    if (paymentVerified && verifiedDb && isUniqueViolation(error)) {
+    if (paymentVerified && verifiedDb) {
       try {
         const replayed = await verifiedDb.query.jobs.findFirst({
           where: eq(jobs.paymentIntentId, paymentIntentId),
-          columns: { id: true, propertyId: true },
+          columns: { id: true, propertyId: true, status: true, paymentStatus: true },
           with: { property: { columns: { customerId: true } } },
         });
         if (replayed?.propertyId && replayed.property?.customerId) {
+          if (replayed.status === "canceled" || replayed.paymentStatus === "refunded")
+            return { success: false, error: "This payment belongs to a canceled or refunded booking. Contact CleanNami before booking again." };
           return {
             success: true,
             data: {
@@ -902,18 +1137,32 @@ export async function completeResidentialBooking(
       } catch (replayLookupError) {
         console.error(
           "[residential-booking] could not read concurrent completion",
-          replayLookupError
+          replayLookupError,
         );
+        return {
+          success: false,
+          error:
+            "We could not verify whether your booking was saved. Contact CleanNami before making another payment.",
+        };
       }
     }
 
     // Refund a verified payment when finalization fails.
     if (paymentVerified) {
-      await voidCharge({
-        paymentIntentId,
-        paymentStatus: "captured",
-        context: "residential booking",
-      });
+      try {
+        await voidCharge({
+          paymentIntentId,
+          paymentStatus: "captured",
+          context: "residential booking",
+          strict: true,
+        });
+      } catch {
+        return {
+          success: false,
+          error:
+            "We could not save the booking or confirm the refund. Contact CleanNami before making another payment.",
+        };
+      }
       return {
         success: false,
         error:
@@ -924,9 +1173,7 @@ export async function completeResidentialBooking(
     return {
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to save your booking. Please contact support.",
+        "Could not verify this payment or save your booking. Please contact CleanNami before making another payment.",
     };
   }
 }

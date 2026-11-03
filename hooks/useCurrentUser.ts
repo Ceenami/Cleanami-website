@@ -1,6 +1,7 @@
-import { createClient } from '@/lib/supabase/client';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import React from 'react';
+import { createClient } from "@/lib/supabase/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import React from "react";
+import { trustedRoleFromClaims } from "@/lib/auth/roles";
 
 export function useCurrentUser() {
   const queryClient = useQueryClient();
@@ -11,10 +12,10 @@ export function useCurrentUser() {
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange((event) => {
-        if (event === 'SIGNED_OUT') {
-          queryClient.setQueryData(['user'], null);
-        } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          queryClient.invalidateQueries({ queryKey: ['user'] });
+        if (event === "SIGNED_OUT") {
+          queryClient.setQueryData(["user"], null);
+        } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+          queryClient.invalidateQueries({ queryKey: ["user"] });
         }
       });
 
@@ -23,27 +24,35 @@ export function useCurrentUser() {
 
     const unsubscribe = setupAuthListener();
     return () => {
-      unsubscribe.then(cleanup => cleanup?.());
+      unsubscribe.then((cleanup) => cleanup?.());
     };
   }, [queryClient]);
 
   return useQuery({
-    queryKey: ['user'],
+    queryKey: ["user"],
     queryFn: async () => {
       const supabase = await createClient();
-      const { data: { user }, error } = await supabase.auth.getUser();
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
       if (error) throw error;
-      
+
       if (!user) return null;
 
       const { data: userData } = await supabase
-        .from('users')
-        .select('*')
-        .eq('supabase_user_id', user.id)
+        .from("users")
+        .select("*")
+        .eq("supabase_user_id", user.id)
         .maybeSingle();
 
       return {
         ...user,
+        // Match server authority; user_metadata is editable by the account.
+        role:
+          typeof userData?.role === "string"
+            ? userData.role
+            : trustedRoleFromClaims({ app_metadata: user.app_metadata }),
         profile: userData ?? null,
       };
     },

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { SignupFormData, PriceDetails } from "@/lib/validations/bookng-modal";
+import { hasSavedBookingProgress } from "@/lib/validations/booking-session";
 import {
   reviveSignupFormDataFromJson,
   serializeSignupFormDataForServer,
@@ -19,6 +20,7 @@ interface SessionData {
 
 interface UseSessionPersistenceOptions {
   debounceMs?: number;
+  skipInitialLoad?: boolean;
   onSessionLoaded?: (data: {
     formData: Partial<SignupFormData>;
     currentStep: number;
@@ -41,7 +43,7 @@ interface UseSessionPersistenceReturn {
     formData: Partial<SignupFormData>,
     currentStep: number,
     priceDetails: PriceDetails | null
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   sessionId: string | null;
 }
 
@@ -54,6 +56,7 @@ async function apiSession(
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10000),
     });
     const json = (await res.json()) as Omit<SessionData, "formData"> & {
       formData?: Partial<SerializableSignupFormData>;
@@ -73,9 +76,9 @@ async function apiSession(
 export function useSessionPersistence(
   options: UseSessionPersistenceOptions = {}
 ): UseSessionPersistenceReturn {
-  const { debounceMs = 1000, onSessionLoaded } = options;
+  const { debounceMs = 1000, onSessionLoaded, skipInitialLoad = false } = options;
 
-  const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [isLoadingSession, setIsLoadingSession] = useState(!skipInitialLoad);
   const [hasExistingSession, setHasExistingSession] = useState(false);
   const [existingSessionData, setExistingSessionData] =
     useState<SessionData | null>(null);
@@ -91,18 +94,18 @@ export function useSessionPersistence(
 
   // Load or create session on mount
   useEffect(() => {
-    if (hasInitializedRef.current) return;
+    if (hasInitializedRef.current || skipInitialLoad) return;
     hasInitializedRef.current = true;
 
     async function init() {
       setIsLoadingSession(true);
       const loaded = await apiSession("GET");
 
-      if (loaded.success) {
+      if (loaded.success && hasSavedBookingProgress(loaded)) {
         setHasExistingSession(true);
         setExistingSessionData(loaded);
         setSessionId(loaded.sessionId ?? null);
-      } else {
+      } else if (!loaded.success) {
         const created = await apiSession("POST");
         if (created.success) {
           setSessionId(created.sessionId ?? null);
@@ -113,7 +116,7 @@ export function useSessionPersistence(
     }
 
     init();
-  }, []);
+  }, [skipInitialLoad]);
 
   const acceptExistingSession = useCallback(() => {
     if (existingSessionData?.success) {
@@ -142,11 +145,12 @@ export function useSessionPersistence(
       currentStep: number,
       priceDetails: PriceDetails | null
     ) => {
-      await apiSession("PATCH", {
+      const result = await apiSession("PATCH", {
         formData: serializeSignupFormDataForServer(formData as SignupFormData),
         currentStep,
         priceDetails,
       });
+      return result.success;
     },
     []
   );
@@ -176,7 +180,7 @@ export function useSessionPersistence(
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
-      await doSave(formData, currentStep, priceDetails);
+      return doSave(formData, currentStep, priceDetails);
     },
     [doSave]
   );

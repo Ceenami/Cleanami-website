@@ -110,14 +110,11 @@ export function normalizeSignupFormDataForPricing(
     // through JSON or a varchar column can arrive as the STRING "false", and
     // `Boolean("false")` is `true` — which would bill a $10 pet fee on every
     // clean of a property with no pets. `toBooleanish` reads the string.
-    //
-    // The sibling coercions below still use `Boolean(...)`. That is deliberate,
-    // not an oversight: they read from columns that are real `boolean`s today
-    // (verified against the live catalog), and changing their semantics could
-    // move an existing vacation-rental price, which invariant #2 forbids.
     petsAllowed: toBooleanish(data.petsAllowed),
-    hasHotTub: Boolean(data.hasHotTub),
-    hotTubService: Boolean(data.hotTubService),
-    hotTubDrain: Boolean(data.hotTubDrain),
+    // Form/session JSON can also contain string booleans. Real boolean values
+    // retain their meaning; the string "false" must never opt into a paid service.
+    hasHotTub: toBooleanish(data.hasHotTub),
+    hotTubService: toBooleanish(data.hotTubService),
+    hotTubDrain: toBooleanish(data.hotTubDrain),
   };
 }

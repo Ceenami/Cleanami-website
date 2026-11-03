@@ -41,6 +41,7 @@ type ExistingJob = {
   status: "unassigned" | "assigned" | "in-progress" | "completed" | "canceled" | null;
   expectedHours: string | null;
   addonsSnapshot: any;
+  rentalCharge?: unknown;
   paymentIntentId: string | null;
   paymentStatus:
     | "pending"
@@ -335,7 +336,11 @@ export class CancellationDetectionService {
         checkOutTime: job.checkOutTime!,
         status: job.status || 'unassigned',
         expectedHours: job.expectedHours,
-        addonsSnapshot: job.addonsSnapshot,
+        // Legacy calendar cancellation archives and deletes the active row.
+        // Keep its frozen billing receipt with the archived scope as well.
+        addonsSnapshot: job.rentalCharge
+          ? { ...job.addonsSnapshot, rentalCharge: job.rentalCharge }
+          : job.addonsSnapshot,
         paymentIntentId: job.paymentIntentId,
         paymentStatus: job.paymentStatus,
         paymentFailed: job.paymentFailed,

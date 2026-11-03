@@ -18,6 +18,9 @@ import { getExecutionContract } from "../job-execution-contract";
 import { ExecutionError } from "../job-execution";
 import { evaluateArrival } from "../gps/geofence";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
+import { readRentalCharge } from "@/lib/pricing/rental-charge";
+import { verifySettledPayment } from "./verify-settled-payment";
 import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { computeReserveRate } from "./reserve";
@@ -135,6 +138,24 @@ export async function settleExecutionJob(
         throw new ExecutionError(
           "Settlement is running; retry after five minutes",
         );
+      const assignments = await tx.query.jobsToCleaners.findMany({
+        where: eq(jobsToCleaners.jobId, jobId), with: { cleaner: true },
+      });
+      const working = assignments.filter(a => ["primary", "laundry_lead"].includes(a.role));
+      if (!working.length) throw new ExecutionError("Working assignments are missing; review before settlement");
+      const residential = readResidentialSnapshot(job.addonsSnapshot);
+      if (residential.kind === "v2" && working.length !== residential.terms.teamSize)
+        throw new ExecutionError("Residential working team requires review before payment");
+      const delay = evaluateArrival(new Date(contract.plannedStart), packet.gpsCheckInTimestamp!)!.delayMinutes;
+      // All worker terms must be executable before contacting the provider.
+      for (const a of working) computeCleanerPay({
+        residentialPricing: job.addonsSnapshot?.residentialPricing,
+        assignmentTerms: a.residentialPayTerms,
+        expectedHours: Number(job.expectedHours),
+        hourlyRateCents: a.frozenHourlyRateCents ?? a.cleaner.hourlyRateCents,
+        role: a.role, laundryLoads: job.addonsSnapshot?.laundryLoads,
+        urgentBonus: a.urgentBonus, arrivalDelayMinutes: delay,
+      });
       await tx.insert(jobOperationAudit).values({
         jobId,
         operation: "settlement_claim",
@@ -166,14 +187,12 @@ export async function settleExecutionJob(
         throw new ExecutionError(
           "Payment is not settled; retry after checking provider status",
         );
-      const charge =
-        typeof intent.latest_charge === "string"
-          ? await stripe.charges.retrieve(intent.latest_charge)
-          : intent.latest_charge;
-      if (!charge || charge.amount_refunded > 0)
-        throw new ExecutionError(
-          "Refunded or missing charge requires review before payout",
-        );
+      const residential = readResidentialSnapshot(context.job.addonsSnapshot);
+      const expected = residential.kind === "v1" || residential.kind === "v2"
+        ? Number(residential.terms.amountChargedCents)
+        : readRentalCharge(context.job.rentalCharge)?.chargeAmountCents;
+      try { await verifySettledPayment(stripe, intent, expected ?? intent.amount); }
+      catch { throw new ExecutionError("Payment amount, currency or refund state requires review before payout"); }
       total = intent.amount_received;
     } else if (
       !isSkippedPaymentIntent(intentId) &&
@@ -244,8 +263,10 @@ export async function settleExecutionJob(
       )!.delayMinutes;
       for (const a of paid) {
         const pay = computeCleanerPay({
+          residentialPricing: job.addonsSnapshot?.residentialPricing,
+          assignmentTerms: a.residentialPayTerms,
           expectedHours: Number(job.expectedHours),
-          hourlyRateCents: a.cleaner.hourlyRateCents,
+          hourlyRateCents: a.frozenHourlyRateCents ?? a.cleaner.hourlyRateCents,
           role: a.role,
           laundryLoads: job.addonsSnapshot?.laundryLoads,
           urgentBonus: a.urgentBonus,
@@ -257,6 +278,7 @@ export async function settleExecutionJob(
             jobId,
             cleanerId: a.cleanerId,
             amount: pay.total.toFixed(2),
+            payReceipt: pay.receipt ?? null,
             urgentBonusAmount: pay.urgentBonus
               ? pay.urgentBonus.toFixed(2)
               : null,

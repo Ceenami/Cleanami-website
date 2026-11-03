@@ -28,7 +28,7 @@ export function CustomerJobCancelButton({
 
   async function handleCancel() {
     const confirmed = window.confirm(
-      "Cancel this clean? If a cleaner is already assigned and it is less than 24 hours before check-in, you may still be charged and the cleaner will be paid."
+      "Cancel this clean? If a cleaner is already assigned and it is less than 24 hours before check-in, you may still be charged and the cleaner will be paid.",
     );
     if (!confirmed) return;
 
@@ -47,6 +47,9 @@ export function CustomerJobCancelButton({
       setMessage(data.message ?? "Clean canceled");
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
       await queryClient.invalidateQueries({ queryKey: ["jobs", "stats"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["customer-job-report", jobId],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Cancel failed");
     } finally {
@@ -64,8 +67,16 @@ export function CustomerJobCancelButton({
       >
         {loading ? "Canceling…" : "Cancel clean"}
       </button>
-      {message && <span className="max-w-xs text-right text-xs text-green-700">{message}</span>}
-      {error && <span className="max-w-xs text-right text-xs text-red-600">{error}</span>}
+      {message && (
+        <span className="max-w-xs text-right text-xs text-green-700">
+          {message}
+        </span>
+      )}
+      {error && (
+        <span className="max-w-xs text-right text-xs text-red-600">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

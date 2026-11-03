@@ -2,7 +2,10 @@
 import React, { useEffect, useState } from "react";
 import { Menu, X, Play, Loader2 } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { PRIVATE_ADMIN_NAV_ROUTES, PRIVATE_USER_NAV_ROUTES } from "@/lib/constants";
+import {
+  PRIVATE_ADMIN_NAV_ROUTES,
+  PRIVATE_USER_NAV_ROUTES,
+} from "@/lib/constants";
 import Link from "next/link";
 import { Route } from "next";
 import { usePathname } from "next/navigation";
@@ -36,7 +39,7 @@ const MD_BREAKPOINT = 768;
 export const Sidebar = () => {
   const { data: user } = useCurrentUser();
 
-  const pathname = usePathname()
+  const pathname = usePathname();
 
   const [isOpen, setIsOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -48,7 +51,8 @@ export const Sidebar = () => {
   // tapped hides the page that just loaded — which reads as "the tabs don't
   // work". Close it whenever the route changes at overlay widths.
   useEffect(() => {
-    const updateViewport = () => setIsDesktop(window.innerWidth >= MD_BREAKPOINT);
+    const updateViewport = () =>
+      setIsDesktop(window.innerWidth >= MD_BREAKPOINT);
     updateViewport();
     window.addEventListener("resize", updateViewport);
     return () => window.removeEventListener("resize", updateViewport);
@@ -69,11 +73,13 @@ export const Sidebar = () => {
     }
   };
 
-  const visibleNavItems = user?.user_metadata.role === 'admin' || user?.user_metadata.role === 'super_admin' ? PRIVATE_ADMIN_NAV_ROUTES : PRIVATE_USER_NAV_ROUTES;
+  const userRole = user?.role;
   const isAdmin =
-    user?.user_metadata?.role === "admin" ||
-    user?.user_metadata?.role === "super_admin";
-
+    !pathname.startsWith("/customer") &&
+    (userRole === "admin" || userRole === "super_admin");
+  const visibleNavItems = isAdmin
+    ? PRIVATE_ADMIN_NAV_ROUTES
+    : PRIVATE_USER_NAV_ROUTES;
 
   useEffect(() => {
     const html = document.documentElement;
@@ -84,97 +90,98 @@ export const Sidebar = () => {
     }
   }, [isOpen]);
 
-  const sidebarPositionClass = isOpen || isDesktop ? "translate-x-0" : "-translate-x-full";
+  const sidebarPositionClass =
+    isOpen || isDesktop ? "translate-x-0" : "-translate-x-full";
   const tabVisibilityClass = isOpen ? "hidden" : "block";
 
+  const [availabilityBypass, setAvailabilityBypass] = useState(false);
+  const [bypassLoading, setBypassLoading] = useState(true);
 
-const [availabilityBypass, setAvailabilityBypass] = useState(false)
-const [bypassLoading, setBypassLoading] = useState(true)
-
-useEffect(() => {
-  if (!isAdmin) {
-    setBypassLoading(false);
-    return;
-  }
-
-  const supabase = createClient()
-  
-  const fetchBypass = async () => {
-    const { data } = await (supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'availability_bypass')
-      .single()) as { data: { value: boolean } | null }
-    
-    setAvailabilityBypass(data?.value ?? false)
-    setBypassLoading(false)
-  }
-  
-  fetchBypass()
-  
-  const channel = supabase
-    .channel('app_settings_bypass')
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'app_settings',
-        filter: 'key=eq.availability_bypass'
-      },
-      (payload: any) => {
-        setAvailabilityBypass(payload.new?.value ?? false)
-      }
-    )
-    .subscribe()
-  
-  return () => {
-    supabase.removeChannel(channel)
-  }
-}, [isAdmin])
-
-const toggleAvailabilityBypass = async () => {
-  const supabase = createClient()
-  const newValue = !availabilityBypass
-  setAvailabilityBypass(newValue) 
-  
-  const { error } = await (supabase
-    .from('app_settings')
-    .update({ value: newValue, updated_at: new Date().toISOString() })
-    .eq('key', 'availability_bypass')) as { error: any }
-  
-  if (error) {
-    setAvailabilityBypass(!newValue) 
-    console.error('Failed to toggle bypass:', error)
-  }
-}
-
-// Assignment Engine State
-const [assignmentLoading, setAssignmentLoading] = useState(false)
-const [assignmentResult, setAssignmentResult] = useState<AssignmentResponse | null>(null)
-
-const triggerAssignmentEngine = async () => {
-  setAssignmentLoading(true)
-  setAssignmentResult(null)
-
-  try {
-    const response = await fetch("/api/trigger-assignments", {
-      method: "POST",
-    })
-
-    const data: AssignmentResponse = await response.json()
-    setAssignmentResult(data)
-
-    // Auto-clear success message after 5 seconds
-    if (data.success) {
-      setTimeout(() => setAssignmentResult(null), 5000)
+  useEffect(() => {
+    if (!isAdmin) {
+      setBypassLoading(false);
+      return;
     }
-  } catch {
-    setAssignmentResult({ success: false, error: "Network error" })
-  } finally {
-    setAssignmentLoading(false)
-  }
-}
+
+    const supabase = createClient();
+
+    const fetchBypass = async () => {
+      const { data } = (await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "availability_bypass")
+        .single()) as { data: { value: boolean } | null };
+
+      setAvailabilityBypass(data?.value ?? false);
+      setBypassLoading(false);
+    };
+
+    fetchBypass();
+
+    const channel = supabase
+      .channel("app_settings_bypass")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "app_settings",
+          filter: "key=eq.availability_bypass",
+        },
+        (payload: any) => {
+          setAvailabilityBypass(payload.new?.value ?? false);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isAdmin]);
+
+  const toggleAvailabilityBypass = async () => {
+    const supabase = createClient();
+    const newValue = !availabilityBypass;
+    setAvailabilityBypass(newValue);
+
+    const { error } = (await supabase
+      .from("app_settings")
+      .update({ value: newValue, updated_at: new Date().toISOString() })
+      .eq("key", "availability_bypass")) as { error: any };
+
+    if (error) {
+      setAvailabilityBypass(!newValue);
+      console.error("Failed to toggle bypass:", error);
+    }
+  };
+
+  // Assignment Engine State
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentResult, setAssignmentResult] =
+    useState<AssignmentResponse | null>(null);
+
+  const triggerAssignmentEngine = async () => {
+    setAssignmentLoading(true);
+    setAssignmentResult(null);
+
+    try {
+      const response = await fetch("/api/trigger-assignments", {
+        method: "POST",
+      });
+
+      const data: AssignmentResponse = await response.json();
+      setAssignmentResult(data);
+
+      // Auto-clear success message after 5 seconds
+      if (data.success) {
+        setTimeout(() => setAssignmentResult(null), 5000);
+      }
+    } catch {
+      setAssignmentResult({ success: false, error: "Network error" });
+    } finally {
+      setAssignmentLoading(false);
+    }
+  };
 
   return (
     <>
@@ -192,7 +199,7 @@ const triggerAssignmentEngine = async () => {
                 ADMIN
               </span>
             )}
-            {!isAdmin && user?.user_metadata?.role === "user" && (
+            {!isAdmin && user?.role === "user" && (
               <span className="block text-xs font-semibold text-gray-500 tracking-widest -mt-1">
                 OWNER
               </span>
@@ -229,80 +236,91 @@ const triggerAssignmentEngine = async () => {
             ))}
           </div>
 
-{isAdmin && (
-<div className="mt-4 p-4 bg-gray-50 rounded-lg">
-  <div className="flex items-center justify-between">
-    <div className="flex-1">
-      <p className="text-sm font-medium text-gray-700">Availability Bypass</p>
-      <p className="text-xs text-gray-500">Allow submissions anytime</p>
-    </div>
-    <button
-      onClick={toggleAvailabilityBypass}
-      disabled={bypassLoading}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-        availabilityBypass ? 'bg-teal-600' : 'bg-gray-300'
-      } ${bypassLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-          availabilityBypass ? 'translate-x-6' : 'translate-x-1'
-        }`}
-      />
-    </button>
-  </div>
-</div>
-)}
+          {isAdmin && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-700">
+                    Availability Bypass
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Allow submissions anytime
+                  </p>
+                </div>
+                <button
+                  onClick={toggleAvailabilityBypass}
+                  disabled={bypassLoading}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    availabilityBypass ? "bg-teal-600" : "bg-gray-300"
+                  } ${bypassLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      availabilityBypass ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
 
-{isAdmin && (
-<div className="mt-4 p-4 bg-gray-50 rounded-lg">
-  <div className="space-y-2">
-    <div className="flex-1">
-      <p className="text-sm font-medium text-gray-700">Assignment Engine</p>
-      <p className="text-xs text-gray-500">Assign cleaners to unassigned jobs</p>
-    </div>
-    <button
-      onClick={triggerAssignmentEngine}
-      disabled={assignmentLoading}
-      className={`flex items-center justify-center gap-2 w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-        assignmentLoading
-          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-          : 'bg-teal-600 text-white hover:bg-teal-700'
-      }`}
-    >
-      {assignmentLoading ? (
-        <>
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Running...
-        </>
-      ) : (
-        <>
-          <Play className="w-4 h-4" />
-          Run Now
-        </>
-      )}
-    </button>
-    
-    {/* Result feedback */}
-    {assignmentResult && (
-      <div className={`text-xs p-2 rounded ${
-        assignmentResult.success 
-          ? 'bg-green-50 text-green-700' 
-          : 'bg-red-50 text-red-700'
-      }`}>
-        {assignmentResult.error ? (
-          assignmentResult.error
-        ) : assignmentResult.message ? (
-          assignmentResult.message
-        ) : assignmentResult.summary ? (
-          <span>
-            {assignmentResult.summary.assigned} assigned, {assignmentResult.summary.skipped} skipped
-          </span>
-        ) : null}
-      </div>
-    )}
-  </div>
-</div>
-)}
+          {isAdmin && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+              <div className="space-y-2">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-700">
+                    Assignment Engine
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Assign cleaners to unassigned jobs
+                  </p>
+                </div>
+                <button
+                  onClick={triggerAssignmentEngine}
+                  disabled={assignmentLoading}
+                  className={`flex items-center justify-center gap-2 w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                    assignmentLoading
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-teal-600 text-white hover:bg-teal-700"
+                  }`}
+                >
+                  {assignmentLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Running...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4" />
+                      Run Now
+                    </>
+                  )}
+                </button>
+
+                {/* Result feedback */}
+                {assignmentResult && (
+                  <div
+                    className={`text-xs p-2 rounded ${
+                      assignmentResult.success
+                        ? "bg-green-50 text-green-700"
+                        : "bg-red-50 text-red-700"
+                    }`}
+                  >
+                    {assignmentResult.error ? (
+                      assignmentResult.error
+                    ) : assignmentResult.message ? (
+                      assignmentResult.message
+                    ) : assignmentResult.summary ? (
+                      <span>
+                        {assignmentResult.summary.assigned} assigned,{" "}
+                        {assignmentResult.summary.skipped} skipped
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </nav>
       </aside>
 

@@ -85,6 +85,8 @@ export const AddressAutocomplete = <T extends AddressFormShape>({
 
   const inputElement = (
     <input
+      id="address"
+      name="address"
       type="text"
       placeholder={
         isApiAvailable 

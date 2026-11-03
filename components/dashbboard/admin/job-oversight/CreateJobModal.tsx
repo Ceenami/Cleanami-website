@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Route } from "next";
+import { ResidentialLevelChoice } from "@/components/customers/cta-booking-button/residential/ResidentialLevelChoice";
+import type { ResidentialCleaningLevel } from "@/lib/pricing/residential";
+import type { ResidentialAddonSelection } from "@/components/customers/cta-booking-button/residential/ResidentialAddons";
 import {
   ARRIVAL_WINDOWS,
   type ArrivalWindowKey,
@@ -43,11 +46,27 @@ export function CreateJobModal({
   const [options, setOptions] = useState<PropertyOption[]>([]);
   const [propertyId, setPropertyId] = useState("");
   const [date, setDate] = useState("");
+  const [cleaningLevel, setCleaningLevel] = useState<
+    ResidentialCleaningLevel | undefined
+  >();
   const [arrivalWindow, setArrivalWindow] = useState<ArrivalWindowKey | "">("");
   const [jobLabel, setJobLabel] = useState<JobLabel | "">("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [addons, setAddons] = useState<ResidentialAddonSelection>({
+    hotTub: "none",
+    inUnitLaundryLoads: 0,
+  });
+  const [quote, setQuote] = useState<{
+    key: string;
+    ruleVersion?: "residential-v1" | "residential-v2";
+    inputIdentity?: string;
+    amountCents?: number;
+    refused?: boolean;
+    message?: string;
+    arrivalWindowKeys?: ArrivalWindowKey[];
+  }>();
 
   // There are more properties than a bare <select> can hold usably, so the
   // list is searched rather than enumerated.
@@ -75,9 +94,37 @@ export function CreateJobModal({
 
   const selected = useMemo(
     () => options.find((p) => p.id === propertyId) ?? null,
-    [options, propertyId]
+    [options, propertyId],
   );
   const isResidential = selected?.serviceType === "residential_one_time";
+  const quoteKey = JSON.stringify([propertyId, cleaningLevel, addons]);
+  useEffect(() => {
+    if (!open || !isResidential || !cleaningLevel) return;
+    let stale = false;
+    const key = quoteKey;
+    void fetch(`/api/admin/properties/${propertyId}/residential-quote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cleaningLevel, ...addons }),
+    })
+      .then((r) => r.json())
+      .then((q) => {
+        if (!stale)
+          setQuote((prev) => ({
+            key,
+            ...q,
+            ruleVersion: q.ruleVersion ?? prev?.ruleVersion,
+            refused: q.refused || !!q.error,
+          }));
+      })
+      .catch(() => {
+        if (!stale)
+          setQuote({ key, refused: true, message: "Quote unavailable" });
+      });
+    return () => {
+      stale = true;
+    };
+  }, [open, isResidential, cleaningLevel, propertyId, quoteKey, addons]);
 
   if (!open) return null;
 
@@ -93,6 +140,14 @@ export function CreateJobModal({
           propertyId,
           date,
           arrivalWindow: arrivalWindow || undefined,
+          cleaningLevel: isResidential ? cleaningLevel : undefined,
+          ...(isResidential
+            ? {
+                ...addons,
+                pricingVersion: quote?.ruleVersion,
+                quoteIdentity: quote?.inputIdentity,
+              }
+            : {}),
           jobLabel: jobLabel || undefined,
           notes: notes.trim() || undefined,
         }),
@@ -134,7 +189,10 @@ export function CreateJobModal({
 
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="cj-search">
+            <label
+              className="block text-sm font-medium text-gray-700"
+              htmlFor="cj-search"
+            >
               Property
             </label>
             <input
@@ -148,7 +206,13 @@ export function CreateJobModal({
             <select
               aria-label="Property"
               value={propertyId}
-              onChange={(e) => setPropertyId(e.target.value)}
+              onChange={(e) => {
+                setPropertyId(e.target.value);
+                setCleaningLevel(undefined);
+                setAddons({ hotTub: "none", inUnitLaundryLoads: 0 });
+                setQuote(undefined);
+                setArrivalWindow("");
+              }}
               required
               size={5}
               className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -176,7 +240,10 @@ export function CreateJobModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="cj-date">
+            <label
+              className="block text-sm font-medium text-gray-700"
+              htmlFor="cj-date"
+            >
               Date
             </label>
             <input
@@ -195,8 +262,19 @@ export function CreateJobModal({
           </div>
 
           {isResidential && (
+            <ResidentialLevelChoice
+              value={cleaningLevel}
+              pricingVersion={quote?.ruleVersion}
+              disabled={submitting}
+              onChange={setCleaningLevel}
+            />
+          )}
+          {isResidential && (
             <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="cj-window">
+              <label
+                className="block text-sm font-medium text-gray-700"
+                htmlFor="cj-window"
+              >
                 Arrival window
               </label>
               <select
@@ -209,7 +287,13 @@ export function CreateJobModal({
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               >
                 <option value="">Choose a window…</option>
-                {ARRIVAL_WINDOWS.map((w) => (
+                {ARRIVAL_WINDOWS.filter(
+                  (w) =>
+                    quote?.ruleVersion !== "residential-v2" ||
+                    (quote.key === quoteKey &&
+                      !quote.refused &&
+                      quote.arrivalWindowKeys?.includes(w.key)),
+                ).map((w) => (
                   <option key={w.key} value={w.key}>
                     {w.label}
                   </option>
@@ -219,7 +303,10 @@ export function CreateJobModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="cj-label">
+            <label
+              className="block text-sm font-medium text-gray-700"
+              htmlFor="cj-label"
+            >
               Label (optional)
             </label>
             <select
@@ -238,7 +325,10 @@ export function CreateJobModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="cj-notes">
+            <label
+              className="block text-sm font-medium text-gray-700"
+              htmlFor="cj-notes"
+            >
               Why (optional)
             </label>
             <textarea
@@ -254,6 +344,11 @@ export function CreateJobModal({
             </p>
           </div>
 
+          {isResidential && quote?.key === quoteKey && quote.refused && (
+            <p className="text-sm text-red-700">
+              {quote.message ?? "Scope unavailable"}
+            </p>
+          )}
           {error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
@@ -270,7 +365,16 @@ export function CreateJobModal({
             </button>
             <button
               type="submit"
-              disabled={submitting || !propertyId || !date}
+              disabled={
+                submitting ||
+                !propertyId ||
+                !date ||
+                (isResidential &&
+                  (!cleaningLevel ||
+                    !arrivalWindow ||
+                    quote?.key !== quoteKey ||
+                    quote.refused))
+              }
               className="min-h-11 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-300"
             >
               {submitting ? "Creating…" : "Create and assign"}

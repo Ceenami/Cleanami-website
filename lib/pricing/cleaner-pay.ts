@@ -1,4 +1,11 @@
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { hourlyPayCents } from "@/lib/pricing/hourly-pay-cents";
+import { computeResidentialV2Pay } from "./residential-v2/pay";
+import {
+  readResidentialSnapshot,
+  assignmentPayTermsSchema,
+  type ResidentialPayReceipt,
+} from "./residential-v2/contracts";
 
 /** Fallback hourly rate (cents) when a cleaner has no per-cleaner rate set. */
 export const DEFAULT_HOURLY_RATE_CENTS = Math.round(CLEANER_HOURLY_RATE * 100);
@@ -18,7 +25,7 @@ export const URGENT_BONUS = 10;
  */
 export function lateArrivalDeduction(
   basePay: number,
-  arrivalDelayMinutes: number | null | undefined
+  arrivalDelayMinutes: number | null | undefined,
 ): number {
   const delay = arrivalDelayMinutes ?? 0;
   if (delay >= 60) return basePay;
@@ -30,6 +37,10 @@ export function lateArrivalDeduction(
 }
 
 export type CleanerPayInput = {
+  /** Frozen job and person-specific contracts, never current property/rates. */
+  residentialPricing?: unknown;
+  assignmentTerms?: unknown;
+  settlement?: "completed" | "late_cancellation";
   expectedHours: number;
   hourlyRateCents: number | null | undefined;
   role: string;
@@ -39,6 +50,9 @@ export type CleanerPayInput = {
 };
 
 export type CleanerPayResult = {
+  minimumTopUp?: number;
+  leadPay?: number;
+  receipt?: ResidentialPayReceipt;
   /** The rate actually used (dollars/hour) — the cleaner's own, or the fallback. */
   hourlyRate: number;
   basePay: number;
@@ -50,11 +64,55 @@ export type CleanerPayResult = {
 
 /** Compute a single cleaner's payout for a job (dollars). */
 export function computeCleanerPay(input: CleanerPayInput): CleanerPayResult {
+  if (input.residentialPricing !== undefined) {
+    // Only an absent contract is legacy. Explicit null/corrupt versions must
+    // never silently select the old compensation formula.
+    const frozen = readResidentialSnapshot({
+      residentialPricing: input.residentialPricing,
+    });
+    const p = input.residentialPricing as {
+      ruleVersion?: unknown;
+      expectedHoursPerCleaner?: unknown;
+    };
+    if (p.ruleVersion === "residential-v2") {
+      if (frozen.kind !== "v2") throw new Error("V2 contract required");
+      if (!["primary", "laundry_lead"].includes(input.role))
+        return {
+          hourlyRate: 19,
+          basePay: 0,
+          laundryBonus: null,
+          urgentBonus: null,
+          lateDeduction: null,
+          total: 0,
+        };
+      const t = assignmentPayTermsSchema.parse(input.assignmentTerms);
+      if (
+        t.hotTub !== frozen.terms.input.hotTub ||
+        t.inUnitLaundryLoads !== frozen.terms.input.inUnitLaundryLoads ||
+        t.leadHours !== (t.addonLead ? frozen.model.leadPaidHours : 0)
+      )
+        throw new Error("Assignment scope differs from frozen job");
+      const pay = computeResidentialV2Pay({
+        ...input,
+        assignmentTerms: input.assignmentTerms,
+        executionPolicy: frozen.terms.executionPolicy,
+      });
+      if (
+        ["primary", "laundry_lead"].includes(input.role) &&
+        pay.receipt.baseHours !== p.expectedHoursPerCleaner
+      )
+        throw new Error("Assignment pay hours differ from frozen job");
+      return pay;
+    }
+    if (p.ruleVersion !== "residential-v1")
+      throw new Error("Unsupported residential pay version");
+  }
   const rateCents =
     input.hourlyRateCents && input.hourlyRateCents > 0
       ? input.hourlyRateCents
       : DEFAULT_HOURLY_RATE_CENTS;
-  const basePay = input.expectedHours * (rateCents / 100);
+  const basePayCents = hourlyPayCents(input.expectedHours, rateCents);
+  const basePay = basePayCents / 100;
 
   let laundryBonus: number | null = null;
   if (input.role === "laundry_lead" && input.laundryLoads) {
@@ -67,7 +125,9 @@ export function computeCleanerPay(input: CleanerPayInput): CleanerPayResult {
   const lateDeduction = deduction > 0 ? deduction : null;
 
   const total =
-    basePay - deduction + (laundryBonus ?? 0) + (urgentBonus ?? 0);
+    (basePayCents - Math.round(deduction * 100) +
+      Math.round((laundryBonus ?? 0) * 100) +
+      Math.round((urgentBonus ?? 0) * 100)) / 100;
 
   return {
     hourlyRate: rateCents / 100,

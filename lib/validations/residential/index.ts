@@ -11,7 +11,10 @@ import {
   meetsResidentialNotice,
   toEasternDateKey,
 } from "@/lib/scheduling/residential-notice";
-import { calculateJobStaffing } from "@/lib/pricing/staffing-logic";
+import {
+  evaluateResidentialPrice,
+  RESIDENTIAL_CLEANING_LEVELS,
+} from "@/lib/pricing/residential";
 
 /** Validation for the public residential booking flow. */
 
@@ -20,7 +23,7 @@ const CLEAN_DATE = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Please choose a valid clean date.");
 
-export const residentialFormSchema = z
+function buildResidentialFormSchema(enforceNotice: boolean) { return z
   .object({
     // Customer details
     name: z.string().min(2, "Name is required"),
@@ -29,11 +32,14 @@ export const residentialFormSchema = z
     phoneNumber: z.string().min(10, "A valid phone number is required"),
 
     // Home details
+    cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS, {
+      message: "Please choose Standard or Deep.",
+    }),
     address: z.string().min(5, "Address is required"),
     isAddressInServiceArea: z.boolean().refine((val) => val === true, {
       message: "The selected address must be within our service area.",
     }),
-    sqft: z.number().positive(),
+    sqft: z.number().int("Please enter whole square feet").positive(),
     bedrooms: z
       .number()
       .int("Please enter a whole number of bedrooms")
@@ -44,6 +50,9 @@ export const residentialFormSchema = z
       .min(1, "Must have at least 1 bathroom"),
     /** Whether pets are normally present. */
     petsAllowed: z.boolean().default(false),
+    pricingVersion: z.enum(["residential-v1", "residential-v2"]).optional(),
+    hotTub: z.enum(["none", "basic", "full"]).default("none"),
+    inUnitLaundryLoads: z.number().int().min(0).max(2).default(0),
 
     // Appointment
     cleanDate: CLEAN_DATE,
@@ -69,12 +78,12 @@ export const residentialFormSchema = z
       if (data.cleanDate === undefined || data.arrivalWindow === undefined) {
         return true;
       }
-      return meetsResidentialNotice(data.cleanDate, data.arrivalWindow);
+      return !enforceNotice || meetsResidentialNotice(data.cleanDate, data.arrivalWindow);
     },
     {
       message: RESIDENTIAL_NOTICE_MESSAGE,
       path: ["cleanDate"],
-    }
+    },
   )
   .refine(
     (data) => {
@@ -89,23 +98,39 @@ export const residentialFormSchema = z
       const window = getArrivalWindow(data.arrivalWindow);
       if (!window) return false;
 
-      const staffing = calculateJobStaffing({
-        bedCount: data.bedrooms,
-        bathCount: data.bathrooms,
-        sqFt: data.sqft ?? null,
-        laundryType: "none",
-        hotTubServiceLevel: false,
-        hotTubDeepClean: false,
-      });
-      return windowFitsOperatingDay(window, staffing.expectedHoursPerCleaner);
+      const evaluation = evaluateResidentialPrice(
+        data.pricingVersion === "residential-v2"
+          ? {
+              bedrooms: data.bedrooms,
+              bathrooms: data.bathrooms,
+              sqft: data.sqft,
+              cleaningLevel: data.cleaningLevel,
+              petsAllowed: data.petsAllowed,
+              hotTub: data.hotTub,
+              inUnitLaundryLoads: data.inUnitLaundryLoads,
+            }
+          : data,
+        data.pricingVersion,
+      );
+      // Input/custom-quote refusals are handled by the pricing evaluator.
+      return (
+        !evaluation.ok ||
+        windowFitsOperatingDay(window, evaluation.terms.expectedHoursPerCleaner)
+      );
     },
     {
       message: RESIDENTIAL_NO_WINDOW_MESSAGE,
       path: ["arrivalWindow"],
-    }
-  );
+    },
+  ); }
 
-export type ResidentialFormData = Partial<z.infer<typeof residentialFormSchema>>;
+export const residentialFormSchema = buildResidentialFormSchema(true);
+/** Trusted paid recovery only; new sales always retain the 48-hour gate. */
+export const residentialPaidRecoverySchema = buildResidentialFormSchema(false);
+
+export type ResidentialFormData = Partial<
+  z.infer<typeof residentialFormSchema>
+>;
 
 /** Today in Eastern, so the picker's floor is the ops timezone's day, not the browser's. */
 export function todayEastern(): string {

@@ -1,18 +1,21 @@
-import { notFound, redirect } from 'next/navigation';
-import { JobDetailsClient } from '@/components/dashbboard/admin/job-oversight/JobDetailPage';
-import { PrefetchedPage } from '@/components/PrefetchedPage';
-import { getJobDetails } from '@/lib/queries/jobs';
-import { getSessionRole } from '@/lib/auth/server-roles';
-import { customerOwnsJob, getCustomerAuth } from '@/lib/customer-auth';
+import { notFound, redirect } from "next/navigation";
+import { JobDetailsClient } from "@/components/dashbboard/admin/job-oversight/JobDetailPage";
+import { PrefetchedPage } from "@/components/PrefetchedPage";
+import { getJobDetails } from "@/lib/queries/jobs";
+import { getSessionRole } from "@/lib/auth/server-roles";
+import { customerOwnsJob, getCustomerAuth } from "@/lib/customer-auth";
+import { CustomerJobReport } from "@/components/customer/CustomerJobReport";
+import { loadCustomerJobReport } from "@/lib/services/customer-report";
 
 interface PageProps {
   params: Promise<{
     id: string;
+    slug: string;
   }>;
 }
 
 export default async function Page({ params }: PageProps) {
-  const { id } = await params;
+  const { id, slug } = await params;
 
   // This page is shared between the admin portal and the customer portal, and
   // it prefetches the FULL job on the server. Without the checks below a
@@ -24,20 +27,21 @@ export default async function Page({ params }: PageProps) {
   // The role is resolved from `users.role`, never from the URL prefix: a
   // customer who typed the admin slug must still be scoped as a customer.
   const userRole = await getSessionRole();
-  const isAdmin = userRole === 'admin' || userRole === 'super_admin';
-  const isCustomer = userRole === 'user';
+  const isAdmin = userRole === "admin" || userRole === "super_admin";
+  const isCustomer = userRole === "user";
 
   if (!isAdmin && !isCustomer) {
-    redirect('/sign-in');
+    redirect("/sign-in");
   }
 
-  if (!isAdmin) {
+  const customerView = isCustomer || slug === "customer";
+  if (customerView) {
     const { customerId, error } = await getCustomerAuth();
     if (!customerId) {
       redirect(
         `/?portalBlocked=1&message=${encodeURIComponent(
-          error ?? 'Portal unavailable'
-        )}`
+          error ?? "Portal unavailable",
+        )}`,
       );
     }
 
@@ -48,9 +52,20 @@ export default async function Page({ params }: PageProps) {
     }
   }
 
+  if (customerView) {
+    return (
+      <PrefetchedPage
+        queryKey={["customer-job-report", id]}
+        queryFn={() => loadCustomerJobReport(id)}
+      >
+        <CustomerJobReport jobId={id} />
+      </PrefetchedPage>
+    );
+  }
+
   return (
     <PrefetchedPage
-      queryKey={['job-details', id]}
+      queryKey={["job-details", id]}
       queryFn={() => getJobDetails(id)}
     >
       <JobDetailsClient
@@ -58,7 +73,7 @@ export default async function Page({ params }: PageProps) {
         isAdmin={isAdmin}
         // Resolved from `users.role` on the server; the route re-checks it
         // for real. This only decides whether the override affordance renders.
-        isSuperAdmin={userRole === 'super_admin'}
+        isSuperAdmin={userRole === "super_admin"}
       />
     </PrefetchedPage>
   );

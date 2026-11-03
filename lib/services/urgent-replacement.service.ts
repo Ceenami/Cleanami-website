@@ -14,10 +14,15 @@ import {
 import type { PropertyCleanerTier } from "@/db/schemas";
 import { isCleanerAssignmentEligible } from "@/lib/cleaner/eligibility";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
-import { recalculateJobRoles } from "@/lib/services/assignment/team-roles";
-import { getAllEligibleCleanersForJob, getAvailableCleanersForJob } from "@/lib/queries/cleaners-proximity";
+import { recalculateJobRolesInTransaction } from "@/lib/services/assignment/team-roles";
+import { assignmentEligibility } from "@/lib/services/assignment/eligibility";
+import {
+  getAllEligibleCleanersForJob,
+  getAvailableCleanersForJob,
+} from "@/lib/queries/cleaners-proximity";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { toEasternDateString } from "@/lib/time/eastern";
 
 const URGENT_NEARBY_NOTIFY_LIMIT = 5;
 const CALL_OUT_PENALTY = 15;
@@ -32,7 +37,7 @@ const URGENT_BONUS_WINDOW_HOURS = 24;
 
 function qualifiesForUrgentBonus(
   checkInTime: Date | null | undefined,
-  reference = new Date()
+  reference = new Date(),
 ): boolean {
   if (!checkInTime) return false;
   const msUntilJob = checkInTime.getTime() - reference.getTime();
@@ -51,7 +56,7 @@ export type UrgentReplacementResult =
     };
 
 function jobDateString(checkInTime: Date): string {
-  return checkInTime.toISOString().slice(0, 10);
+  return toEasternDateString(checkInTime);
 }
 
 async function notifyCleaner(
@@ -59,7 +64,7 @@ async function notifyCleaner(
   type: "urgent_job" | "swap_available",
   title: string,
   message: string,
-  jobId: string
+  jobId: string,
 ) {
   const userId = await getCleanerUserId(cleanerId);
   if (!userId) return;
@@ -87,7 +92,7 @@ async function recordCallOut(cleanerId: string, jobId: string) {
 async function getOnCallOpenPoolCleanerIds(
   checkInTime: Date,
   excludeCleanerIds: Set<string>,
-  expectedHours?: string | number | null
+  expectedHours?: string | number | null,
 ): Promise<string[]> {
   const date = jobDateString(checkInTime);
   const rows = await db.query.availability.findMany({
@@ -95,8 +100,8 @@ async function getOnCallOpenPoolCleanerIds(
       eq(availability.date, date),
       or(
         eq(availability.onCallEligible, true),
-        eq(availability.openPoolEligible, true)
-      )
+        eq(availability.openPoolEligible, true),
+      ),
     ),
     columns: { cleanerId: true },
   });
@@ -176,7 +181,7 @@ async function buildUrgentNotificationCleanerIds(
   jobId: string,
   checkInTime: Date,
   excludeCleanerIds: Set<string>,
-  expectedHours?: string | number | null
+  expectedHours?: string | number | null,
 ): Promise<string[]> {
   const notified = new Set<string>();
   const ordered: string[] = [];
@@ -213,7 +218,7 @@ async function buildUrgentNotificationCleanerIds(
   for (const cleanerId of await getOnCallOpenPoolCleanerIds(
     checkInTime,
     excludeCleanerIds,
-    expectedHours
+    expectedHours,
   )) {
     if (await conflicts(cleanerId)) continue;
     add(cleanerId);
@@ -227,12 +232,17 @@ async function buildUrgentNotificationCleanerIds(
     add(candidate.id);
   }
 
-  return ordered;
+  const eligibleIds: string[] = [];
+  for (const cleanerId of ordered) {
+    if ((await assignmentEligibility(cleanerId, jobId)).eligible)
+      eligibleIds.push(cleanerId);
+  }
+  return eligibleIds;
 }
 
 /** Job still has an open urgent swap, no primary, and status is unassigned. */
 export async function getClaimableUrgentJobIds(
-  jobIds: string[]
+  jobIds: string[],
 ): Promise<Set<string>> {
   if (jobIds.length === 0) return new Set();
 
@@ -240,13 +250,13 @@ export async function getClaimableUrgentJobIds(
 
   const jobRows = await db.query.jobs.findMany({
     where: inArray(jobs.id, unique),
-    columns: { id: true, status: true },
+    columns: { id: true, status: true, addonsSnapshot: true },
   });
 
   const openUrgent = await db.query.swapRequests.findMany({
     where: and(
       inArray(swapRequests.jobId, unique),
-      eq(swapRequests.status, "urgent")
+      eq(swapRequests.status, "urgent"),
     ),
     columns: { jobId: true },
   });
@@ -255,18 +265,20 @@ export async function getClaimableUrgentJobIds(
   const primaries = await db.query.jobsToCleaners.findMany({
     where: and(
       inArray(jobsToCleaners.jobId, unique),
-      eq(jobsToCleaners.role, "primary")
+      inArray(jobsToCleaners.role, ["primary", "laundry_lead"]),
     ),
     columns: { jobId: true },
   });
-  const filledJobIds = new Set(primaries.map((p) => p.jobId));
+  const workingCounts = new Map<string, number>();
+  for (const p of primaries)
+    workingCounts.set(p.jobId, (workingCounts.get(p.jobId) ?? 0) + 1);
 
   const claimable = new Set<string>();
   for (const job of jobRows) {
     if (
       job.status === "unassigned" &&
       urgentJobIds.has(job.id) &&
-      !filledJobIds.has(job.id)
+      (workingCounts.get(job.id) ?? 0) < (job.addonsSnapshot?.teamSize ?? 1)
     ) {
       claimable.add(job.id);
     }
@@ -288,14 +300,14 @@ export async function dismissSwapAvailableNotifications(jobId: string) {
     .where(
       and(
         eq(notifications.jobId, jobId),
-        eq(notifications.type, "swap_available")
-      )
+        eq(notifications.type, "swap_available"),
+      ),
     );
 }
 
 export async function canCleanerAcceptUrgentJob(
   cleanerId: string,
-  jobId: string
+  jobId: string,
 ): Promise<{ eligible: boolean; reason?: string }> {
   const cleaner = await db.query.cleaners.findFirst({
     where: eq(cleaners.id, cleanerId),
@@ -332,23 +344,26 @@ export async function canCleanerAcceptUrgentJob(
   const openUrgent = await db.query.swapRequests.findFirst({
     where: and(
       eq(swapRequests.jobId, jobId),
-      eq(swapRequests.status, "urgent")
+      eq(swapRequests.status, "urgent"),
     ),
   });
 
   if (!openUrgent) {
-    return { eligible: false, reason: "No urgent replacement is open for this job." };
+    return {
+      eligible: false,
+      reason: "No urgent replacement is open for this job.",
+    };
   }
 
-  const existingPrimary = await db.query.jobsToCleaners.findFirst({
+  const existingTeam = await db.query.jobsToCleaners.findMany({
     where: and(
       eq(jobsToCleaners.jobId, jobId),
-      eq(jobsToCleaners.role, "primary")
+      inArray(jobsToCleaners.role, ["primary", "laundry_lead"]),
     ),
     columns: { jobId: true },
   });
 
-  if (existingPrimary) {
+  if (existingTeam.length >= (job.addonsSnapshot?.teamSize ?? 1)) {
     return { eligible: false, reason: "This job has already been filled." };
   }
 
@@ -363,12 +378,19 @@ export async function canCleanerAcceptUrgentJob(
     return { eligible: false, reason: "You already have a job at this time." };
   }
 
-  // Any assignment-eligible cleaner may accept an open urgent job (admin-expanded pool).
-  return { eligible: true };
+  const policy = await assignmentEligibility(cleanerId, jobId);
+  return policy.eligible
+    ? { eligible: true }
+    : { eligible: false, reason: policy.reasons.join(", ") };
 }
 
 export async function triggerUrgentReplacement(
-  jobId: string
+  jobId: string,
+  options?: {
+    vacatedCleanerId?: string;
+    alreadyRemoved?: boolean;
+    recordPenalty?: boolean;
+  },
 ): Promise<UrgentReplacementResult> {
   const job = await db.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
@@ -384,17 +406,23 @@ export async function triggerUrgentReplacement(
     throw new Error("Job not found");
   }
 
-  if (job.status === "canceled" || job.status === "completed") {
-    throw new Error("Cannot trigger replacement on a completed or canceled job");
+  if (job.status !== "assigned" && job.status !== "unassigned") {
+    throw new Error(
+      "Cannot trigger replacement on a completed or canceled job",
+    );
   }
 
-  const primary = job.cleaners.find((a) => a.role === "primary");
-  if (!primary) {
+  const primary = job.cleaners.find(
+    (a) =>
+      ["primary", "laundry_lead"].includes(a.role) &&
+      (!options?.vacatedCleanerId || a.cleanerId === options.vacatedCleanerId),
+  );
+  if (!primary && !options?.alreadyRemoved) {
     throw new Error("No primary cleaner assigned to this job");
   }
 
-  const primaryCleanerId = primary.cleanerId;
-  const primaryName = primary.cleaner?.fullName ?? "Cleaner";
+  const primaryCleanerId = primary?.cleanerId ?? options!.vacatedCleanerId!;
+  const primaryName = primary?.cleaner?.fullName ?? "Cleaner";
   const backup = job.cleaners.find((a) => a.role === "backup");
   const now = new Date();
   const expiresAt =
@@ -405,81 +433,138 @@ export async function triggerUrgentReplacement(
   await db
     .update(swapRequests)
     .set({ status: "cancelled", updatedAt: now })
-    .where(and(eq(swapRequests.jobId, jobId), eq(swapRequests.status, "urgent")));
-
-  await recordCallOut(primaryCleanerId, jobId);
-
-  await db
-    .delete(jobsToCleaners)
     .where(
-      and(
-        eq(jobsToCleaners.jobId, jobId),
-        eq(jobsToCleaners.cleanerId, primaryCleanerId),
-        eq(jobsToCleaners.role, "primary")
-      )
+      and(eq(swapRequests.jobId, jobId), eq(swapRequests.status, "urgent")),
     );
 
-  if (backup) {
+  if (options?.recordPenalty !== false)
+    await recordCallOut(primaryCleanerId, jobId);
+
+  // A vacancy is unassigned before removing its worker. A failed promotion
+  // therefore remains visibly uncovered instead of claiming a partial team.
+  await db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ status: jobs.status })
+      .from(jobs)
+      .where(eq(jobs.id, jobId))
+      .for("update");
+    if (current?.status !== "assigned" && current?.status !== "unassigned")
+      throw new Error("Job is no longer replaceable");
+    await tx
+      .update(jobs)
+      .set({ status: "unassigned", updatedAt: now })
+      .where(eq(jobs.id, jobId));
+    await tx
+      .delete(jobsToCleaners)
+      .where(
+        and(
+          eq(jobsToCleaners.jobId, jobId),
+          eq(jobsToCleaners.cleanerId, primaryCleanerId),
+          inArray(jobsToCleaners.role, ["primary", "laundry_lead"]),
+        ),
+      );
+  });
+
+  if (
+    backup &&
+    (await assignmentEligibility(backup.cleanerId, jobId)).eligible
+  ) {
     const backupName = backup.cleaner?.fullName ?? "Backup cleaner";
     const address = job.property?.address ?? "the property";
     const urgentBonus = qualifiesForUrgentBonus(job.checkInTime, now);
 
-    await db
-      .update(jobsToCleaners)
-      .set({
-        role: "primary",
-        urgentBonus,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(jobsToCleaners.jobId, jobId),
-          eq(jobsToCleaners.cleanerId, backup.cleanerId)
-        )
+    try {
+      await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ id: jobs.id, status: jobs.status })
+          .from(jobs)
+          .where(eq(jobs.id, jobId))
+          .for("update");
+        if (current?.status !== "unassigned")
+          throw new Error("Replacement already filled");
+        await tx.execute(
+          sql`select set_config('cleannami.assignment_source','backup_promotion',true)`,
+        );
+        await tx.execute(
+          sql`select set_config('cleannami.assignment_actor','urgent-replacement-service',true)`,
+        );
+        await tx
+          .update(jobsToCleaners)
+          .set({
+            role: "primary",
+            urgentBonus,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(jobsToCleaners.jobId, jobId),
+              eq(jobsToCleaners.cleanerId, backup.cleanerId),
+            ),
+          );
+
+        await recalculateJobRolesInTransaction(tx, jobId);
+        await tx
+          .update(jobs)
+          .set({ status: "assigned", updatedAt: now })
+          .where(eq(jobs.id, jobId));
+
+        await tx.insert(swapRequests).values({
+          jobId,
+          originalCleanerId: primaryCleanerId,
+          replacementCleanerId: backup.cleanerId,
+          status: "accepted",
+          expiresAt,
+        });
+      });
+
+      try {
+        await notifyCleaner(
+          backup.cleanerId,
+          "urgent_job",
+          "You are now primary",
+          `You have been promoted to primary for ${address}${
+            urgentBonus ? " with a $10 urgent bonus" : ""
+          }. ${primaryName} was removed.`,
+          jobId,
+        );
+      } catch (error) {
+        console.error("[backup promotion notification]", error);
+      }
+
+      return {
+        outcome: "backup_promoted",
+        replacementCleanerId: backup.cleanerId,
+        replacementCleanerName: backupName,
+      };
+    } catch (error) {
+      console.warn(
+        "[urgent replacement] backup could not cover; opening pool",
+        error instanceof Error ? error.message : "guard rejected",
       );
-
-    await db
-      .update(jobs)
-      .set({ status: "assigned", updatedAt: now })
-      .where(eq(jobs.id, jobId));
-
-    await db.insert(swapRequests).values({
-      jobId,
-      originalCleanerId: primaryCleanerId,
-      replacementCleanerId: backup.cleanerId,
-      status: "accepted",
-      expiresAt,
-    });
-
-    await recalculateJobRoles(jobId);
-
-    await notifyCleaner(
-      backup.cleanerId,
-      "urgent_job",
-      "You are now primary",
-      `You have been promoted to primary for ${address}${
-        urgentBonus ? " with a $10 urgent bonus" : ""
-      }. ${primaryName} was removed.`,
-      jobId
-    );
-
-    return {
-      outcome: "backup_promoted",
-      replacementCleanerId: backup.cleanerId,
-      replacementCleanerName: backupName,
-    };
+    }
   }
 
-  await db
-    .update(jobs)
-    .set({ status: "unassigned", updatedAt: now })
-    .where(eq(jobs.id, jobId));
-
-  await db.insert(swapRequests).values({
-    jobId,
-    originalCleanerId: primaryCleanerId,
-    status: "urgent",
-    expiresAt,
+  await db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ id: jobs.id, status: jobs.status })
+      .from(jobs)
+      .where(eq(jobs.id, jobId))
+      .for("update");
+    if (current?.status !== "unassigned")
+      throw new Error("Replacement already filled; reload job");
+    const existing = await tx.query.swapRequests.findFirst({
+      where: and(
+        eq(swapRequests.jobId, jobId),
+        eq(swapRequests.status, "urgent"),
+      ),
+    });
+    if (!existing)
+      await tx.insert(swapRequests).values({
+        jobId,
+        originalCleanerId: primaryCleanerId,
+        status: "urgent",
+        expiresAt,
+      });
   });
 
   const address = job.property?.address ?? "a nearby property";
@@ -488,20 +573,24 @@ export async function triggerUrgentReplacement(
     jobId,
     job.checkInTime!,
     excludeIds,
-    job.expectedHours
+    job.expectedHours,
   );
   const bonusApplies = qualifiesForUrgentBonus(job.checkInTime, now);
 
   for (const cleanerId of toNotify) {
-    await notifyCleaner(
-      cleanerId,
-      "swap_available",
-      "Job available to claim",
-      `Tap Accept to claim a clean at ${address}.${
-        bonusApplies ? " Includes a $10 urgent bonus." : ""
-      } First to accept gets the job.`,
-      jobId
-    );
+    try {
+      await notifyCleaner(
+        cleanerId,
+        "swap_available",
+        "Job available to claim",
+        `Tap Accept to claim a clean at ${address}.${
+          bonusApplies ? " Includes a $10 urgent bonus." : ""
+        } First to accept gets the job.`,
+        jobId,
+      );
+    } catch (error) {
+      console.error("[urgent offer notification]", error);
+    }
   }
 
   return {
@@ -518,7 +607,7 @@ export type UrgentJobOffer = {
 };
 
 export async function getUrgentJobOffers(
-  cleanerId: string
+  cleanerId: string,
 ): Promise<UrgentJobOffer[]> {
   const cleaner = await db.query.cleaners.findFirst({
     where: eq(cleaners.id, cleanerId),
@@ -567,7 +656,7 @@ export async function getUrgentJobOffers(
 
 export async function acceptUrgentJob(
   cleanerId: string,
-  jobId: string
+  jobId: string,
 ): Promise<
   { success: true; urgentBonus: boolean } | { success: false; message: string }
 > {
@@ -580,10 +669,22 @@ export async function acceptUrgentJob(
 
   try {
     await db.transaction(async (tx) => {
-      const job = await tx.query.jobs.findFirst({
-        where: eq(jobs.id, jobId),
-        columns: { id: true, status: true, checkInTime: true },
-      });
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_source','urgent_claim',true)`,
+      );
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_actor',${cleanerId},true)`,
+      );
+      const [job] = await tx
+        .select({
+          id: jobs.id,
+          status: jobs.status,
+          checkInTime: jobs.checkInTime,
+          addonsSnapshot: jobs.addonsSnapshot,
+        })
+        .from(jobs)
+        .where(eq(jobs.id, jobId))
+        .for("update");
 
       if (!job || job.status !== "unassigned") {
         throw new Error("JOB_FILLED");
@@ -592,7 +693,7 @@ export async function acceptUrgentJob(
       const openUrgent = await tx.query.swapRequests.findFirst({
         where: and(
           eq(swapRequests.jobId, jobId),
-          eq(swapRequests.status, "urgent")
+          eq(swapRequests.status, "urgent"),
         ),
       });
 
@@ -600,14 +701,14 @@ export async function acceptUrgentJob(
         throw new Error("NO_URGENT_REQUEST");
       }
 
-      const existingPrimary = await tx.query.jobsToCleaners.findFirst({
+      const existingTeam = await tx.query.jobsToCleaners.findMany({
         where: and(
           eq(jobsToCleaners.jobId, jobId),
-          eq(jobsToCleaners.role, "primary")
+          inArray(jobsToCleaners.role, ["primary", "laundry_lead"]),
         ),
       });
 
-      if (existingPrimary) {
+      if (existingTeam.length >= (job.addonsSnapshot?.teamSize ?? 1)) {
         throw new Error("JOB_FILLED");
       }
 
@@ -620,6 +721,7 @@ export async function acceptUrgentJob(
         role: "primary",
         urgentBonus,
       });
+      await recalculateJobRolesInTransaction(tx, jobId);
 
       await tx
         .update(jobs)
@@ -636,23 +738,25 @@ export async function acceptUrgentJob(
         .where(eq(swapRequests.id, openUrgent.id));
     });
 
-    await dismissSwapAvailableNotifications(jobId);
-    await recalculateJobRoles(jobId);
+    try {
+      await dismissSwapAvailableNotifications(jobId);
+      const job = await db.query.jobs.findFirst({
+        where: eq(jobs.id, jobId),
+        with: { property: { columns: { address: true } } },
+      });
 
-    const job = await db.query.jobs.findFirst({
-      where: eq(jobs.id, jobId),
-      with: { property: { columns: { address: true } } },
-    });
-
-    await notifyCleaner(
-      cleanerId,
-      "urgent_job",
-      "Job claimed",
-      `You accepted the job at ${job?.property?.address ?? "the property"}.${
-        urgentBonus ? " $10 urgent bonus applies." : ""
-      }`,
-      jobId
-    );
+      await notifyCleaner(
+        cleanerId,
+        "urgent_job",
+        "Job claimed",
+        `You accepted the job at ${job?.property?.address ?? "the property"}.${
+          urgentBonus ? " $10 urgent bonus applies." : ""
+        }`,
+        jobId,
+      );
+    } catch (error) {
+      console.error("[urgent claim notification]", error);
+    }
 
     return { success: true, urgentBonus };
   } catch (err) {
@@ -675,7 +779,10 @@ export async function acceptUrgentJob(
 
 export async function hasOpenUrgentSwap(jobId: string): Promise<boolean> {
   const row = await db.query.swapRequests.findFirst({
-    where: and(eq(swapRequests.jobId, jobId), eq(swapRequests.status, "urgent")),
+    where: and(
+      eq(swapRequests.jobId, jobId),
+      eq(swapRequests.status, "urgent"),
+    ),
     columns: { id: true },
   });
   return Boolean(row);

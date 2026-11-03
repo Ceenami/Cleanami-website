@@ -91,6 +91,8 @@ export type JobDisplay = {
 export function getJobDisplay(job: {
   serviceType?: string | null;
   jobLabel?: string | null;
+  cleaningLevel?: unknown;
+  addonsSnapshot?: { cleaningLevel?: unknown } | null;
 }): JobDisplay {
   if (isJobLabel(job.jobLabel)) {
     return {
@@ -105,10 +107,21 @@ export function getJobDisplay(job: {
     job.serviceType === "residential_one_time"
       ? "residential_one_time"
       : "vacation_rental_subscription";
+  const level = job.cleaningLevel ?? job.addonsSnapshot?.cleaningLevel;
+  const levelLabel =
+    level === "standard" ? "Standard" : level === "deep" ? "Deep" : null;
 
   return {
-    label: SERVICE_TYPE_LABELS[serviceType],
-    short: SERVICE_TYPE_SHORT_LABELS[serviceType],
+    label:
+      SERVICE_TYPE_LABELS[serviceType] +
+      (serviceType === "residential_one_time" && levelLabel
+        ? ` - ${levelLabel}`
+        : ""),
+    short:
+      SERVICE_TYPE_SHORT_LABELS[serviceType] +
+      (serviceType === "residential_one_time" && levelLabel
+        ? ` - ${levelLabel}`
+        : ""),
     specific: null,
     tone:
       serviceType === "residential_one_time"
@@ -123,7 +136,13 @@ export function getJobDisplay(job: {
  * but the booking flow must not invent a review queue or an automatic surcharge.
  */
 export const RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER =
-  "Our online prices assume a home in typical condition. If your home needs unusually heavy cleaning, please contact us before booking so we can review it and provide a custom quote.";
+  "Heavy clutter, hoarding, biohazards, mold remediation, pest waste, post-construction cleaning, move-out restoration, appliance or cabinet interiors unless specifically included, and unusually heavy conditions are not included in normal website pricing. Please contact CleanNami for review and a custom quote.";
+
+export const RESIDENTIAL_LEVEL_DESCRIPTIONS = {
+  standard:
+    "Best for generally maintained homes. Includes routine kitchen and bathroom cleaning, reachable dusting, appliance exteriors, vacuuming, mopping, rubbish removal, and normal living areas.",
+  deep: "Best for first-time cleans, seasonal resets, and homes with visible buildup. Includes Standard plus baseboards, doors/frames, reachable vents/fans, sills/tracks, cabinet fronts, kitchen/bathroom buildup, edges/corners, and under/behind accessible items.",
+} as const;
 
 export const JOB_SOURCES = [
   "ical",
@@ -208,7 +227,7 @@ export function getEntryMethod(value: string | undefined | null) {
  * the code (counterproposal item 15's "entry/access reminder").
  */
 export function entryAccessReminder(
-  entryMethod: string | null | undefined
+  entryMethod: string | null | undefined,
 ): string {
   const method = getEntryMethod(entryMethod);
   if (!method) {

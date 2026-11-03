@@ -28,6 +28,7 @@ import { useSessionPersistence } from "@/hooks/useSessionPersistence";
 import { ResumeSessionPrompt } from "../ResumeSessionPrompt";
 import { Loader } from "lucide-react";
 import { CallBookedConfirmation } from "@/components/CallBookedConfirmation";
+import { BookingServiceHeader } from "./BookingServiceHeader";
 
 const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
@@ -132,6 +133,7 @@ export const SignupForm = ({
   const [priceDetails, setPriceDetails] = useState<PriceDetails | null>(null);
   const [errors, setErrors] = useState<Record<string, string[] | undefined>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [isChangingServiceType, setIsChangingServiceType] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [portalInviteEmailSent, setPortalInviteEmailSent] = useState(true);
 
@@ -149,7 +151,7 @@ export const SignupForm = ({
   useEffect(() => {
     if (initialData) {
       setFormData((prev) => ({ ...prev, ...initialData.formData }));
-      setCurrentStep(initialData.currentStep);
+      setCurrentStep(Math.max(1, Math.min(initialData.currentStep, TOTAL_STEPS - 1)));
       if (initialData.priceDetails) {
         setPriceDetails(initialData.priceDetails);
       }
@@ -167,10 +169,11 @@ export const SignupForm = ({
     saveProgressNow,
   } = useSessionPersistence({
     debounceMs: 1500,
+    skipInitialLoad: !!initialData,
     // Skip session loading if we already have initialData
     onSessionLoaded: initialData ? undefined : (data) => {
       setFormData((prev) => ({ ...prev, ...data.formData }));
-      setCurrentStep(data.currentStep);
+      setCurrentStep(Math.max(1, Math.min(data.currentStep, TOTAL_STEPS - 1)));
       if (data.priceDetails) {
         setPriceDetails(data.priceDetails);
       }
@@ -455,23 +458,6 @@ export const SignupForm = ({
               setFormData={setFormData}
               errors={errors}
             />
-            {/* The service-type choice is one-way inside a session: switching
-                resets the form rather than carrying vacation-rental answers
-                into the residential branch. Say so, rather than doing it
-                silently. */}
-            {onChangeServiceType && (
-              <p className="mt-6 text-sm text-gray-500">
-                Booking a one-time clean for your own home instead?{" "}
-                <button
-                  type="button"
-                  onClick={onChangeServiceType}
-                  className="font-medium text-brand underline hover:no-underline"
-                >
-                  Change cleaning type
-                </button>{" "}
-                — this starts the form again.
-              </p>
-            )}
           </>
         );
       case 2:
@@ -558,6 +544,23 @@ export const SignupForm = ({
 
   const isConfirmation = currentStep === TOTAL_STEPS;
   const showPriceSummary = currentStep >= 2 && currentStep < TOTAL_STEPS;
+  const canChangeService = !!onChangeServiceType && currentStep < 7 && !isSaving && !paymentData;
+  const changeService = async () => {
+    if (isChangingServiceType) return;
+    setIsChangingServiceType(true);
+    try {
+      if (!isLoadingSession && !hasExistingSession) {
+        const saved = await saveProgressNow(formData, currentStep, priceDetails);
+        if (!saved) {
+          toast.error("We could not save your progress. Please try changing the cleaning type again.");
+          return;
+        }
+      }
+      onChangeServiceType?.();
+    } finally {
+      setIsChangingServiceType(false);
+    }
+  };
 
   // Render main content
   const renderContent = () => {
@@ -588,7 +591,7 @@ export const SignupForm = ({
       <>
         {!isConfirmation && (
           <div className="mb-6">
-            <ProgressBar currentStep={currentStep} totalSteps={TOTAL_STEPS - 1} />
+            <ProgressBar currentStep={currentStep} totalSteps={TOTAL_STEPS - 1} stepLabels={stepTitles.slice(0, -1)} />
           </div>
         )}
 
@@ -651,6 +654,7 @@ export const SignupForm = ({
     <>
       <ModalLayout
         isOpen={isOpen}
+        compact={!showPriceSummary || isLoadingSession || hasExistingSession}
         onClose={onClose}
         title={
           isLoadingSession
@@ -663,6 +667,9 @@ export const SignupForm = ({
         priceDetails={displayedPriceDetails}
         isPriceRecalculating={isPriceStale}
       >
+        {!isConfirmation && (
+          <BookingServiceHeader serviceType="vacation_rental_subscription" onChange={canChangeService ? changeService : undefined} isChanging={isChangingServiceType} />
+        )}
         {renderContent()}
       </ModalLayout>
 
