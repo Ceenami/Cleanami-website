@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { trackPaidBooking } from "@/lib/analytics";
 import {
   earliestBookableDateFromKeys,
   getBookableWindowsFromKeys,
@@ -355,7 +356,8 @@ export function OneOffCleanBooking({
         }),
       });
       const data = await readJson(res, "Could not book the clean.");
-      if (!res.ok) throw new Error(data.error ?? "Could not book the clean.");
+      if (!res.ok || data.success !== true) throw new Error(data.error ?? "Could not book the clean.");
+      trackPaidBooking(data.tracking);
       setConfirmed({
         amountCents: data.amountCents,
         promoCode: data.promoCode,

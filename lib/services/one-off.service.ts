@@ -1,4 +1,6 @@
 import "server-only";
+import type Stripe from "stripe";
+import { bookingConversion, type BookingConversion } from "@/lib/analytics";
 import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 
 import { randomUUID } from "crypto";
@@ -80,6 +82,7 @@ export type BookOneOffResult =
       amountCents: number;
       promoCode?: string;
       promoDiscountCents?: number;
+      tracking?: BookingConversion;
     }
   | {
       success: false;
@@ -401,6 +404,14 @@ export async function bookOneOffClean(
     };
 
   const stripe = getStripe();
+  let trackingIntent: Stripe.PaymentIntent | undefined;
+  const residentialTracking = (job: {
+    paymentIntentId: string | null; paymentStatus: string | null; status: string | null;
+    addonsSnapshot?: (typeof jobs.$inferSelect)["addonsSnapshot"];
+  }) => isResidential && job.paymentStatus === "captured" && job.status !== "canceled"
+    ? bookingConversion(job.paymentIntentId, trackingIntent?.id === job.paymentIntentId
+      ? trackingIntent.amount_received : job.addonsSnapshot?.residentialPricing?.amountChargedCents)
+    : undefined;
   let paymentMethodId: string | undefined;
 
   if (!skipPayment) {
@@ -564,7 +575,7 @@ export async function bookOneOffClean(
       eq(jobs.jobSource, "customer_one_off"),
       ne(jobs.status, "canceled"),
     ),
-    columns: { id: true, addonsSnapshot: true },
+    columns: { id: true, addonsSnapshot: true, paymentIntentId: true, paymentStatus: true, status: true },
   });
   if (existingBooking) {
     if (
@@ -582,6 +593,7 @@ export async function bookOneOffClean(
     return {
       success: true,
       jobId: existingBooking.id,
+      tracking: residentialTracking(existingBooking),
       amountCents:
         existingBooking.addonsSnapshot?.residentialPricing
           ?.amountChargedCents ?? amountCents,
@@ -689,6 +701,7 @@ export async function bookOneOffClean(
         return { success: false, error: "Payment could not be completed." };
       }
       paymentIntentId = paymentIntent.id;
+      trackingIntent = paymentIntent;
     } catch (err) {
       console.error("[bookOneOffClean] charge failed", err);
       // Stripe rejects retries with changed idempotency parameters.
@@ -754,7 +767,7 @@ export async function bookOneOffClean(
       eq(jobs.jobSource, "customer_one_off"),
       ne(jobs.status, "canceled"),
     ),
-    columns: { id: true, addonsSnapshot: true },
+    columns: { id: true, addonsSnapshot: true, paymentIntentId: true, paymentStatus: true, status: true },
   });
   if (savedBooking) {
     if (
@@ -772,6 +785,7 @@ export async function bookOneOffClean(
     return {
       success: true,
       jobId: savedBooking.id,
+      tracking: residentialTracking(savedBooking),
       amountCents:
         savedBooking.addonsSnapshot?.residentialPricing?.amountChargedCents ??
         chargeAmountCents,
@@ -828,7 +842,7 @@ export async function bookOneOffClean(
           where: checkoutAttempt
             ? eq(jobs.residentialCheckoutAttemptId, checkoutAttempt.id)
             : eq(jobs.paymentIntentId, paymentIntentId!),
-          columns: { id: true, status: true, paymentStatus: true, addonsSnapshot: true },
+          columns: { id: true, status: true, paymentStatus: true, addonsSnapshot: true, paymentIntentId: true },
         });
         if (replayed?.status === "canceled" || replayed?.paymentStatus === "refunded")
           return { success: false, error: "This payment belongs to a canceled or refunded booking. Contact CleanNami before booking again." };
@@ -836,6 +850,7 @@ export async function bookOneOffClean(
           return {
             success: true,
             jobId: replayed.id,
+            tracking: residentialTracking(replayed),
             amountCents:
               replayed.addonsSnapshot?.residentialPricing?.amountChargedCents ??
               chargeAmountCents,
@@ -919,6 +934,9 @@ export async function bookOneOffClean(
   return {
     success: true,
     jobId: job.id,
+    tracking: residentialTracking({
+      paymentIntentId, paymentStatus: skipPayment ? null : "captured", status: "unassigned",
+    }),
     amountCents: chargeAmountCents,
     promoCode: appliedPromo?.code,
     promoDiscountCents: appliedPromo?.discountCents,
