@@ -12,6 +12,10 @@ import { and, eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
+import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
+import { readRentalCharge } from "@/lib/pricing/rental-charge";
+import { verifySettledPayment } from "./verify-settled-payment";
 import { ExecutionError } from "../job-execution";
 import type { CancelJobResult } from "../customer-cancellation.service";
 
@@ -53,11 +57,20 @@ export async function cancelExecutionJob(
       where: eq(jobsToCleaners.jobId, jobId),
       with: { cleaner: true },
     });
+    const residential = readResidentialSnapshot(job.addonsSnapshot);
     const late = claim
       ? claim.identity === "late"
-      : assignments.length > 0 &&
+      : !(source === "admin" && residential.kind === "v2" && residential.terms.executionPolicy) &&
+        assignments.some(a => ["primary", "laundry_lead"].includes(a.role)) &&
         !!job.checkInTime &&
         +job.checkInTime - Date.now() < 86400000;
+    if (late && (residential.kind === "v1" || residential.kind === "v2")) {
+      for (const a of assignments.filter(a => ["primary", "laundry_lead"].includes(a.role)))
+        computeCleanerPay({ residentialPricing: job.addonsSnapshot?.residentialPricing,
+          assignmentTerms: a.residentialPayTerms, settlement: "late_cancellation",
+          expectedHours: Number(job.expectedHours), hourlyRateCents: a.frozenHourlyRateCents,
+          role: a.role, laundryLoads: job.addonsSnapshot?.laundryLoads, urgentBonus: a.urgentBonus });
+    }
     if (!claim) {
       await tx.insert(jobOperationAudit).values({
         jobId,
@@ -112,14 +125,11 @@ export async function cancelExecutionJob(
         throw new ExecutionError(
           "Job canceled; late-cancellation billing requires review",
         );
-      const charge =
-        typeof intent.latest_charge === "string"
-          ? await stripe.charges.retrieve(intent.latest_charge)
-          : intent.latest_charge;
-      if (!charge || charge.amount_refunded > 0)
-        throw new ExecutionError(
-          "Job canceled; refunded or missing charge requires billing review before cleaner pay",
-        );
+      const terms = readResidentialSnapshot(context.job.addonsSnapshot);
+      const expected = terms.kind === "v1" || terms.kind === "v2"
+        ? Number(terms.terms.amountChargedCents) : readRentalCharge(context.job.rentalCharge)?.chargeAmountCents;
+      try { await verifySettledPayment(stripe, intent, expected ?? intent.amount); }
+      catch { throw new ExecutionError("Job canceled; refunded or missing charge, amount or currency mismatch requires billing review before cleaner pay"); }
       charged = true;
     } else if (intent.status === "succeeded") {
       const charge =
@@ -183,23 +193,30 @@ export async function cancelExecutionJob(
       );
     if (!complete && context.late) {
       // Preserve the established cancellation payout rule (distinct from completed-job pay).
-      const primary = context.assignments.filter((a) => a.role === "primary");
+      const terms = readResidentialSnapshot(job.addonsSnapshot);
+      const residential = terms.kind === "v1" || terms.kind === "v2";
+      const primary = context.assignments.filter((a) => residential ? ["primary", "laundry_lead"].includes(a.role) : a.role === "primary");
       const targets = primary.length
         ? primary
         : context.assignments.filter(
             (a) => a.role !== "backup" && a.role !== "on-call",
           );
       for (const a of targets) {
-        const amount =
-          Number(job.expectedHours || "0") * CLEANER_HOURLY_RATE +
-          (a.urgentBonus ? 10 : 0);
+        const pay = residential ? computeCleanerPay({
+          residentialPricing: job.addonsSnapshot?.residentialPricing,
+          assignmentTerms: a.residentialPayTerms, settlement: "late_cancellation",
+          expectedHours: Number(job.expectedHours), hourlyRateCents: a.frozenHourlyRateCents,
+          role: a.role, laundryLoads: job.addonsSnapshot?.laundryLoads, urgentBonus: a.urgentBonus,
+        }) : null;
+        const amount = pay?.total ?? Number(job.expectedHours || "0") * CLEANER_HOURLY_RATE + (a.urgentBonus ? 10 : 0);
         await tx
           .insert(payouts)
           .values({
             jobId,
             cleanerId: a.cleanerId,
             amount: amount.toFixed(2),
-            urgentBonusAmount: a.urgentBonus ? "10.00" : null,
+            payReceipt: pay?.receipt ?? null,
+            urgentBonusAmount: pay ? (pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null) : a.urgentBonus ? "10.00" : null,
             status: "pending",
           })
           .onConflictDoNothing({ target: [payouts.jobId, payouts.cleanerId] });

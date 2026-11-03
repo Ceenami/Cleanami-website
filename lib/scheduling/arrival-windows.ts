@@ -21,7 +21,8 @@
 export const OPERATING_DAY_START_MINUTES = 9 * 60; // 09:00
 export const OPERATING_DAY_END_MINUTES = 16 * 60; // 16:00
 
-export type ArrivalWindowKey = "9-11" | "11-1" | "1-3" | "flexible-9-1";
+export type ArrivalWindowKey =
+  "fixed-9" | "9-11" | "11-1" | "1-3" | "flexible-9-1";
 
 export type ArrivalWindow = {
   key: ArrivalWindowKey;
@@ -41,6 +42,13 @@ export type ArrivalWindow = {
  * a preference should see the specific slots first.
  */
 export const ARRIVAL_WINDOWS: readonly ArrivalWindow[] = [
+  {
+    key: "fixed-9",
+    label: "9:00 AM (fixed arrival)",
+    cleanerLabel: "arrive at 9:00 AM",
+    startMinutes: 9 * 60,
+    endMinutes: 9 * 60,
+  },
   {
     key: "9-11",
     label: "9:00 AM - 11:00 AM",
@@ -77,7 +85,7 @@ export const ARRIVAL_WINDOW_KEYS = ARRIVAL_WINDOWS.map((w) => w.key) as [
 ];
 
 export function getArrivalWindow(
-  key: string | undefined | null
+  key: string | undefined | null,
 ): ArrivalWindow | undefined {
   return ARRIVAL_WINDOWS.find((w) => w.key === key);
 }
@@ -96,7 +104,7 @@ export function minutesToTimeOfDay(minutes: number): string {
  */
 export function mustFinishBeforeMinutes(
   window: ArrivalWindow,
-  expectedHours: number
+  expectedHours: number,
 ): number {
   return window.endMinutes + Math.ceil(expectedHours * 60);
 }
@@ -108,11 +116,13 @@ export function mustFinishBeforeMinutes(
  */
 export function windowFitsOperatingDay(
   window: ArrivalWindow,
-  expectedHours: number
+  expectedHours: number,
 ): boolean {
   if (!Number.isFinite(expectedHours) || expectedHours <= 0) return false;
   if (window.startMinutes < OPERATING_DAY_START_MINUTES) return false;
-  return mustFinishBeforeMinutes(window, expectedHours) <= OPERATING_DAY_END_MINUTES;
+  return (
+    mustFinishBeforeMinutes(window, expectedHours) <= OPERATING_DAY_END_MINUTES
+  );
 }
 
 /**
@@ -122,7 +132,9 @@ export function windowFitsOperatingDay(
  * `residentialWindowRefusal()` in `residential-notice.ts` is that refusal.
  */
 export function getAvailableArrivalWindows(
-  expectedHours: number
+  expectedHours: number,
 ): ArrivalWindow[] {
-  return ARRIVAL_WINDOWS.filter((w) => windowFitsOperatingDay(w, expectedHours));
+  return ARRIVAL_WINDOWS.filter((w) =>
+    windowFitsOperatingDay(w, expectedHours),
+  );
 }

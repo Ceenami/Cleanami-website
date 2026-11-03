@@ -1,8 +1,15 @@
 import { executionResponse } from "@/lib/services/job-execution-http";
 import { ExecutionError, saveExecutionDraft } from "@/lib/services/job-execution";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/db";
-import { evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
+import {
+  evidencePackets,
+  jobs,
+  jobsToCleaners,
+  evidenceDrafts,
+} from "@/db/schemas";
+import { evidenceInputSchema } from "@/lib/cleaner/evidence-input";
 import {
   cleanerAuthErrorStatus,
   getCleanerAuth,
@@ -13,10 +20,9 @@ import {
   getExpectedChecklistItemsFromSnapshot,
   getMissingChecklistItems,
   getMissingPhotoRequirements,
-  getRoomPhotoRequirements,
-  type ChecklistLogPayload,
+  mergeChecklistItems,
 } from "@/lib/cleaner/evidence";
-import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
+import { ensureIssuedChecklist } from "@/lib/services/property-checklists";
 import {
   ensureEvidencePacket,
   getCleanerEvidenceFormData,
@@ -29,27 +35,24 @@ import {
 import { and, eq } from "drizzle-orm";
 import { captureAndCreatePayouts } from "@/lib/services/payment/capture-and-payout.service";
 
-type PatchBody = {
-  checklistLog: ChecklistLogPayload;
-  cleanerNotes?: string;
-};
+class EvidenceConflictError extends Error {}
 
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   const { id: jobId } = await params;
   const { error: assignmentError } = await requireCleanerJobAssignment(
     cleanerId,
-    jobId
+    jobId,
   );
 
   if (assignmentError) {
@@ -66,27 +69,27 @@ export async function GET(
     console.error("[GET /api/cleaner/jobs/[id]/evidence]", err);
     return NextResponse.json(
       { error: "Failed to load evidence form" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   const { id: jobId } = await params;
   const { error: assignmentError } = await requireCleanerJobAssignment(
     cleanerId,
-    jobId
+    jobId,
   );
 
   if (assignmentError) {
@@ -105,31 +108,33 @@ export async function PATCH(
         const same = state.checklistItems.every(item => body.checklistLog?.items?.find((candidate: { id: string; completed: boolean }) => candidate.id === item.id)?.completed === item.completed) && notes === state.cleanerNotes;
         if (!same) throw new ExecutionError("Saved progress differs from this client. Reload using the updated app or web form before changing it.");
       }
-      return saveExecutionDraft(jobId, cleanerId, { revision: body.revision ?? state.revision, items: body.checklistLog?.items, notes }, !!state.departureRecorded);
+      return saveExecutionDraft(jobId, cleanerId, { revision: body.revision ?? state.revision, items: body.checklistLog?.items, notes, explanations: body.explanations }, body.mode !== "draft" && !!state.departureRecorded);
     });
     if (issuedResponse) return issuedResponse;
-    const body = (await request.json()) as PatchBody;
+    const body = evidenceInputSchema.parse(await request.json());
     const { checklistLog, cleanerNotes } = body;
 
     if (!checklistLog?.items?.length) {
       return NextResponse.json(
         { error: "checklistLog with items is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const allChecked = checklistLog.items.every((item) => item.completed);
+    const allChecked =
+      body.mode === "draft" ||
+      checklistLog.items.every((item) => item.completed);
     if (!allChecked) {
       return NextResponse.json(
         { error: "All checklist items must be checked before submitting" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const assignment = await db.query.jobsToCleaners.findFirst({
       where: and(
         eq(jobsToCleaners.cleanerId, cleanerId),
-        eq(jobsToCleaners.jobId, jobId)
+        eq(jobsToCleaners.jobId, jobId),
       ),
       with: { job: { with: { property: { with: { checklistFiles: true } } } } },
     });
@@ -138,6 +143,36 @@ export async function PATCH(
     if (!property) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
+    if (!["primary", "laundry_lead"].includes(assignment.role))
+      return NextResponse.json(
+        { error: "Only the working team may submit evidence" },
+        { status: 403 },
+      );
+    const finalized = await db.query.evidencePackets.findFirst({
+      where: eq(evidencePackets.jobId, jobId),
+      columns: { finalEvidenceSubmittedAt: true },
+    });
+    if (finalized?.finalEvidenceSubmittedAt && body.mode === "final")
+      return NextResponse.json({ success: true, alreadySubmitted: true });
+    const suppliedPhotos = flattenRoomPhotos(checklistLog.roomPhotos ?? {});
+    if (
+      new Set(suppliedPhotos).size !== suppliedPhotos.length ||
+      Object.entries(checklistLog.roomPhotos ?? {}).some(([room, paths]) =>
+        paths.some(
+          (path) =>
+            !toStoragePath(EVIDENCE_BUCKET, path).startsWith(
+              `${cleanerId}/${jobId}/${room}/`,
+            ),
+        ),
+      )
+    )
+      return NextResponse.json(
+        {
+          error:
+            "Each evidence photo must be unique and belong to its recorded room",
+        },
+        { status: 400 },
+      );
 
     if (
       assignment.job.status !== "in-progress" &&
@@ -145,11 +180,102 @@ export async function PATCH(
     ) {
       return NextResponse.json(
         { error: "Evidence has already been finalized for this job." },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
-    const requirements = getRoomPhotoRequirements(property);
+    const snapshot = await ensureIssuedChecklist(
+      jobId,
+      {
+        ...property,
+        cleaningLevel: assignment.job.addonsSnapshot?.cleaningLevel,
+      },
+      property.checklistFiles,
+      assignment.job.checklistSnapshot,
+    );
+    const requirements = snapshot.photoRequirements!;
+    const expectedItems = getExpectedChecklistItemsFromSnapshot(snapshot);
+    const allowedIds = new Set(expectedItems.map((item) => item.id));
+    const allowedRooms = new Set(requirements.map((room) => room.roomKey));
+    if (
+      new Set(checklistLog.items.map((item) => item.id)).size !==
+        checklistLog.items.length ||
+      checklistLog.items.some((item) => !allowedIds.has(item.id)) ||
+      Object.keys(checklistLog.roomPhotos ?? {}).some(
+        (room) => !allowedRooms.has(room),
+      )
+    )
+      return NextResponse.json(
+        { error: "Evidence contains duplicate or unissued tasks/rooms" },
+        { status: 400 },
+      );
+    // Issued wording/sections are authoritative; clients send completion state only.
+    checklistLog.items = mergeChecklistItems(expectedItems, checklistLog.items);
+    if (body.mode === "draft") {
+      const roomKeys = new Set(requirements.map((r) => r.roomKey));
+      if (
+        Object.keys(body.explanations ?? {}).some((key) => !roomKeys.has(key))
+      )
+        return NextResponse.json(
+          { error: "Unknown room explanation" },
+          { status: 400 },
+        );
+      const paths = flattenRoomPhotos(checklistLog.roomPhotos ?? {});
+      if (
+        paths.some(
+          (path) =>
+            !toStoragePath(EVIDENCE_BUCKET, path).startsWith(
+              `${cleanerId}/${jobId}/`,
+            ),
+        )
+      )
+        return NextResponse.json(
+          { error: "Draft photos must belong to this job" },
+          { status: 400 },
+        );
+      await db.transaction(async (tx) => {
+        const [currentJob] = await tx
+          .select({ status: jobs.status })
+          .from(jobs)
+          .where(eq(jobs.id, jobId))
+          .for("update");
+        const packet = await tx.query.evidencePackets.findFirst({
+          where: eq(evidencePackets.jobId, jobId),
+          columns: { finalEvidenceSubmittedAt: true },
+        });
+        if (
+          !currentJob ||
+          !["in-progress", "completed_pending_evidence"].includes(
+            currentJob.status ?? "",
+          ) ||
+          packet?.finalEvidenceSubmittedAt
+        )
+          throw new EvidenceConflictError(
+            "Draft state changed; reload evidence",
+          );
+        await tx
+          .insert(evidenceDrafts)
+          .values({
+            jobId,
+            cleanerId,
+            explanations: body.explanations ?? {},
+            state: { checklistLog, cleanerNotes: cleanerNotes ?? "" },
+          })
+          .onConflictDoUpdate({
+            target: [evidenceDrafts.jobId, evidenceDrafts.cleanerId],
+            set: {
+              explanations: body.explanations ?? {},
+              state: { checklistLog, cleanerNotes: cleanerNotes ?? "" },
+              updatedAt: new Date(),
+            },
+          });
+      });
+      return NextResponse.json({
+        success: true,
+        draft: true,
+        message: "Draft saved. Photo minimums still apply.",
+      });
+    }
     const roomPhotos = checklistLog.roomPhotos ?? {};
     const missingPhotos = getMissingPhotoRequirements(requirements, roomPhotos);
 
@@ -159,7 +285,7 @@ export async function PATCH(
           error: "Photo minimums not met",
           missing: missingPhotos,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -167,16 +293,11 @@ export async function PATCH(
     // whatever ids the client submitted — a property with its own uploaded
     // checklist must have every one of its items confirmed, not just any
     // single item marked complete (spec §14.2).
-    const snapshot = isChecklistSnapshot(assignment.job.checklistSnapshot)
-      ? assignment.job.checklistSnapshot
-      : createChecklistSnapshot(property, property.checklistFiles);
-    if (!assignment.job.checklistSnapshot) {
-      await db.update(jobs).set({ checklistSnapshot: snapshot, updatedAt: new Date() }).where(eq(jobs.id, assignment.job.id));
-    }
-    const expectedChecklistItems = getExpectedChecklistItemsFromSnapshot(snapshot);
+    const expectedChecklistItems =
+      getExpectedChecklistItemsFromSnapshot(snapshot);
     const missingChecklistItems = getMissingChecklistItems(
       expectedChecklistItems,
-      checklistLog.items
+      checklistLog.items,
     );
 
     if (missingChecklistItems.length > 0) {
@@ -185,7 +306,7 @@ export async function PATCH(
           error: "Checklist incomplete",
           missing: missingChecklistItems,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -202,7 +323,8 @@ export async function PATCH(
     //  2. Existence: the object must actually be in the bucket.
     const expectedPrefix = `${cleanerId}/${jobId}/`;
     const foreignPaths = photoUrls.filter(
-      (path) => !toStoragePath(EVIDENCE_BUCKET, path).startsWith(expectedPrefix)
+      (path) =>
+        !toStoragePath(EVIDENCE_BUCKET, path).startsWith(expectedPrefix),
     );
 
     if (foreignPaths.length > 0) {
@@ -211,7 +333,7 @@ export async function PATCH(
           error: "Photo paths must come from this job's uploads",
           invalid: foreignPaths,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -222,7 +344,7 @@ export async function PATCH(
           error: "Some photos were never uploaded",
           missing: missingObjects,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -239,19 +361,33 @@ export async function PATCH(
     }
 
     const now = new Date();
-    const departed = assignment.job.status === "completed_pending_evidence";
-
-    const alreadySubmitted = await db.transaction(async (tx) => {
-      // Serialize final submission with direct-upload acknowledgements/removals.
-      const [currentJob] = await tx.select().from(jobs).where(eq(jobs.id, jobId)).for("update");
-      const [currentPacket] = await tx.select().from(evidencePackets).where(eq(evidencePackets.jobId, jobId)).for("update");
-      const [currentAssignment] = await tx.select().from(jobsToCleaners).where(and(eq(jobsToCleaners.jobId, jobId), eq(jobsToCleaners.cleanerId, cleanerId)));
-      if (currentPacket?.finalEvidenceSubmittedAt) return true;
-      if (!currentAssignment || !currentJob ||
-        !["in-progress", "completed_pending_evidence"].includes(currentJob.status ?? ""))
-        throw new ExecutionError("Evidence is no longer open for changes");
-      if ((currentJob.status === "completed_pending_evidence") !== departed)
-        throw new ExecutionError("Job checkout changed. Reload the saved evidence before submitting.");
+    const result = await db.transaction(async (tx) => {
+      const [currentJob] = await tx
+        .select({ status: jobs.status })
+        .from(jobs)
+        .where(eq(jobs.id, jobId))
+        .for("update");
+      const currentPacket = await tx.query.evidencePackets.findFirst({
+        where: eq(evidencePackets.jobId, jobId),
+      });
+      if (currentPacket?.finalEvidenceSubmittedAt)
+        return { alreadySubmitted: true, departed: false };
+      if (
+        !currentJob ||
+        !["in-progress", "completed_pending_evidence"].includes(
+          currentJob.status ?? "",
+        )
+      )
+        throw new EvidenceConflictError("Evidence state changed; reload job");
+      const departed = currentJob.status === "completed_pending_evidence";
+      if (
+        departed &&
+        (!currentPacket?.gpsCheckInTimestamp ||
+          !currentPacket.gpsCheckOutTimestamp)
+      )
+        throw new EvidenceConflictError(
+          "Recorded check-in and departure required",
+        );
       await tx
         .update(evidencePackets)
         .set({
@@ -271,14 +407,15 @@ export async function PATCH(
           .set({ status: "awaiting_capture", updatedAt: now })
           .where(eq(jobs.id, jobId));
       }
-      return false;
+      return { alreadySubmitted: false, departed };
     });
-    if (alreadySubmitted) return NextResponse.json({ success: true, alreadySubmitted: true });
+    if (result.alreadySubmitted)
+      return NextResponse.json({ success: true, alreadySubmitted: true });
 
     // Capture never runs in the mobile process. A transient Stripe failure
     // leaves the job in awaiting_capture for the authenticated server cron;
     // evidence remains final and no client-held shared key is needed.
-    if (departed) {
+    if (result.departed) {
       const capture = await captureAndCreatePayouts(jobId);
       return NextResponse.json({
         success: true,
@@ -289,10 +426,17 @@ export async function PATCH(
 
     return NextResponse.json({ success: true, pendingPhysicalCheckout: true });
   } catch (err) {
+    if (err instanceof z.ZodError || err instanceof SyntaxError)
+      return NextResponse.json(
+        { error: "Invalid evidence submission" },
+        { status: 400 },
+      );
+    if (err instanceof EvidenceConflictError)
+      return NextResponse.json({ error: err.message }, { status: 409 });
     console.error("[PATCH /api/cleaner/jobs/[id]/evidence]", err);
     return NextResponse.json(
-      { error: err instanceof ExecutionError ? err.message : "Failed to submit evidence" },
-      { status: err instanceof ExecutionError ? err.status : 500 }
+      { error: "Failed to submit evidence" },
+      { status: 500 },
     );
   }
 }

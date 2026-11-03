@@ -3,8 +3,9 @@ import "server-only";
 import { db } from "@/db";
 import { cleaners, jobs, jobsToCleaners, swapRequests } from "@/db/schemas";
 import { notifyAdmins } from "@/lib/queries/admin-notifications";
-import { recalculateJobRoles } from "@/lib/services/assignment/team-roles";
+import { recalculateJobRolesInTransaction } from "@/lib/services/assignment/team-roles";
 import { notifyCleaner } from "@/lib/services/notifications/notify";
+import { assignmentEligibility } from "@/lib/services/assignment/eligibility";
 import {
   canCleanerCoverSwap,
   getSwapCandidates,
@@ -13,7 +14,7 @@ import {
   dismissSwapAvailableNotifications,
   triggerUrgentReplacement,
 } from "@/lib/services/urgent-replacement.service";
-import { and, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
 const SWAP_LIMIT = 3;
 const SWAP_LIMIT_WINDOW_DAYS = 60;
@@ -36,7 +37,7 @@ export const SWAP_REASON_MAX_LENGTH = 500;
  */
 async function countRecentSwapRequests(cleanerId: string): Promise<number> {
   const since = new Date(
-    Date.now() - SWAP_LIMIT_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    Date.now() - SWAP_LIMIT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   );
 
   const rows = await db
@@ -46,8 +47,8 @@ async function countRecentSwapRequests(cleanerId: string): Promise<number> {
       and(
         eq(swapRequests.originalCleanerId, cleanerId),
         gte(swapRequests.requestedAt, since),
-        inArray(swapRequests.status, ["pending", "accepted", "expired"])
-      )
+        inArray(swapRequests.status, ["pending", "accepted", "expired"]),
+      ),
     );
 
   return rows.length;
@@ -93,7 +94,7 @@ export type CreateSwapRequestResult =
 export async function createCleanerSwapRequest(
   cleanerId: string,
   jobId: string,
-  reason?: string | null
+  reason?: string | null,
 ): Promise<CreateSwapRequestResult> {
   const trimmedReason = reason?.trim().slice(0, SWAP_REASON_MAX_LENGTH) || null;
 
@@ -140,7 +141,7 @@ export async function createCleanerSwapRequest(
     where: and(
       eq(swapRequests.jobId, jobId),
       eq(swapRequests.originalCleanerId, cleanerId),
-      eq(swapRequests.status, "pending")
+      eq(swapRequests.status, "pending"),
     ),
   });
 
@@ -163,7 +164,7 @@ export async function createCleanerSwapRequest(
   // The offer closes at the 24-hour mark; past that the job is a replacement
   // rather than a swap.
   const expiresAt = new Date(
-    job.checkInTime.getTime() - HOURS_BEFORE_JOB * 60 * 60 * 1000
+    job.checkInTime.getTime() - HOURS_BEFORE_JOB * 60 * 60 * 1000,
   );
 
   const [created] = await db
@@ -188,11 +189,12 @@ export async function createCleanerSwapRequest(
   for (const candidate of candidates) {
     await notifyCleaner({
       cleanerId: candidate.cleanerId,
-      type: "swap_available",
+      type: "swap_requested",
       title: "Clean available to cover",
       message: `${firstName(requesterName)} can't work ${address} on ${when}. First to accept takes the job.`,
       jobId,
       url: "/cleaner/jobs",
+      metadata: { swapRequestId: created.id },
     });
   }
 
@@ -221,7 +223,7 @@ export async function createCleanerSwapRequest(
  */
 export async function cancelCleanerSwapRequest(
   cleanerId: string,
-  swapRequestId: string
+  swapRequestId: string,
 ): Promise<{ success: true } | { success: false; message: string }> {
   const swap = await db.query.swapRequests.findFirst({
     where: eq(swapRequests.id, swapRequestId),
@@ -259,7 +261,9 @@ export type SwapOffer = {
 };
 
 /** Open swaps this cleaner is eligible to take over. */
-export async function getOpenSwapOffers(cleanerId: string): Promise<SwapOffer[]> {
+export async function getOpenSwapOffers(
+  cleanerId: string,
+): Promise<SwapOffer[]> {
   const now = new Date();
 
   const open = await db.query.swapRequests.findMany({
@@ -277,12 +281,22 @@ export async function getOpenSwapOffers(cleanerId: string): Promise<SwapOffer[]>
 
   for (const swap of open) {
     if (swap.originalCleanerId === cleanerId) continue;
-    if (!swap.job || swap.job.status === "canceled" || swap.job.status === "completed") {
+    if (
+      !swap.job ||
+      swap.job.status === "canceled" ||
+      swap.job.status === "completed"
+    ) {
       continue;
     }
     if (swap.expiresAt.getTime() <= now.getTime()) continue;
 
-    if (!(await canCleanerCoverSwap(cleanerId, swap.jobId, swap.originalCleanerId))) {
+    if (
+      !(await canCleanerCoverSwap(
+        cleanerId,
+        swap.jobId,
+        swap.originalCleanerId,
+      ))
+    ) {
       continue;
     }
 
@@ -297,7 +311,7 @@ export async function getOpenSwapOffers(cleanerId: string): Promise<SwapOffer[]>
   }
 
   return offers.sort((a, b) =>
-    (a.checkInTime ?? "").localeCompare(b.checkInTime ?? "")
+    (a.checkInTime ?? "").localeCompare(b.checkInTime ?? ""),
   );
 }
 
@@ -310,8 +324,10 @@ export async function getOpenSwapOffers(cleanerId: string): Promise<SwapOffer[]>
  */
 export async function acceptSwapOffer(
   cleanerId: string,
-  swapRequestId: string
-): Promise<{ success: true; jobId: string } | { success: false; message: string }> {
+  swapRequestId: string,
+): Promise<
+  { success: true; jobId: string } | { success: false; message: string }
+> {
   const swap = await db.query.swapRequests.findFirst({
     where: eq(swapRequests.id, swapRequestId),
     with: {
@@ -338,7 +354,9 @@ export async function acceptSwapOffer(
     };
   }
 
-  if (!(await canCleanerCoverSwap(cleanerId, swap.jobId, swap.originalCleanerId))) {
+  if (
+    !(await canCleanerCoverSwap(cleanerId, swap.jobId, swap.originalCleanerId))
+  ) {
     return {
       success: false,
       message: "You are not eligible to cover this clean.",
@@ -350,6 +368,17 @@ export async function acceptSwapOffer(
 
   try {
     await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_source','swap_accept',true)`,
+      );
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_actor',${cleanerId},true)`,
+      );
+      await tx
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(eq(jobs.id, swap.jobId))
+        .for("update");
       const claimed = await tx
         .update(swapRequests)
         .set({
@@ -360,8 +389,8 @@ export async function acceptSwapOffer(
         .where(
           and(
             eq(swapRequests.id, swapRequestId),
-            eq(swapRequests.status, "pending")
-          )
+            eq(swapRequests.status, "pending"),
+          ),
         )
         .returning({ id: swapRequests.id });
 
@@ -372,7 +401,7 @@ export async function acceptSwapOffer(
       const original = await tx.query.jobsToCleaners.findFirst({
         where: and(
           eq(jobsToCleaners.jobId, swap.jobId),
-          eq(jobsToCleaners.cleanerId, swap.originalCleanerId)
+          eq(jobsToCleaners.cleanerId, swap.originalCleanerId),
         ),
       });
 
@@ -385,8 +414,8 @@ export async function acceptSwapOffer(
         .where(
           and(
             eq(jobsToCleaners.jobId, swap.jobId),
-            eq(jobsToCleaners.cleanerId, swap.originalCleanerId)
-          )
+            eq(jobsToCleaners.cleanerId, swap.originalCleanerId),
+          ),
         );
 
       // The replacement inherits the seat that was vacated; the designations
@@ -397,6 +426,7 @@ export async function acceptSwapOffer(
         role: original.role,
         urgentBonus: false,
       });
+      await recalculateJobRolesInTransaction(tx, swap.jobId);
 
       await tx
         .update(jobs)
@@ -420,40 +450,43 @@ export async function acceptSwapOffer(
     throw err;
   }
 
-  await recalculateJobRoles(swap.jobId);
-  await dismissSwapAvailableNotifications(swap.jobId);
+  try {
+    await dismissSwapAvailableNotifications(swap.jobId);
 
-  const replacement = await db.query.cleaners.findFirst({
-    where: eq(cleaners.id, cleanerId),
-    columns: { fullName: true },
-  });
-  const when = formatJobTime(swap.job?.checkInTime ?? null);
+    const replacement = await db.query.cleaners.findFirst({
+      where: eq(cleaners.id, cleanerId),
+      columns: { fullName: true },
+    });
+    const when = formatJobTime(swap.job?.checkInTime ?? null);
 
-  await notifyCleaner({
-    cleanerId,
-    type: "assignment",
-    title: "Swap accepted",
-    message: `You took over ${address} on ${when} from ${firstName(originalName)}.`,
-    jobId: swap.jobId,
-    url: "/cleaner/jobs",
-  });
+    await notifyCleaner({
+      cleanerId,
+      type: "assignment",
+      title: "Swap accepted",
+      message: `You took over ${address} on ${when} from ${firstName(originalName)}.`,
+      jobId: swap.jobId,
+      url: "/cleaner/jobs",
+    });
 
-  await notifyCleaner({
-    cleanerId: swap.originalCleanerId,
-    type: "assignment",
-    title: "Swap covered",
-    message: `${replacement?.fullName ?? "Another cleaner"} took over ${address} on ${when}. You are off this job.`,
-    jobId: swap.jobId,
-    url: "/cleaner/jobs",
-  });
+    await notifyCleaner({
+      cleanerId: swap.originalCleanerId,
+      type: "assignment",
+      title: "Swap covered",
+      message: `${replacement?.fullName ?? "Another cleaner"} took over ${address} on ${when}. You are off this job.`,
+      jobId: swap.jobId,
+      url: "/cleaner/jobs",
+    });
 
-  await notifyAdmins({
-    type: "swap_requested",
-    title: "Swap covered",
-    message: `${replacement?.fullName ?? "Another cleaner"} took over ${address} on ${when} from ${originalName}.`,
-    jobId: swap.jobId,
-    url: SWAP_QUEUE_URL,
-  });
+    await notifyAdmins({
+      type: "swap_requested",
+      title: "Swap covered",
+      message: `${replacement?.fullName ?? "Another cleaner"} took over ${address} on ${when} from ${originalName}.`,
+      jobId: swap.jobId,
+      url: SWAP_QUEUE_URL,
+    });
+  } catch (error) {
+    console.error("[swap] committed takeover; notification failed", error);
+  }
 
   return { success: true, jobId: swap.jobId };
 }
@@ -480,7 +513,8 @@ export type ApproveSwapResult =
  * eligibility (roster → nearby → on-call/open pool → all eligible).
  */
 export async function approveCleanerSwapRequest(
-  swapRequestId: string
+  swapRequestId: string,
+  actorId = "admin-swap-service",
 ): Promise<ApproveSwapResult> {
   const swap = await db.query.swapRequests.findFirst({
     where: eq(swapRequests.id, swapRequestId),
@@ -517,7 +551,9 @@ export async function approveCleanerSwapRequest(
   }
 
   const originalCleanerId = swap.originalCleanerId;
-  const assignment = job.cleaners.find((c) => c.cleanerId === originalCleanerId);
+  const assignment = job.cleaners.find(
+    (c) => c.cleanerId === originalCleanerId,
+  );
 
   if (!assignment) {
     return {
@@ -531,62 +567,113 @@ export async function approveCleanerSwapRequest(
   const originalName = assignment.cleaner?.fullName ?? "Cleaner";
   const backup = job.cleaners.find((c) => c.role === "backup");
 
-  if (backup && backup.cleanerId !== originalCleanerId) {
+  if (
+    backup &&
+    backup.cleanerId !== originalCleanerId &&
+    (
+      await assignmentEligibility(backup.cleanerId, swap.jobId, {
+        replaceCleanerId: originalCleanerId,
+      })
+    ).eligible
+  ) {
     const backupName = backup.cleaner?.fullName ?? "Backup cleaner";
 
-    await db
-      .delete(jobsToCleaners)
-      .where(
-        and(
-          eq(jobsToCleaners.jobId, swap.jobId),
-          eq(jobsToCleaners.cleanerId, originalCleanerId)
-        )
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_source','admin_swap_promotion',true)`,
       );
-
-    await db
-      .update(jobsToCleaners)
-      .set({ role: assignment.role, updatedAt: now })
-      .where(
-        and(
-          eq(jobsToCleaners.jobId, swap.jobId),
-          eq(jobsToCleaners.cleanerId, backup.cleanerId)
-        )
+      await tx.execute(
+        sql`select set_config('cleannami.assignment_actor',${actorId},true)`,
       );
+      await tx
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(eq(jobs.id, swap.jobId))
+        .for("update");
+      const [claimed] = await tx
+        .update(swapRequests)
+        .set({
+          status: "accepted",
+          replacementCleanerId: backup.cleanerId,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(swapRequests.id, swapRequestId),
+            eq(swapRequests.status, "pending"),
+          ),
+        )
+        .returning({ id: swapRequests.id });
+      if (!claimed) throw new Error("Swap already resolved; reload job");
+      const original = await tx.query.jobsToCleaners.findFirst({
+        where: and(
+          eq(jobsToCleaners.jobId, swap.jobId),
+          eq(jobsToCleaners.cleanerId, originalCleanerId),
+        ),
+      });
+      if (!original) throw new Error("Requesting cleaner no longer assigned");
 
-    await db
-      .update(jobs)
-      .set({ status: "assigned", updatedAt: now })
-      .where(eq(jobs.id, swap.jobId));
+      await tx
+        .delete(jobsToCleaners)
+        .where(
+          and(
+            eq(jobsToCleaners.jobId, swap.jobId),
+            eq(jobsToCleaners.cleanerId, originalCleanerId),
+          ),
+        );
 
-    await db
-      .update(swapRequests)
-      .set({
-        status: "accepted",
-        replacementCleanerId: backup.cleanerId,
-        updatedAt: now,
-      })
-      .where(eq(swapRequests.id, swapRequestId));
+      await tx
+        .update(jobsToCleaners)
+        .set({ role: assignment.role, updatedAt: now })
+        .where(
+          and(
+            eq(jobsToCleaners.jobId, swap.jobId),
+            eq(jobsToCleaners.cleanerId, backup.cleanerId),
+          ),
+        );
 
-    await recalculateJobRoles(swap.jobId);
-    await dismissSwapAvailableNotifications(swap.jobId);
+      await tx
+        .update(jobs)
+        .set({ status: "assigned", updatedAt: now })
+        .where(eq(jobs.id, swap.jobId));
+      await recalculateJobRolesInTransaction(tx, swap.jobId);
 
-    await notifyCleaner({
-      cleanerId: backup.cleanerId,
-      type: "assignment",
-      title: "You are now on this job",
-      message: `${originalName}'s swap was approved. You have moved from backup onto ${address}.`,
-      jobId: swap.jobId,
-      url: "/cleaner/jobs",
+      await tx
+        .update(swapRequests)
+        .set({
+          status: "accepted",
+          replacementCleanerId: backup.cleanerId,
+          updatedAt: now,
+        })
+        .where(eq(swapRequests.id, swapRequestId));
     });
 
-    await notifyCleaner({
-      cleanerId: originalCleanerId,
-      type: "assignment",
-      title: "Swap approved",
-      message: `Your swap for ${address} was approved. ${backupName} is covering this job.`,
-      jobId: swap.jobId,
-      url: "/cleaner/jobs",
-    });
+    try {
+      await dismissSwapAvailableNotifications(swap.jobId);
+
+      await notifyCleaner({
+        cleanerId: backup.cleanerId,
+        type: "assignment",
+        title: "You are now on this job",
+        message: `${originalName}'s swap was approved. You have moved from backup onto ${address}.`,
+        jobId: swap.jobId,
+        url: "/cleaner/jobs",
+      });
+
+      await notifyCleaner({
+        cleanerId: originalCleanerId,
+        type: "assignment",
+        title: "Swap approved",
+        message: `Your swap for ${address} was approved. ${backupName} is covering this job.`,
+        jobId: swap.jobId,
+        url: "/cleaner/jobs",
+      });
+    } catch (error) {
+      console.error(
+        "[swap] committed backup promotion; notification failed",
+        error,
+      );
+    }
 
     return {
       success: true,
@@ -604,7 +691,9 @@ export async function approveCleanerSwapRequest(
 
   await dismissSwapAvailableNotifications(swap.jobId);
 
-  const result = await triggerUrgentReplacement(swap.jobId);
+  const result = await triggerUrgentReplacement(swap.jobId, {
+    vacatedCleanerId: originalCleanerId,
+  });
 
   await notifyCleaner({
     cleanerId: originalCleanerId,
@@ -625,7 +714,7 @@ export async function approveCleanerSwapRequest(
 
 /** Admin override in the other direction: revoke an open swap. */
 export async function denyCleanerSwapRequest(
-  swapRequestId: string
+  swapRequestId: string,
 ): Promise<{ success: true } | { success: false; message: string }> {
   const swap = await db.query.swapRequests.findFirst({
     where: eq(swapRequests.id, swapRequestId),
@@ -671,7 +760,7 @@ export async function denyCleanerSwapRequest(
  * Housekeeping — safe to run repeatedly.
  */
 export async function expireStaleSwapRequests(
-  reference = new Date()
+  reference = new Date(),
 ): Promise<number> {
   const stale = await db
     .update(swapRequests)
@@ -679,10 +768,14 @@ export async function expireStaleSwapRequests(
     .where(
       and(
         eq(swapRequests.status, "pending"),
-        lt(swapRequests.expiresAt, reference)
-      )
+        lt(swapRequests.expiresAt, reference),
+      ),
     )
-    .returning({ id: swapRequests.id, jobId: swapRequests.jobId, originalCleanerId: swapRequests.originalCleanerId });
+    .returning({
+      id: swapRequests.id,
+      jobId: swapRequests.jobId,
+      originalCleanerId: swapRequests.originalCleanerId,
+    });
 
   for (const swap of stale) {
     const job = await db.query.jobs.findFirst({

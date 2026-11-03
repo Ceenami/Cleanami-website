@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { evaluateResidentialBooking } from "@/lib/services/residential-booking.service";
-import type { ResidentialFormData } from "@/lib/validations/residential";
+import { toPublicResidentialQuote } from "@/lib/pricing/residential";
+import { evaluateResidentialSale } from "@/lib/pricing/residential-sales";
 
 /**
  * Live price + refusal for the residential wizard.
@@ -19,29 +19,32 @@ import type { ResidentialFormData } from "@/lib/validations/residential";
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as ResidentialFormData;
-    const result = await evaluateResidentialBooking(body);
+    const body: unknown = await request.json();
+    const result = evaluateResidentialSale(body);
 
     if (!result.ok) {
       return NextResponse.json({
         refused: true,
         reason: result.reason,
         message: result.error,
-        earliestBookableDate: result.earliestBookableDate ?? null,
       });
     }
 
-    return NextResponse.json({
-      refused: false,
-      priceDetails: result.priceDetails,
-      expectedHours: result.expectedHours,
-      arrivalWindow: result.window.key,
-    });
+    const quote = toPublicResidentialQuote(result.terms);
+    if (quote.arrivalWindowKeys.length === 0) {
+      return NextResponse.json({
+        refused: true,
+        reason: "no_window",
+        message:
+          "This clean cannot finish within our working day. Please contact CleanNami for a custom quote.",
+      });
+    }
+    return NextResponse.json(quote);
   } catch (error) {
     console.error("[POST /api/residential/quote]", error);
     return NextResponse.json(
       { error: "Failed to calculate price" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

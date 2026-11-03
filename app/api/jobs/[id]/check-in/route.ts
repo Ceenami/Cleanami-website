@@ -1,109 +1,44 @@
+import { db } from "@/db";
+import { jobsToCleaners } from "@/db/schemas";
+import { eq } from "drizzle-orm";
 import { executionResponse, executionVisitRequest } from "@/lib/services/job-execution-http";
-import { jobsToCleaners as executionAssignments } from "@/db/schemas";
 import { ExecutionError } from "@/lib/services/job-execution";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { db } from "@/db";
-import { cleaners, evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
+import { z } from "zod";
 import { getAdminAuth } from "@/lib/admin-auth";
+import { JobVisitError, recordJobArrival } from "@/lib/services/job-visit";
 
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const { isAdmin, error: authError } = await getAdminAuth(request);
-  if (!isAdmin) {
+  const { isAdmin, error } = await getAdminAuth(request);
+  if (!isAdmin)
     return NextResponse.json(
-      { error: authError ?? "Unauthorized" },
-      { status: 401 }
+      { error: error ?? "Unauthorized" },
+      { status: 401 },
     );
-  }
-
-  const { id: jobId } = await params;
-
-  if (!jobId) {
-    return new NextResponse("Job ID is required", { status: 400 });
-  }
-
-  const issuedResponse = await executionResponse(jobId, async () => {
-    const assignments = await db.query.jobsToCleaners.findMany({ where: eq(executionAssignments.jobId, jobId) });
+  const { id } = await params;
+  if (!z.uuid().safeParse(id).success)
+    return NextResponse.json({ error: "Invalid job" }, { status: 400 });
+  const issuedResponse = await executionResponse(id, async () => {
+    const assignments = await db.query.jobsToCleaners.findMany({ where: eq(jobsToCleaners.jobId, id) });
     const workers = assignments.filter(a => a.role === "primary");
     const leader = workers.find(a => a.isTeamLeader) ?? (workers.length === 1 ? workers[0] : undefined);
     if (!leader) throw new ExecutionError("Select an unambiguous working lead before recording this visit");
-    return executionVisitRequest(request, jobId, leader.cleanerId, "arrival");
+    return executionVisitRequest(request, id, leader.cleanerId, "arrival");
   });
   if (issuedResponse) return issuedResponse;
-
-  console.log(`[Check-In] Starting for job: ${jobId}`);
-
   try {
-    await db.transaction(async (tx) => {
-      await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for("update");
-      console.log(
-        `[Check-In] Step 1: Finding primary cleaner for job ${jobId}...`
-      );
-      const assignments = await tx
-        .select({ cleanerId: jobsToCleaners.cleanerId })
-        .from(jobsToCleaners)
-        .where(
-          and(
-            eq(jobsToCleaners.jobId, jobId),
-            eq(jobsToCleaners.role, "primary")
-          )
-        );
-
-      const primaryCleanerId = assignments[0]?.cleanerId;
-
-      if (!primaryCleanerId) {
-        console.error(
-          `[Check-In] ERROR: No primary cleaner found for job ${jobId}. Rolling back transaction.`
-        );
-        throw new Error("No primary cleaner found for this job.");
-      }
-
-      console.log(`[Check-In] Found primary cleaner ID: ${primaryCleanerId}`);
-
-      const now = new Date();
-
-      console.log(`[Check-In] Step 2: Updating job status to 'in-progress'.`);
-      await tx
-        .update(jobs)
-        .set({
-          status: "in-progress",
-          updatedAt: now,
-        })
-        .where(eq(jobs.id, jobId));
-
-      console.log(`[Check-In] Step 3: Updating evidence packet timestamp.`);
-      await tx
-        .update(evidencePackets)
-        .set({
-          gpsCheckInTimestamp: now,
-          updatedAt: now,
-        })
-        .where(eq(evidencePackets.jobId, jobId));
-
-      console.log(
-        `[Check-In] Step 4: Updating cleaner ${primaryCleanerId} status to 'on_job'.`
-      );
-      await tx
-        .update(cleaners)
-        .set({ onCallStatus: "on_job" })
-        .where(eq(cleaners.id, primaryCleanerId));
-
-      console.log(
-        `[Check-In] Transaction for job ${jobId} completed successfully.`
-      );
-    });
-
-    return NextResponse.json({ success: true });
+    const { started } = await recordJobArrival({ jobId: id, now: new Date() });
+    return NextResponse.json({ success: true, alreadyCheckedIn: !started });
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
-    console.error(`[Check-In] Critical error for job ${jobId}:`, errorMessage);
-    return NextResponse.json(
-      { error: `Failed to check in: ${errorMessage}` },
-      { status: 500 }
-    );
+    if (error instanceof JobVisitError)
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status },
+      );
+    console.error("[Admin check-in]", error);
+    return NextResponse.json({ error: "Failed to check in" }, { status: 500 });
   }
 }

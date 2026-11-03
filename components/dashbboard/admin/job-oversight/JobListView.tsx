@@ -244,7 +244,7 @@
 //   );
 // };
 
-'use client';
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
@@ -270,6 +270,12 @@ import {
 } from "@/lib/constants/payment-status";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 import { CreateJobModal } from "./CreateJobModal";
+import { JobCardOperations } from "@/components/operations/JobCardOperations";
+import type { AdminJobOperations } from "@/lib/jobs/admin-job-summary";
+import {
+  assignmentRoleLabel,
+  assignmentSourceLabel,
+} from "@/lib/jobs/assignment-audit";
 
 interface AssignedCleaner {
   id: string;
@@ -277,6 +283,7 @@ interface AssignedCleaner {
 }
 
 interface JobRecord {
+  openRestockCount?: number;
   id: string;
   property?: { address: string } | null;
   assignedCleaners: AssignedCleaner[];
@@ -289,15 +296,12 @@ interface JobRecord {
   /** 0035, from the job's frozen snapshot. Null on a vacation-rental job. */
   arrivalWindow?: string | null;
   paymentStatus?: string | null;
+  cleaningLevel?: string | null;
+  operations?: AdminJobOperations | null;
 }
 
 /** the admin job list is filterable by service type. */
 type ServiceTypeFilter = ServiceType | "all";
-
-const SERVICE_TYPE_SHORT: Record<ServiceType, string> = {
-  vacation_rental_subscription: "Vacation Rental",
-  residential_one_time: "Residential",
-};
 
 /**
  * Which end of the customer's history the list is showing.
@@ -327,9 +331,8 @@ interface GetJobsResponse {
   nextPage?: number | null;
 }
 
-type JobStatus = "all" | "unassigned" | "assigned" | "in-progress" | "completed" | "canceled";
-
-
+type JobStatus =
+  "all" | "unassigned" | "assigned" | "in-progress" | "completed" | "canceled";
 
 type JobsQueryKey = readonly [
   string,
@@ -370,7 +373,10 @@ async function fetchJobs(context: FetchJobsContext) {
       params.set("startDate", startOfToday().toISOString());
       params.set("sortByCheckIn", "asc");
     } else {
-      params.set("endDate", new Date(startOfToday().getTime() - 1).toISOString());
+      params.set(
+        "endDate",
+        new Date(startOfToday().getTime() - 1).toISOString(),
+      );
       params.set("sortByCheckIn", "desc");
     }
   } else {
@@ -422,14 +428,23 @@ function WhenCell({ job }: { job: JobRecord }) {
     return (
       <div>
         <p className="text-gray-900">
-          {new Date(job.checkInTime).toLocaleDateString("en-US", { timeZone: "America/New_York" })}
+          {new Date(job.checkInTime).toLocaleDateString("en-US", {
+            timeZone: "America/New_York",
+          })}
         </p>
-        <p className="text-xs text-gray-500">{window.label}</p>
+        <p className="text-xs text-gray-500">{window.label} ET</p>
       </div>
     );
   }
 
-  return <span>{new Date(job.checkInTime).toLocaleString("en-US", { timeZone: "America/New_York" })} ET</span>;
+  return (
+    <span>
+      {new Date(job.checkInTime).toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        timeZoneName: "short",
+      })}
+    </span>
+  );
 }
 
 export const JobListView = () => {
@@ -461,14 +476,22 @@ export const JobListView = () => {
           timeframe,
         },
       ] as const,
-    [statusFilter, searchTerm, serviceTypeFilter, isOwnerPortal, timeframe]
+    [statusFilter, searchTerm, serviceTypeFilter, isOwnerPortal, timeframe],
   );
 
-  const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInfiniteQuery({
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    status,
+  } = useInfiniteQuery({
     queryKey,
     queryFn: fetchJobs,
     initialPageParam: 1,
     getNextPageParam: (lastPage) => lastPage.nextPage,
+    refetchInterval: 30000,
   });
 
   useEffect(() => {
@@ -490,8 +513,12 @@ export const JobListView = () => {
     // ordered them the same way.
     const descending = isOwnerPortal && timeframe === "past";
     return [...merged].sort((a, b) => {
-      const ta = a.checkInTime ? new Date(a.checkInTime).getTime() : Number.MAX_SAFE_INTEGER;
-      const tb = b.checkInTime ? new Date(b.checkInTime).getTime() : Number.MAX_SAFE_INTEGER;
+      const ta = a.checkInTime
+        ? new Date(a.checkInTime).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const tb = b.checkInTime
+        ? new Date(b.checkInTime).getTime()
+        : Number.MAX_SAFE_INTEGER;
       return descending ? tb - ta : ta - tb;
     });
   }, [data, isOwnerPortal, timeframe]);
@@ -567,7 +594,9 @@ export const JobListView = () => {
           <select
             aria-label="Status"
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as JobStatus)}
+            onChange={(event) =>
+              setStatusFilter(event.target.value as JobStatus)
+            }
             className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
           >
             <option value="all">All statuses</option>
@@ -582,28 +611,53 @@ export const JobListView = () => {
 
       <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
         {status === "pending" ? (
-          <p className="p-6 text-center text-sm text-gray-500">Loading jobs...</p>
+          <p className="p-6 text-center text-sm text-gray-500">
+            Loading jobs...
+          </p>
         ) : error ? (
-          <p className="p-6 text-center text-sm text-red-500">Error loading jobs.</p>
+          <p className="p-6 text-center text-sm text-red-500">
+            Error loading jobs.
+          </p>
         ) : jobs.length === 0 ? (
-          <p className="p-6 text-center text-sm text-gray-500">No jobs found.</p>
-        ) : jobs.map((job) => (
-          <details key={job.id} className="group p-4">
-            <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-gray-900">{job.property?.address ?? "Unknown"}</p>
-                <div className="mt-1 text-sm text-gray-500"><WhenCell job={job} /></div>
+          <p className="p-6 text-center text-sm text-gray-500">
+            No jobs found.
+          </p>
+        ) : (
+          jobs.map((job) => (
+            <details key={job.id} className="group p-4">
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-gray-900">
+                    {job.property?.address ?? "Unknown"}
+                  </p>
+                  <div className="mt-1 text-sm text-gray-500">
+                    <WhenCell job={job} />
+                  </div>
+                  {!isOwnerPortal && !!job.openRestockCount && <p className="mt-1 text-xs font-semibold text-teal-800">Restocking · {job.openRestockCount} open</p>}
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}
+                >
+                  {job.status}
+                </span>
+              </summary>
+              <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+                <p>
+                  <span className="text-gray-500">Service: </span>
+                  {getJobDisplay(job).label}
+                </p>
+                <JobCardOperations operations={job.operations} />
+                <p className="font-mono text-xs text-gray-500">{job.id}</p>
+                <Link
+                  href={`${portalPrefix}/job-oversight/${job.id}` as Route}
+                  className="pt-1 font-medium text-teal-700 hover:text-teal-900"
+                >
+                  Details
+                </Link>
               </div>
-              <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>{job.status}</span>
-            </summary>
-            <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
-              <p><span className="text-gray-500">Service: </span>{SERVICE_TYPE_SHORT[job.serviceType ?? "vacation_rental_subscription"]}</p>
-              <p><span className="text-gray-500">Cleaner: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}</p>
-              <p className="font-mono text-xs text-gray-500">{job.id}</p>
-              <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">Details</Link>
-            </div>
-          </details>
-        ))}
+            </details>
+          ))
+        )}
       </div>
 
       <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
@@ -614,31 +668,58 @@ export const JobListView = () => {
                 {/* A raw uuid is an operations tool, not something a customer
                     has any use for. */}
                 {!isOwnerPortal && (
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Job ID
+                  </th>
                 )}
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Property</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cleaner</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Property
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Service
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Cleaner
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Payment
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   {isOwnerPortal ? "When" : "Check-In"}
                 </th>
-                <th className="relative px-6 py-3"><span className="sr-only">Details</span></th>
+                <th className="relative px-6 py-3">
+                  <span className="sr-only">Details</span>
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {status === "pending" ? (
                 <tr>
-                  <td colSpan={columnCount} className="px-6 py-6 text-center text-gray-500">Loading jobs...</td>
+                  <td
+                    colSpan={columnCount}
+                    className="px-6 py-6 text-center text-gray-500"
+                  >
+                    Loading jobs...
+                  </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={columnCount} className="px-6 py-6 text-center text-red-500">Error loading jobs.</td>
+                  <td
+                    colSpan={columnCount}
+                    className="px-6 py-6 text-center text-red-500"
+                  >
+                    Error loading jobs.
+                  </td>
                 </tr>
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={columnCount} className="px-6 py-6 text-center text-gray-500">
+                  <td
+                    colSpan={columnCount}
+                    className="px-6 py-6 text-center text-gray-500"
+                  >
                     {isOwnerPortal
                       ? timeframe === "upcoming"
                         ? "No cleans booked yet."
@@ -651,54 +732,100 @@ export const JobListView = () => {
                   const display = getJobDisplay(job);
                   const payment = getPaymentDisplay(
                     job.status,
-                    job.paymentStatus ?? null
+                    job.paymentStatus ?? null,
                   );
                   return (
-                  <tr key={job.id} className="hover:bg-gray-50">
-                    {!isOwnerPortal && (
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{job.id}</td>
-                    )}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{job.property?.address ?? "Unknown"}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${JOB_TONE_BADGE[display.tone]}`}
-                      >
-                        {display.short}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {job.assignedCleaners.length > 0 ? job.assignedCleaners.map((cleaner) => cleaner.fullName).join(", ") : "Unassigned"}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>
-                        {job.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {/* Null on every job that predates payment tracking. An
+                    <tr key={job.id} className="hover:bg-gray-50">
+                      {!isOwnerPortal && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {job.id}
+                        </td>
+                      )}
+                      <td className="px-6 py-4 text-sm text-gray-500">
+                        {job.property?.address ?? "Unknown"}
+                        {!isOwnerPortal && (
+                          <p className="mt-1 text-xs">
+                            Customer:{" "}
+                            {job.operations?.customerName ?? "Not recorded"}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${JOB_TONE_BADGE[display.tone]}`}
+                        >
+                          {display.short}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {job.operations
+                          ? job.operations.cleaners.length
+                            ? job.operations.cleaners.map((cleaner) => (
+                                <p key={cleaner.id} className="mb-1">
+                                  {cleaner.name}
+                                  <span className="block text-xs">
+                                    {assignmentRoleLabel(cleaner.role)} ·{" "}
+                                    {assignmentSourceLabel(cleaner.source)}
+                                  </span>
+                                </p>
+                              ))
+                            : "Unassigned"
+                          : job.assignedCleaners
+                              .map((cleaner) => cleaner.fullName)
+                              .join(", ") || "Unassigned"}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}
+                        >
+                          {job.status}
+                        </span>
+                        {!isOwnerPortal && !!job.openRestockCount && <p className="mt-2 text-xs font-semibold text-teal-800">Restocking · {job.openRestockCount} open</p>}
+                        {job.operations && (
+                          <div className="mt-2 space-y-1 text-xs whitespace-normal">
+                            <p>Checklist: {job.operations.checklistLabel}</p>
+                            <p>
+                              Evidence: {job.operations.evidenceLabel} ·{" "}
+                              {job.operations.photoCount} photos
+                            </p>
+                            {job.operations.warnings.map((warning) => (
+                              <p key={warning} className="text-amber-800">
+                                {warning}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {/* Null on every job that predates payment tracking. An
                           empty cell is the honest answer there - those jobs are
                           not unpaid, nobody ever recorded a status for them.
                           The PaymentIntent id is admin-only and belongs on the
                           job detail, not in a list either side reads. */}
-                      {payment ? (
-                        <span
-                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${PAYMENT_TONE_BADGE[payment.tone]}`}
+                        {payment ? (
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${PAYMENT_TONE_BADGE[payment.tone]}`}
+                          >
+                            {isOwnerPortal ? payment.customer : payment.admin}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <WhenCell job={job} />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <Link
+                          href={
+                            `${portalPrefix}/job-oversight/${job.id}` as Route
+                          }
+                          className="text-teal-600 hover:text-teal-900"
                         >
-                          {isOwnerPortal ? payment.customer : payment.admin}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <WhenCell job={job} />
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="text-teal-600 hover:text-teal-900">
-                        Details
-                      </Link>
-                    </td>
-                  </tr>
+                          Details
+                        </Link>
+                      </td>
+                    </tr>
                   );
                 })
               )}
@@ -713,7 +840,11 @@ export const JobListView = () => {
           disabled={!hasNextPage || isFetchingNextPage}
           className="rounded-lg bg-teal-600 px-5 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-300"
         >
-          {isFetchingNextPage ? "Loading more..." : hasNextPage ? "Load more" : "No more jobs"}
+          {isFetchingNextPage
+            ? "Loading more..."
+            : hasNextPage
+              ? "Load more"
+              : "No more jobs"}
         </button>
       </div>
     </div>

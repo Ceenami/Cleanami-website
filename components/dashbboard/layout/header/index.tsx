@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 import { SignOutButton } from "@/components/SignOutButton";
 import { AdminNotificationsBell } from "@/components/dashbboard/layout/header/AdminNotificationsBell";
@@ -9,19 +9,20 @@ import { useRef, useState } from "react";
 
 function prettifyPath(path: string) {
   // A regular expression to check if a string is a UUID
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   return path
-    .split('/') // Split the string by the slash
+    .split("/") // Split the string by the slash
     .filter(Boolean) // Remove empty parts from the start
-    .filter(part => !uuidRegex.test(part)) // Filter out any parts that are UUIDs
-    .map(part =>
+    .filter((part) => !uuidRegex.test(part)) // Filter out any parts that are UUIDs
+    .map((part) =>
       part
-        .split('-') // Handle kebab-case by splitting by hyphen
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1)) // Capitalize each word
-        .join(' ')
+        .split("-") // Handle kebab-case by splitting by hyphen
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1)) // Capitalize each word
+        .join(" "),
     )
-    .join(' '); // Join the final parts with a space
+    .join(" "); // Join the final parts with a space
 }
 
 export const Header = () => {
@@ -46,14 +47,14 @@ export const Header = () => {
             className="flex items-center gap-2 rounded-md p-1 text-left hover:bg-gray-100"
           >
             <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center text-white font-bold">
-              {user?.email?.charAt(0) ?? 'U'}
+              {user?.email?.charAt(0) ?? "U"}
             </div>
             <div className="hidden sm:block">
               <span className="text-sm font-medium block">
-                {user?.email ?? ''}
+                {user?.email ?? ""}
               </span>
               <span className="text-xs text-gray-500 block">
-                {user?.user_metadata.role ?? ''}
+                {user?.role ?? ""}
               </span>
             </div>
             <ChevronDownIcon className="h-4 w-4 text-gray-500" />

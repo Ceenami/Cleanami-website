@@ -1,4 +1,6 @@
 import "server-only";
+import type { RoomPhotosMap } from "@/lib/cleaner/evidence";
+import { effectiveChecklist } from "@/lib/services/effective-checklist";
 import { getExecutionEvidence } from "@/lib/services/job-execution";
 import { getExecutionContract } from "@/lib/services/job-execution-contract";
 
@@ -14,16 +16,20 @@ import {
   EVIDENCE_BUCKET,
   createSignedUrls,
 } from "@/lib/storage/signed-url";
-import { buildPayBreakdown } from "@/lib/cleaner/pay-breakdown";
+import {
+  buildPayBreakdown,
+  buildPayBreakdownFromPayout,
+} from "@/lib/cleaner/pay-breakdown";
 import {
   getExpectedChecklistItemsFromSnapshot,
   mergeChecklistItems,
 } from "@/lib/cleaner/evidence";
-import { createChecklistSnapshot, isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
+import { ensureIssuedChecklist } from "@/lib/services/property-checklists";
+import { evidenceDrafts } from "@/db/schemas";
 import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
-import { getEntryMethod } from "@/lib/constants/service-type";
+import { getEntryMethod, getJobDisplay } from "@/lib/constants/service-type";
 
 function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
   if (role === "laundry_lead") return "laundryLead";
@@ -53,12 +59,12 @@ async function signChecklistFiles(
     fileName: string;
     storagePath: string | null;
     sourceUrl: string | null;
-  }[]
+  }[],
 ): Promise<{ id: string; fileName: string; url: string }[]> {
   const uploaded = files.filter((f) => f.storagePath);
   const urls = await createSignedUrls(
     CHECKLISTS_BUCKET,
-    uploaded.map((file) => file.storagePath!)
+    uploaded.map((file) => file.storagePath!),
   );
   let i = 0;
   return files.map((file) => {
@@ -73,13 +79,13 @@ async function signChecklistFiles(
 
 // Room-photo maps hold private-bucket object paths; sign each one for viewing.
 async function signRoomPhotos(
-  roomPhotos: Record<string, string[]>
+  roomPhotos: Record<string, string[]>,
 ): Promise<Record<string, string[]>> {
   const entries = await Promise.all(
     Object.entries(roomPhotos).map(async ([roomKey, paths]) => {
       const urls = await createSignedUrls(EVIDENCE_BUCKET, paths);
       return [roomKey, urls.map((u) => u ?? "")] as const;
-    })
+    }),
   );
   return Object.fromEntries(entries);
 }
@@ -87,6 +93,19 @@ async function signRoomPhotos(
 export type CleanerJobDetail = {
   jobId: string;
   executionProtocol?: string | null;
+  cleanerId: string;
+  assignmentRole: string;
+  serviceLabel: string;
+  scheduledAt: string | null;
+  canWork: boolean;
+  property: {
+    bedCount: number;
+    bathCount: number;
+    latitude: number | null;
+    longitude: number | null;
+    geofenceRadiusMeters: number | null;
+    defaultCheckOutTime: string | null;
+  } | null;
   status: string;
   propertyAddress: string | null;
   arrivalWindow: string | null;
@@ -103,6 +122,7 @@ export type CleanerJobDetail = {
   petsAllowed: boolean;
   /** 0041. Drives the badge and every label below. */
   serviceType: string;
+  cleaningLevel: "standard" | "deep" | null;
   /**
    * 0045 — an admin's manual "this one is a reclean" override, which takes the
    * badge over the service type. Null on every ordinary job. The TIME labels
@@ -155,12 +175,12 @@ export type CleanerJobDetail = {
 
 export async function getCleanerJobDetail(
   cleanerId: string,
-  jobId: string
+  jobId: string,
 ): Promise<CleanerJobDetail | null> {
   const assignment = await db.query.jobsToCleaners.findFirst({
     where: and(
       eq(jobsToCleaners.cleanerId, cleanerId),
-      eq(jobsToCleaners.jobId, jobId)
+      eq(jobsToCleaners.jobId, jobId),
     ),
     with: {
       // Pay is computed at the cleaner's own rate, not a flat default.
@@ -173,6 +193,7 @@ export async function getCleanerJobDetail(
             },
           },
           evidencePacket: true,
+          payouts: true,
         },
       },
     },
@@ -196,10 +217,11 @@ export async function getCleanerJobDetail(
     where: and(
       eq(reliabilityEvents.jobId, jobId),
       eq(reliabilityEvents.cleanerId, cleanerId),
-      inArray(reliabilityEvents.eventType, ["late_arrival", "no_show"])
+      inArray(reliabilityEvents.eventType, ["late_arrival", "no_show"]),
     ),
   });
 
+  job.checklistSnapshot = await effectiveChecklist(jobId, job.checklistSnapshot);
   const executionContract = await getExecutionContract(jobId);
   const checklistFiles = await signChecklistFiles(executionContract ? job.checklistSnapshot?.files ?? [] : property?.checklistFiles ?? []);
 
@@ -208,34 +230,80 @@ export async function getCleanerJobDetail(
   // was previously subtracted from pay as if it were currency.
   const arrivalDelayMinutes = job.evidencePacket?.arrivalDelayMinutes ?? null;
 
-  const payBreakdown = buildPayBreakdown({
-    expectedHours: job.expectedHours,
-    role: assignment.role,
-    urgentBonus: assignment.urgentBonus,
-    laundryLoads: job.addonsSnapshot?.laundryLoads,
-    hourlyRateCents: assignment.cleaner?.hourlyRateCents,
-    arrivalDelayMinutes,
-    latePenaltyReason: lateEvent
-      ? `${lateEvent.eventType.replace("_", " ")} (${lateEvent.notes ?? "reliability event"})`
-      : arrivalDelayMinutes && arrivalDelayMinutes > (executionContract ? 10 : 0)
-        ? `Arrived ${arrivalDelayMinutes} min late`
-        : null,
-  });
+  const storedPayout = job.payouts.find(
+    (p) => p.cleanerId === cleanerId && p.payReceipt,
+  );
+  if (
+    job.addonsSnapshot?.residentialPricing?.ruleVersion === "residential-v2" &&
+    job.payouts.some((p) => p.cleanerId === cleanerId && !p.payReceipt)
+  )
+    throw new Error("Residential v2 payout receipt is missing");
+  const payBreakdown = storedPayout
+    ? buildPayBreakdownFromPayout({
+        amount: Number(storedPayout.amount),
+        payReceipt: storedPayout.payReceipt,
+        urgentBonusAmount: Number(storedPayout.urgentBonusAmount ?? 0),
+        laundryBonusAmount: Number(storedPayout.laundryBonusAmount ?? 0),
+        latePenalty: Number(storedPayout.lateDeductionAmount ?? 0),
+      })
+    : buildPayBreakdown({
+        residentialPricing: job.addonsSnapshot?.residentialPricing,
+        assignmentTerms: assignment.residentialPayTerms,
+        expectedHours: job.expectedHours,
+        role: assignment.role,
+        urgentBonus: assignment.urgentBonus,
+        laundryLoads: job.addonsSnapshot?.laundryLoads,
+        hourlyRateCents:
+          assignment.frozenHourlyRateCents ??
+          assignment.cleaner?.hourlyRateCents,
+        arrivalDelayMinutes,
+        latePenaltyReason: lateEvent
+          ? `${lateEvent.eventType.replace("_", " ")} (${lateEvent.notes ?? "reliability event"})`
+          : arrivalDelayMinutes && arrivalDelayMinutes > (executionContract ? 10 : 0)
+            ? `Arrived ${arrivalDelayMinutes} min late`
+            : null,
+      });
 
   return {
     jobId: job.id,
     executionProtocol: executionContract?.protocol ?? null,
+    cleanerId,
+    assignmentRole: assignment.role,
+    serviceLabel: getJobDisplay({
+      serviceType: job.serviceType,
+      jobLabel: job.jobLabel,
+      cleaningLevel: job.addonsSnapshot?.cleaningLevel,
+    }).label,
+    scheduledAt: job.checkInTime?.toISOString() ?? null,
+    canWork:
+      ["primary", "laundry_lead"].includes(assignment.role) &&
+      ["assigned", "in-progress", "completed_pending_evidence"].includes(
+        job.status ?? "",
+      ),
+    property: property
+      ? {
+          bedCount: property.bedCount,
+          bathCount: Number(property.bathCount),
+          latitude:
+            property.latitude == null ? null : Number(property.latitude),
+          longitude:
+            property.longitude == null ? null : Number(property.longitude),
+          geofenceRadiusMeters: property.geofenceRadiusMeters,
+          defaultCheckOutTime: property.defaultCheckOutTime,
+        }
+      : null,
     status: job.status ?? "assigned",
     propertyAddress: property?.address ?? null,
     arrivalWindow: formatDateTime(job.checkInTime),
     mustFinishBefore: formatDateTime(job.checkOutTime),
     petsAllowed: property?.petsAllowed ?? false,
     serviceType: job.serviceType ?? "vacation_rental_subscription",
+    cleaningLevel: job.addonsSnapshot?.cleaningLevel ?? null,
     jobLabel: job.jobLabel ?? null,
     arrivalWindowLabel:
       job.serviceType === "residential_one_time"
-        ? getArrivalWindow(job.addonsSnapshot?.arrivalWindow ?? undefined)
-            ?.label ?? null
+        ? (getArrivalWindow(job.addonsSnapshot?.arrivalWindow ?? undefined)
+            ?.label ?? null)
         : null,
     entryMethod: property?.entryMethod ?? null,
     entryMethodLabel: getEntryMethod(property?.entryMethod)?.label ?? null,
@@ -259,14 +327,14 @@ export async function getCleanerJobDetail(
 
 export async function getCleanerEvidenceFormData(
   cleanerId: string,
-  jobId: string
+  jobId: string,
 ) {
   const issuedForm = await getExecutionEvidence(jobId, cleanerId);
   if (issuedForm) return issuedForm;
   const assignment = await db.query.jobsToCleaners.findFirst({
     where: and(
       eq(jobsToCleaners.cleanerId, cleanerId),
-      eq(jobsToCleaners.jobId, jobId)
+      eq(jobsToCleaners.jobId, jobId),
     ),
     with: {
       job: {
@@ -286,29 +354,59 @@ export async function getCleanerEvidenceFormData(
 
   const property = assignment.job.property;
   const evidence = assignment.job.evidencePacket;
-  const existingLog = evidence?.checklistLog as
-    | { items?: { id: string; task: string; completed: boolean }[]; roomPhotos?: Record<string, string[]> }
-    | null;
+  const [draft] = await db
+    .select()
+    .from(evidenceDrafts)
+    .where(
+      and(
+        eq(evidenceDrafts.jobId, jobId),
+        eq(evidenceDrafts.cleanerId, cleanerId),
+      ),
+    );
+  const existingLog = (
+    evidence?.finalEvidenceSubmittedAt
+      ? evidence.checklistLog
+      : (draft?.state?.checklistLog ?? evidence?.checklistLog)
+  ) as {
+    items?: { id: string; task: string; completed: boolean }[];
+    roomPhotos?: Record<string, string[]>;
+  } | null;
 
-  const snapshot = isChecklistSnapshot(assignment.job.checklistSnapshot)
-    ? assignment.job.checklistSnapshot
-    : createChecklistSnapshot(property, property.checklistFiles);
-  if (!assignment.job.checklistSnapshot) {
-    await db.update(jobs).set({ checklistSnapshot: snapshot, updatedAt: new Date() }).where(eq(jobs.id, assignment.job.id));
-  }
+  const snapshot = await ensureIssuedChecklist(
+    jobId,
+    {
+      ...property,
+      cleaningLevel: assignment.job.addonsSnapshot?.cleaningLevel,
+    },
+    property.checklistFiles,
+    assignment.job.checklistSnapshot,
+  );
   const checklistFiles = await signChecklistFiles(snapshot.files);
 
   // roomPhotos stores object paths (for submit); previews are signed for <img>.
-  const roomPhotos = existingLog?.roomPhotos ?? {};
+  const roomPhotos: RoomPhotosMap = {};
+  for (const log of [evidence?.checklistLog, existingLog]) {
+    const rooms = (log as { roomPhotos?: RoomPhotosMap } | null)?.roomPhotos ?? {};
+    for (const [room, paths] of Object.entries(rooms))
+      roomPhotos[room] = [...new Set([...(roomPhotos[room] ?? []), ...paths])];
+  }
   const roomPhotoPreviews = await signRoomPhotos(roomPhotos);
 
-  const expectedChecklistItems = getExpectedChecklistItemsFromSnapshot(snapshot);
+  const expectedChecklistItems =
+    getExpectedChecklistItemsFromSnapshot(snapshot);
 
   return {
     jobId,
     queueOwner: cleanerId,
     evidenceOpen: !evidence?.finalEvidenceSubmittedAt &&
       ["in-progress", "completed_pending_evidence"].includes(assignment.job.status ?? ""),
+    cleanerId,
+    canCapture:
+      assignment.job.status === "in-progress" &&
+      !!evidence?.gpsCheckInTimestamp &&
+      !evidence.gpsCheckOutTimestamp,
+    explanations: draft?.explanations ?? {},
+    roomRequirements: snapshot.photoRequirements!,
     property: {
       bedCount: property.bedCount,
       bathCount: property.bathCount,
@@ -319,18 +417,18 @@ export async function getCleanerEvidenceFormData(
     checklistFiles,
     checklistItems: mergeChecklistItems(
       expectedChecklistItems,
-      existingLog?.items ?? []
+      existingLog?.items ?? [],
     ),
     roomPhotos,
     roomPhotoPreviews,
-    cleanerNotes: evidence?.cleanerNotes ?? "",
-    isSubmitted: evidence?.isChecklistComplete ?? false,
+    cleanerNotes: draft?.state?.cleanerNotes ?? evidence?.cleanerNotes ?? "",
+    isSubmitted: !!evidence?.finalEvidenceSubmittedAt,
   };
 }
 
 export async function getCleanerInProgressJobIds(
   cleanerId: string,
-  excludeJobId?: string
+  excludeJobId?: string,
 ) {
   const conditions = [
     eq(jobsToCleaners.cleanerId, cleanerId),

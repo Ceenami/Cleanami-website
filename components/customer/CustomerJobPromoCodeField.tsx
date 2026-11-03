@@ -41,6 +41,9 @@ export function CustomerJobPromoCodeField({
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    await queryClient.invalidateQueries({
+      queryKey: ["customer-job-report", jobId],
+    });
   }
 
   async function handleApply() {
@@ -66,7 +69,9 @@ export function CustomerJobPromoCodeField({
       setCode("");
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not apply that promo code.");
+      setError(
+        err instanceof Error ? err.message : "Could not apply that promo code.",
+      );
     } finally {
       setLoading(false);
     }
@@ -87,7 +92,11 @@ export function CustomerJobPromoCodeField({
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove that promo code.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not remove that promo code.",
+      );
     } finally {
       setLoading(false);
     }
@@ -109,7 +118,11 @@ export function CustomerJobPromoCodeField({
             {loading ? "Removing…" : "Remove"}
           </button>
         </div>
-        {error && <span className="max-w-xs text-right text-xs text-red-600">{error}</span>}
+        {error && (
+          <span className="max-w-xs text-right text-xs text-red-600">
+            {error}
+          </span>
+        )}
       </div>
     );
   }
@@ -124,7 +137,11 @@ export function CustomerJobPromoCodeField({
         >
           Have a promo code?
         </button>
-        {message && <span className="max-w-xs text-right text-xs text-green-700">{message}</span>}
+        {message && (
+          <span className="max-w-xs text-right text-xs text-green-700">
+            {message}
+          </span>
+        )}
       </div>
     );
   }
@@ -171,7 +188,11 @@ export function CustomerJobPromoCodeField({
           Cancel
         </button>
       </div>
-      {error && <span className="max-w-xs text-right text-xs text-red-600">{error}</span>}
+      {error && (
+        <span className="max-w-xs text-right text-xs text-red-600">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

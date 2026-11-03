@@ -15,9 +15,18 @@ import {
 } from "@/lib/constants/service-type";
 import { cn } from "@/lib/utils";
 
-const roleLabels: Record<CleanerJobDetail["role"], { label: string; className: string }> = {
-  teamLeader: { label: "Team Leader", className: "bg-indigo-100 text-indigo-800" },
-  laundryLead: { label: "Laundry Lead", className: "bg-amber-100 text-amber-900" },
+const roleLabels: Record<
+  CleanerJobDetail["role"],
+  { label: string; className: string }
+> = {
+  teamLeader: {
+    label: "Team Leader",
+    className: "bg-indigo-100 text-indigo-800",
+  },
+  laundryLead: {
+    label: "Laundry Lead",
+    className: "bg-amber-100 text-amber-900",
+  },
   primary: { label: "Primary", className: "bg-slate-100 text-slate-700" },
   backup: { label: "Backup", className: "bg-slate-100 text-slate-600" },
 };
@@ -63,6 +72,7 @@ const statusLabels: Record<string, string> = {
 export function JobDetailClient({ jobId }: { jobId: string }) {
   const searchParams = useSearchParams();
   const evidenceSubmitted = searchParams.get("evidenceSubmitted") === "1";
+  const evidenceSaved = searchParams.get("evidenceSaved") === "1";
 
   const [job, setJob] = useState<CleanerJobDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,7 +111,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
             accuracy: pos.coords.accuracy ?? null,
           }),
         () => resolve(null),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
       );
     });
   }
@@ -140,7 +150,9 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
       if (!response.ok) {
         const missing = data.missing?.join(", ");
         throw new Error(
-          missing ? `${data.error}: ${missing}` : (data.error ?? "Check-out failed")
+          missing
+            ? `${data.error}: ${missing}`
+            : (data.error ?? "Check-out failed"),
         );
       }
       setJob(data.job);
@@ -178,12 +190,11 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
   // of a turnover is scheduled exactly like a turnover.
   const display = getJobDisplay(job);
   const hasAccessInfo = Boolean(
-    job.entryMethodLabel || job.entryInstructions || job.parkingInstructions
+    job.entryMethodLabel || job.entryInstructions || job.parkingInstructions,
   );
-  const workingRole = !job.executionProtocol || job.role !== "backup";
+  const workingRole = ["primary", "laundry_lead"].includes(job.assignmentRole);
   const canCheckIn = job.status === "assigned" && workingRole;
-  const canCheckOut =
-    workingRole && job.status === "in-progress" && (!!job.executionProtocol || job.evidence.hasSubmitted);
+  const canCheckOut = workingRole && job.status === "in-progress";
   const showEvidenceLink =
     workingRole && (job.status === "in-progress" || job.status === "completed_pending_evidence");
 
@@ -197,9 +208,15 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
         Back to jobs
       </Link>
 
-      {evidenceSubmitted && (
+      {(evidenceSubmitted ||
+        evidenceSaved ||
+        job.status === "completed_pending_evidence") && (
         <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-          Evidence submitted — your payout is being processed.
+          {job.status === "completed_pending_evidence"
+            ? "Departure recorded. Submit the final evidence packet to release your payout."
+            : job.status === "in-progress"
+              ? "Evidence saved. Check out, then submit the final evidence packet to release your payout."
+              : "Final evidence submitted — your payout is being processed."}
         </div>
       )}
 
@@ -213,7 +230,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
               <span
                 className={cn(
                   "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                  JOB_TONE_BADGE[display.tone]
+                  JOB_TONE_BADGE[display.tone],
                 )}
               >
                 {display.short}
@@ -228,7 +245,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
               <span
                 className={cn(
                   "inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                  role.className
+                  role.className,
                 )}
               >
                 {role.label}
@@ -264,7 +281,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
                   </span>
                 </>
               ) : (
-                job.arrivalWindow ?? "TBD"
+                (job.arrivalWindow ?? "TBD")
               )}
             </dd>
           </div>
@@ -419,9 +436,11 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-brand py-3 text-sm font-semibold text-brand hover:bg-brand/5"
           >
             <ClipboardCheck className="h-4 w-4" />
-            {job.evidence.hasSubmitted
-              ? "View / edit evidence"
-              : "Submit evidence packet"}
+            {job.status === "completed_pending_evidence"
+              ? "Finalize evidence packet"
+              : job.evidence.hasSubmitted
+                ? "View / edit evidence"
+                : "Submit evidence packet"}
           </Link>
         )}
 

@@ -14,7 +14,7 @@ import {
   type HotTubTimeAdditions,
 } from "@/lib/pricing/staffing-logic";
 import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
-import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
+import { issuePropertyChecklist } from "@/lib/services/property-checklists";
 
 type NewJob = typeof jobs.$inferInsert;
 type DrizzleDb = Database;
@@ -40,7 +40,7 @@ const createFloridaDate = (date: Date, timeStr: string): Date => {
   const day = normalizedDate.getUTCDate();
 
   const dateOnlyStr = `${year}-${String(month).padStart(2, "0")}-${String(
-    day
+    day,
   ).padStart(2, "0")}`;
 
   const localTimeStr = `${dateOnlyStr}${timeStr}`;
@@ -92,7 +92,12 @@ type PropertyDetails = {
   hotTubServiceLevel: boolean;
   hotTubDrainCadence: string | null;
   useDefaultChecklist: boolean;
-  checklistFiles: { id: string; fileName: string; storagePath: string | null; sourceUrl: string | null }[];
+  checklistFiles: {
+    id: string;
+    fileName: string;
+    storagePath: string | null;
+    sourceUrl: string | null;
+  }[];
 };
 
 type CalculatedJobDetails = ReturnType<typeof calculateJobStaffing>;
@@ -145,7 +150,7 @@ export class ICalService {
         propertyId,
         subscriptionStartDate,
       },
-      property
+      property,
     );
 
     console.log(`Sync complete. Total jobs synced: ${result.totalSynced}`);
@@ -153,7 +158,7 @@ export class ICalService {
   }
 
   private async _getContext(
-    args: SyncInput
+    args: SyncInput,
   ): Promise<{ success: boolean; data?: SyncContext; message?: string }> {
     const { subscriptionId, propertyId } = args;
 
@@ -195,7 +200,7 @@ export class ICalService {
       const activeSubscription = await this.db.query.subscriptions.findFirst({
         where: and(
           eq(schema.subscriptions.propertyId, propertyId),
-          eq(schema.subscriptions.status, "active")
+          eq(schema.subscriptions.status, "active"),
         ),
       });
 
@@ -227,7 +232,7 @@ export class ICalService {
       const icsData = await fetch(url).then((res) => res.text());
       const calendarData = await webcal.async.parseICS(icsData);
       return Object.values(calendarData).filter(
-        (e) => e.type === "VEVENT"
+        (e) => e.type === "VEVENT",
       ) as VEvent[];
     } catch (error) {
       console.error("Error fetching or parsing calendar:", error);
@@ -238,7 +243,7 @@ export class ICalService {
   private _isHotTubDeepCleanDue(
     jobDate: Date,
     startDate: Date,
-    cadence: string | null
+    cadence: string | null,
   ): boolean {
     if (!cadence) return false;
 
@@ -278,13 +283,13 @@ export class ICalService {
     property: PropertyDetails,
     jobDate: Date,
     subscriptionStartDate: Date,
-    hotTubTimeAdditions?: HotTubTimeAdditions | null
+    hotTubTimeAdditions?: HotTubTimeAdditions | null,
   ): CalculatedJobDetails {
     const isDeepClean = property.hotTubServiceLevel
       ? this._isHotTubDeepCleanDue(
           jobDate,
           subscriptionStartDate,
-          property.hotTubDrainCadence
+          property.hotTubDrainCadence,
         )
       : false;
 
@@ -306,11 +311,11 @@ export class ICalService {
       propertyId: string;
       subscriptionStartDate: Date;
     },
-    property: PropertyDetails
+    property: PropertyDetails,
   ) {
     // Sort events
     const sortedEvents = [...events].sort(
-      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
     );
 
     // "Enforce minimum 7-day buffer before first clean."
@@ -326,6 +331,10 @@ export class ICalService {
 
     // Loaded once for the whole batch rather than per generated job.
     const hotTubTimeAdditions = await loadHotTubTimeAdditions();
+    const issuedChecklist = await issuePropertyChecklist(
+      { ...property, id: context.propertyId },
+      property.checklistFiles,
+    );
 
     const existingRows = await this.db.select({ uid: jobs.calendarEventUid }).from(jobs).where(eq(jobs.propertyId, context.propertyId));
     const existingKeys = new Set(existingRows.map(j => j.uid));
@@ -343,7 +352,7 @@ export class ICalService {
         property,
         jobStartTime,
         context.subscriptionStartDate,
-        hotTubTimeAdditions
+        hotTubTimeAdditions,
       );
 
       // "Deduplicate jobs using (UID + end_date)"
@@ -382,7 +391,7 @@ export class ICalService {
           offSiteLaundryHours: jobDetails.offSiteLaundryHours,
           hotTubHours: jobDetails.hotTubHours,
         },
-        checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
+        checklistSnapshot: issuedChecklist,
       }];
     });
 

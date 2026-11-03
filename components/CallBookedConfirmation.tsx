@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckCircle, Mail, ArrowRight } from "lucide-react";
+import { createPortal } from "react-dom";
 
 interface CallBookedConfirmationProps {
   /** User's email for display */
@@ -16,7 +17,9 @@ export function CallBookedConfirmation({
   onContinue,
   onDismiss,
 }: CallBookedConfirmationProps) {
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex justify-center items-center z-[60] p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-6">
         {/* Success icon */}
@@ -68,6 +71,7 @@ export function CallBookedConfirmation({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

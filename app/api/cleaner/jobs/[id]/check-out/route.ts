@@ -2,7 +2,7 @@ import { executionResponse, executionVisitRequest } from "@/lib/services/job-exe
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
-import { evidencePackets, jobs, jobsToCleaners } from "@/db/schemas";
+import { jobsToCleaners } from "@/db/schemas";
 import {
   cleanerAuthErrorStatus,
   getCleanerAuth,
@@ -15,6 +15,7 @@ import {
   type DeviceLocation,
 } from "@/lib/services/gps/geofence";
 import { and, eq } from "drizzle-orm";
+import { JobVisitError, recordJobDeparture } from "@/lib/services/job-visit";
 
 /** Statuses a job can only be in once it has already been checked out of. */
 const ALREADY_CHECKED_OUT_STATUSES = new Set([
@@ -33,25 +34,32 @@ const locationSchema = z
 
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   const { id: jobId } = await params;
-  const { error: assignmentError } = await requireCleanerJobAssignment(
-    cleanerId,
-    jobId
-  );
+  const { assignment: accessAssignment, error: assignmentError } =
+    await requireCleanerJobAssignment(cleanerId, jobId);
 
   if (assignmentError) {
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
+
+  if (
+    !accessAssignment ||
+    !["primary", "laundry_lead"].includes(accessAssignment.role)
+  )
+    return NextResponse.json(
+      { error: "Only the working team may record departure" },
+      { status: 403 },
+    );
 
   const issuedResponse = await executionResponse(jobId, async () => ({ ...await executionVisitRequest(request, jobId, cleanerId, "departure"), job: await getCleanerJobDetail(cleanerId, jobId) }));
   if (issuedResponse) return issuedResponse;
@@ -60,7 +68,7 @@ export async function POST(
     const assignment = await db.query.jobsToCleaners.findFirst({
       where: and(
         eq(jobsToCleaners.cleanerId, cleanerId),
-        eq(jobsToCleaners.jobId, jobId)
+        eq(jobsToCleaners.jobId, jobId),
       ),
       with: {
         job: {
@@ -100,7 +108,7 @@ export async function POST(
     if (job.status !== "in-progress") {
       return NextResponse.json(
         { error: "Check in before completing this job." },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -111,7 +119,7 @@ export async function POST(
     try {
       const rawBody = await request.json();
       const parsed = locationSchema.safeParse(
-        rawBody?.location ?? rawBody ?? null
+        rawBody?.location ?? rawBody ?? null,
       );
       if (parsed.success && parsed.data) device = parsed.data;
     } catch {
@@ -125,40 +133,28 @@ export async function POST(
     // requirement, 2026-08). Do not "fix" this for symmetry with check-in.
     const geofence = await evaluateGeofence(property.id, device);
 
-    await db.transaction(async (tx) => {
-      await tx
-        .update(jobs)
-        .set({
-          // Physical departure is not final evidence submission. Keep payment
-          // blocked until PATCH /evidence validates the packet and moves this
-          // job to awaiting_capture.
-          status: "completed_pending_evidence",
-          checkOutTime: now,
-          updatedAt: now,
-        })
-        .where(eq(jobs.id, jobId));
-
-      if (evidence) {
-        await tx
-          .update(evidencePackets)
-          .set({
-            gpsCheckOutTimestamp: now,
-            // Evidence may be submitted later. Its status remains incomplete
-            // or pending_review until the final submission route validates it.
-            updatedAt: now,
-            checkOutLatitude: device ? device.latitude.toString() : null,
-            checkOutLongitude: device ? device.longitude.toString() : null,
-            checkOutAccuracyMeters:
-              device?.accuracy != null ? device.accuracy.toString() : null,
-            checkOutDistanceMiles:
-              geofence.distanceMiles != null
-                ? geofence.distanceMiles.toString()
-                : null,
-            checkOutWithinGeofence: geofence.withinGeofence,
-          })
-          .where(eq(evidencePackets.jobId, jobId));
-      }
+    const { departed } = await recordJobDeparture({
+      jobId,
+      cleanerId,
+      now,
+      gpsFields: {
+        checkOutLatitude: device ? device.latitude.toString() : null,
+        checkOutLongitude: device ? device.longitude.toString() : null,
+        checkOutAccuracyMeters:
+          device?.accuracy != null ? device.accuracy.toString() : null,
+        checkOutDistanceMiles:
+          geofence.distanceMiles != null
+            ? geofence.distanceMiles.toString()
+            : null,
+        checkOutWithinGeofence: geofence.withinGeofence,
+      },
     });
+    if (!departed)
+      return NextResponse.json({
+        success: true,
+        alreadyCheckedOut: true,
+        job: await getCleanerJobDetail(cleanerId, jobId),
+      });
 
     if (device) {
       await recordGpsLog({
@@ -176,10 +172,9 @@ export async function POST(
     const updatedJob = await getCleanerJobDetail(cleanerId, jobId);
     return NextResponse.json({ success: true, job: updatedJob });
   } catch (err) {
+    if (err instanceof JobVisitError)
+      return NextResponse.json({ error: err.message }, { status: err.status });
     console.error("[POST /api/cleaner/jobs/[id]/check-out]", err);
-    return NextResponse.json(
-      { error: "Failed to check out" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to check out" }, { status: 500 });
   }
 }

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { PricingService } from "@/lib/services/pricing.service";
+import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
 import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import {
@@ -109,6 +110,9 @@ export async function quoteFirstCleanChargeCents(
   if (priceDetails.laundryLoadsMissing) {
     return { ok: false, error: LAUNDRY_LOADS_REQUIRED_MESSAGE };
   }
+
+  const refusal = rentalQuoteRefusal(priceDetails, normalized);
+  if (refusal) return { ok: false, error: refusal };
 
   const priceBeforeDiscountsCents = Math.round(priceDetails.totalPerClean * 100);
 

@@ -8,7 +8,15 @@ import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { CancellationDetectionService } from "@/lib/services/cancellation-detection/cancellationDetection.service";
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 import { assertCronAuth } from "@/lib/auth/cron-auth";
-import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
+import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
+import {
+  buildRentalCharge,
+  readRentalCharge,
+  rentalJobPricingInput,
+  RentalPricingError,
+} from "@/lib/pricing/rental-charge";
+import { freezeRentalCharge } from "@/lib/services/payment/freeze-rental-charge";
+import { authorizeRentalCharge } from "@/lib/services/payment/rental-authorization";
 import { SKIPPED_PAYMENT_INTENT_ID } from "@/lib/billing/customer-billing";
 import { appendJobNote } from "@/lib/jobs/job-notes";
 import {
@@ -71,6 +79,8 @@ export async function POST(req: NextRequest) {
         propertyData: properties,
         stripeCustomerId: customers.stripeCustomerId,
         checkOutTime: jobs.checkOutTime,
+        addonsSnapshot: jobs.addonsSnapshot,
+        rentalCharge: jobs.rentalCharge,
         // Existing notes, so the skip-payment branch can append rather than
         // clobber whatever seeding/reconciliation already recorded.
         notes: jobs.notes,
@@ -125,142 +135,82 @@ export async function POST(req: NextRequest) {
     for (const job of jobsToProcess) {
       const result = await (async () => {
       try {
-        // Transform property data to match pricing service's expected format
-        const pricingInput = buildRecurringPricingInput(
-          job.propertyData,
-          job.subscriptionMonths
-        );
-
-        const priceDetails = await pricingService.calculatePrice(
-          pricingInput as any
-        );
-        const amountInCents = Math.round(priceDetails.totalPerClean * 100);
-
-        console.log(
-          `Job ${job.jobId}: Calculated price $${priceDetails.totalPerClean} (${amountInCents} cents)`
-        );
-
-        // CHANGED: Logic to skip payment for specific owners/customers
-        if (job.skipPayment) {
-          console.log(
-            `Job ${job.jobId}: Customer marked for skip_payment. Bypassing Stripe.`
+        let charge = readRentalCharge(job.rentalCharge);
+        if (!charge) {
+          const pricingInput = rentalJobPricingInput(
+            job.propertyData, job.subscriptionMonths, job.addonsSnapshot,
           );
+          const priceDetails = await pricingService.calculatePrice(pricingInput);
+          const refusal = rentalQuoteRefusal(priceDetails, pricingInput);
+          if (refusal) throw new RentalPricingError(refusal);
+          const candidate = buildRentalCharge(priceDetails, job.addonsSnapshot, job.skipPayment === true);
+          let expectedPromoCodeId: string | null = null;
 
-          // We mark it as "authorized" so the system treats it as a valid job,
-          // but we use a specialized ID so you know no money was moved. Capture
-          // recognises that sentinel and pays the cleaner without calling Stripe
-          // (see isSkippedPaymentIntent) — do not swap it for a truthy stand-in.
-          await db
-            .update(jobs)
-            .set({
+          // Read the current promo once, then freeze both its original amount
+          // and final provider amount before authorizing. Term discounts are
+          // already inside perCleanCents; the due drain is added afterward.
+          if (!candidate.skippedPayment) {
+            const freshJob = await db.query.jobs.findFirst({
+              where: eq(jobs.id, job.jobId), columns: { promoCodeId: true },
+            });
+            expectedPromoCodeId = freshJob?.promoCodeId ?? null;
+            if (freshJob?.promoCodeId) {
+              const { evaluation } = await resolvePromoCodeById(
+                freshJob.promoCodeId, candidate.amountCents, job.customerEmail,
+              );
+              if (evaluation.valid) {
+                candidate.chargeAmountCents = evaluation.finalAmountCents;
+                candidate.promo = {
+                  promoCodeId: freshJob.promoCodeId, code: evaluation.code,
+                  discountAmountCents: evaluation.discountCents,
+                };
+              } else {
+                console.warn(`[pre-authorize] job ${job.jobId}: applied promo is no longer valid (${evaluation.reason}) — charging full price`);
+              }
+            }
+          }
+          charge = await freezeRentalCharge(db, job.jobId, candidate, expectedPromoCodeId);
+          if (!charge) return { jobId: job.jobId, status: "already_processed" };
+        }
+        const amountInCents = charge.amountCents;
+        const chargeAmountCents = charge.chargeAmountCents;
+        const promoToRecord = charge.promo;
+
+        if (charge.skippedPayment) {
+          const skipped = await db.transaction(async (tx) => {
+            const [current] = await tx.select().from(jobs)
+              .where(eq(jobs.id, job.jobId)).for("update");
+            if (!current || !["unassigned", "assigned"].includes(current.status ?? "") ||
+                current.paymentIntentId || current.paymentStatus) return false;
+            await tx.update(jobs).set({
               paymentIntentId: SKIPPED_PAYMENT_INTENT_ID,
               paymentStatus: "authorized",
-              notes: appendJobNote(
-                job.notes,
-                `[System] Payment skipped (Owner/VIP). Value: $${priceDetails.totalPerClean}`
-              ),
-            })
-            .where(eq(jobs.id, job.jobId));
-
+              notes: appendJobNote(current.notes, `[System] Payment skipped (Owner/VIP). Value: $${(amountInCents / 100).toFixed(2)}`),
+            }).where(eq(jobs.id, job.jobId));
+            return true;
+          });
+          if (!skipped) return { jobId: job.jobId, status: "already_processed" };
           return { jobId: job.jobId, status: "skipped_payment" };
         }
-
-        // --- Standard Stripe Flow ---
-
-        if (!job.stripeCustomerId) {
+        if (!job.stripeCustomerId)
           throw new Error(`Job ${job.jobId} is missing a Stripe Customer ID.`);
-        }
 
-        // Stripe minimum charge is 50 cents for USD. Checked against the full,
-        // undiscounted price — a promo code must never mask a misconfigured
-        // property by pushing a pre-discount amount under this floor.
-        if (amountInCents < 50) {
-          throw new Error(
-            `Calculated amount ($${priceDetails.totalPerClean}) is below Stripe's minimum charge of $0.50. Check property pricing configuration.`
-          );
-        }
-
-        // Customer-applied promo code for this specific clean (task:
-        // customer-entered promo codes on upcoming cleans). Re-read fresh
-        // here, right before charging, rather than trusting only the earlier
-        // batch SELECT, to shrink the window between a customer applying/
-        // removing a code and this cron actually processing the job.
-        let chargeAmountCents = amountInCents;
-        let promoToRecord: {
-          promoCodeId: string;
-          code: string;
-          discountAmountCents: number;
-          finalAmountCents: number;
-        } | null = null;
-
-        const freshJob = await db.query.jobs.findFirst({
-          where: eq(jobs.id, job.jobId),
-          columns: { promoCodeId: true },
+        const paymentIntent = await db.transaction(async (tx) => {
+          const [current] = await tx.select().from(jobs)
+            .where(eq(jobs.id, job.jobId)).for("update");
+          // Cancellation holds this same lock through provider settlement.
+          if (!current || !["unassigned", "assigned"].includes(current.status ?? "") ||
+              current.paymentIntentId || current.paymentStatus) return null;
+          const frozen = readRentalCharge(current.rentalCharge);
+          if (!frozen || frozen.skippedPayment)
+            throw new RentalPricingError("Rental authorization requires its frozen charge");
+          const intent = await authorizeRentalCharge(stripe, job.jobId, job.stripeCustomerId!, frozen);
+          await tx.update(jobs).set({ paymentIntentId: intent.id,
+            paymentStatus: intent.status === "succeeded" ? "captured" : "authorized",
+          }).where(eq(jobs.id, job.jobId));
+          return intent;
         });
-
-        if (freshJob?.promoCodeId) {
-          const { evaluation } = await resolvePromoCodeById(
-            freshJob.promoCodeId,
-            amountInCents,
-            job.customerEmail
-          );
-
-          if (evaluation.valid) {
-            chargeAmountCents = evaluation.finalAmountCents;
-            promoToRecord = {
-              promoCodeId: freshJob.promoCodeId,
-              code: evaluation.code,
-              discountAmountCents: evaluation.discountCents,
-              finalAmountCents: evaluation.finalAmountCents,
-            };
-          } else {
-            // Fail OPEN on the discount, never on the charge: a stale promo
-            // application (deactivated/expired/exhausted since applied) must
-            // not block a real clean from being paid for.
-            console.warn(
-              `[pre-authorize] job ${job.jobId}: applied promo code no longer valid (${evaluation.reason}) — charging full price`
-            );
-          }
-        }
-
-        const paymentMethods = await stripe.paymentMethods.list({
-          customer: job.stripeCustomerId,
-          type: "card",
-        });
-
-        if (paymentMethods.data.length === 0) {
-          throw new Error(
-            `No saved payment method found for customer ${job.stripeCustomerId}`
-          );
-        }
-        const paymentMethodId = paymentMethods.data[0].id;
-
-        const paymentIntent = await stripe.paymentIntents.create(
-          {
-            amount: chargeAmountCents,
-            currency: "usd",
-            customer: job.stripeCustomerId,
-            payment_method: paymentMethodId,
-            capture_method: "manual",
-            confirm: true,
-            automatic_payment_methods: {
-              enabled: true,
-              allow_redirects: "never",
-            },
-            metadata: { jobId: job.jobId },
-          },
-          // Deterministic key: a retried pre-authorize for the same job never
-          // creates a second authorization / hold (2.2).
-          { idempotencyKey: `preauth_${job.jobId}` }
-        );
-
-        await db
-          .update(jobs)
-          .set({
-            paymentIntentId: paymentIntent.id,
-            paymentStatus: "authorized",
-          })
-          .where(eq(jobs.id, job.jobId));
+        if (!paymentIntent) return { jobId: job.jobId, status: "already_processed" };
 
         if (promoToRecord) {
           await recordPromoRedemption({
@@ -273,20 +223,27 @@ export async function POST(req: NextRequest) {
             paymentIntentId: paymentIntent.id,
             originalAmountCents: amountInCents,
             discountAmountCents: promoToRecord.discountAmountCents,
-            finalAmountCents: promoToRecord.finalAmountCents,
+            finalAmountCents: chargeAmountCents,
           });
         }
 
         return { jobId: job.jobId, status: "success" };
       } catch (error: any) {
         console.error(`Failed to process job ${job.jobId}:`, error.message);
-        await db
+        const failed = await db
           .update(jobs)
           .set({
             paymentStatus: "failed",
-            notes: error.message,
+            notes: appendJobNote(job.notes, error.message),
           })
-          .where(eq(jobs.id, job.jobId));
+          .where(and(eq(jobs.id, job.jobId), ne(jobs.status, "canceled"), isNull(jobs.paymentIntentId)))
+          .returning({ id: jobs.id });
+        if (!failed.length) return { jobId: job.jobId, status: "already_processed" };
+
+        // A pricing/configuration refusal is an office review, not a declined
+        // customer card. Persist the failure without sending a card-failure email.
+        if (error instanceof RentalPricingError)
+          return { jobId: job.jobId, status: "failed", error: error.message };
 
         // Notify the customer their payment failed (best-effort).
         try {

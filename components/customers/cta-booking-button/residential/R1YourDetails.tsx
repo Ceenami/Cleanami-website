@@ -7,12 +7,10 @@ interface Props {
   formData: ResidentialFormData;
   setFormData: React.Dispatch<React.SetStateAction<ResidentialFormData>>;
   errors: Record<string, string[] | undefined>;
-  /** Present only when the service-type question is enabled. */
-  onChangeServiceType?: () => void;
 }
 
 const inputClass =
-  "block w-full px-3 py-2 border text-gray-800 rounded-md shadow-sm placeholder-gray-400 focus:outline-none sm:text-sm focus:ring-brand focus:border-brand";
+  "block min-h-11 w-full px-3 py-2 border text-gray-800 rounded-md shadow-sm placeholder-gray-400 focus:outline-none sm:text-sm focus:ring-brand focus:border-brand";
 
 /**
  * R1 — your details. The same four fields the vacation-rental wizard's step 1
@@ -26,7 +24,6 @@ export const R1YourDetails = ({
   formData,
   setFormData,
   errors,
-  onChangeServiceType,
 }: Props) => {
   const set = (patch: ResidentialFormData) =>
     setFormData((prev) => ({ ...prev, ...patch }));
@@ -48,6 +45,8 @@ export const R1YourDetails = ({
           id="name"
           name="name"
           type="text"
+          autoComplete="name"
+          aria-invalid={!!errors.name}
           placeholder="Jane Doe"
           value={formData.name ?? ""}
           onChange={(e) => set({ name: e.target.value })}
@@ -65,6 +64,8 @@ export const R1YourDetails = ({
             id="email"
             name="email"
             type="email"
+            autoComplete="email"
+            aria-invalid={!!errors.email}
             placeholder="jane@example.com"
             value={formData.email ?? ""}
             onChange={(e) => set({ email: e.target.value })}
@@ -83,6 +84,8 @@ export const R1YourDetails = ({
             id="emailConfirm"
             name="emailConfirm"
             type="email"
+            autoComplete="off"
+            aria-invalid={!!errors.emailConfirm}
             placeholder="jane@example.com"
             value={formData.emailConfirm ?? ""}
             onChange={(e) => set({ emailConfirm: e.target.value })}
@@ -105,6 +108,8 @@ export const R1YourDetails = ({
           id="phoneNumber"
           name="phoneNumber"
           type="tel"
+          autoComplete="tel"
+          aria-invalid={!!errors.phoneNumber}
           placeholder="(386) 555-0142"
           value={formData.phoneNumber ?? ""}
           onChange={(e) => set({ phoneNumber: e.target.value })}
@@ -121,21 +126,6 @@ export const R1YourDetails = ({
         message="Fields are required to proceed."
       />
 
-      {/* One-way inside a session: switching resets the form rather than
-          carrying residential answers into the vacation-rental branch. */}
-      {onChangeServiceType && (
-        <p className="text-sm text-gray-500">
-          Booking turnovers for a vacation rental instead?{" "}
-          <button
-            type="button"
-            onClick={onChangeServiceType}
-            className="font-medium text-brand underline hover:no-underline"
-          >
-            Change cleaning type
-          </button>{" "}
-          — this starts the form again.
-        </p>
-      )}
     </div>
   );
 };

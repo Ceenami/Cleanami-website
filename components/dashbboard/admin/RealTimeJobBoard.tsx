@@ -15,7 +15,11 @@ import { JobsWithDetails } from "@/lib/queries/jobs";
 import { createClient } from "@/lib/supabase/client";
 import { GetJobsResponse } from "@/app/api/jobs/route";
 import { GetJobStatsResponse } from "@/app/api/jobs/stats/route";
-import { getDashboardJobDateRange, DASHBOARD_FUTURE_DAYS, DASHBOARD_PAST_DAYS } from "@/lib/queries/dashboard-job-window";
+import {
+  getDashboardJobDateRange,
+  DASHBOARD_FUTURE_DAYS,
+  DASHBOARD_PAST_DAYS,
+} from "@/lib/queries/dashboard-job-window";
 import { KpiCard } from "./ui/KpiCard";
 import { ClientTime } from "./ui/ClientTime";
 import {
@@ -73,7 +77,7 @@ export const RealTimeJobBoard = () => {
   const pathname = usePathname();
   const isOwnerPortal = pathname.startsWith("/customer");
   const { data: user, isLoading: userLoading } = useCurrentUser();
-  const userRole = user?.user_metadata?.role;
+  const userRole = user?.role;
   const isAdmin = userRole === "admin" || userRole === "super_admin";
   const isCustomer = userRole === "user";
   const portalPrefix = isOwnerPortal ? "/customer" : "/admin";
@@ -82,11 +86,11 @@ export const RealTimeJobBoard = () => {
   const queryClient = useQueryClient();
   const statsQueryKey = useMemo(
     () => ["jobs", "stats", { ownerScope: isOwnerPortal }],
-    [isOwnerPortal]
+    [isOwnerPortal],
   );
   const jobsQueryKey = useMemo(
     () => ["jobs", { ownerScope: isOwnerPortal, dashboard: true }],
-    [isOwnerPortal]
+    [isOwnerPortal],
   );
 
   const { data: stats } = useQuery({
@@ -132,14 +136,14 @@ export const RealTimeJobBoard = () => {
         () => {
           queryClient.invalidateQueries({ queryKey: jobsQueryKey });
           queryClient.invalidateQueries({ queryKey: statsQueryKey });
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "jobs_to_cleaners" },
         () => {
           queryClient.invalidateQueries({ queryKey: jobsQueryKey });
-        }
+        },
       )
       .subscribe();
 
@@ -152,8 +156,8 @@ export const RealTimeJobBoard = () => {
     const allJobs = data?.pages.flatMap((page) => page.jobs) ?? [];
     const deduped = Array.from(
       new Map(
-        allJobs.filter((job) => job != null).map((job) => [job.id, job])
-      ).values()
+        allJobs.filter((job) => job != null).map((job) => [job.id, job]),
+      ).values(),
     );
     return deduped.sort((a, b) => {
       const ta = a.checkInTime
@@ -224,27 +228,86 @@ export const RealTimeJobBoard = () => {
         </h2>
         <div className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white md:hidden">
           {status === "pending" ? (
-            <p className="p-6 text-center text-sm text-gray-500">Loading jobs…</p>
+            <p className="p-6 text-center text-sm text-gray-500">
+              Loading jobs…
+            </p>
           ) : status === "error" ? (
-            <p className="p-6 text-center text-sm text-red-500">{error.message}</p>
+            <p className="p-6 text-center text-sm text-red-500">
+              {error.message}
+            </p>
           ) : uniqueJobs.length === 0 ? (
-            <p className="p-8 text-center text-sm text-gray-500">No jobs scheduled yet. Jobs appear here after your property calendar syncs.</p>
-          ) : uniqueJobs.map((job) => (
-            <details key={job.id} className="group p-4">
-              <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-gray-900">{job.property?.address ?? "N/A"}</p>
-                  <p className="mt-1 text-sm text-gray-500">{job.checkInTime ? <ClientTime dateString={job.checkInTime} /> : "N/A"}</p>
+            <p className="p-8 text-center text-sm text-gray-500">
+              No jobs scheduled yet. Jobs appear here after your property
+              calendar syncs.
+            </p>
+          ) : (
+            uniqueJobs.map((job) => (
+              <details key={job.id} className="group p-4">
+                <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-gray-900">
+                      {job.property?.address ?? "N/A"}
+                    </p>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {job.checkInTime ? (
+                        <ClientTime dateString={job.checkInTime} />
+                      ) : (
+                        "N/A"
+                      )}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status || "")}`}
+                  >
+                    {job.status}
+                  </span>
+                </summary>
+                <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
+                  <p>
+                    <span className="text-gray-500">Cleaners: </span>
+                    {job.assignedCleaners.length > 0
+                      ? job.assignedCleaners
+                          .map(
+                            (
+                              c: JobsWithDetails["data"][number]["assignedCleaners"][number],
+                            ) => c.fullName,
+                          )
+                          .join(", ")
+                      : "Awaiting assignment"}
+                  </p>
+                  {showOwnerView && (
+                    <div className="grid gap-2">
+                      <CustomerJobPromoCodeField
+                        jobId={job.id}
+                        status={job.status}
+                        checkInTime={
+                          job.checkInTime ? String(job.checkInTime) : null
+                        }
+                        paymentIntentId={job.paymentIntentId ?? null}
+                        paymentStatus={job.paymentStatus ?? null}
+                        appliedPromoCode={job.appliedPromoCode ?? null}
+                      />
+                      <CustomerJobCancelButton
+                        jobId={job.id}
+                        status={job.status}
+                        checkInTime={
+                          job.checkInTime ? String(job.checkInTime) : null
+                        }
+                      />
+                    </div>
+                  )}
+                  <Link
+                    href={`${portalPrefix}/job-oversight/${job.id}` as Route}
+                    className="pt-1 font-medium text-teal-700 hover:text-teal-900"
+                  >
+                    {job.evidencePacket?.photoCount
+                      ? `Details · ${job.evidencePacket.photoCount} photo${job.evidencePacket.photoCount === 1 ? "" : "s"}`
+                      : "Details"}
+                  </Link>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status || "")}`}>{job.status}</span>
-              </summary>
-              <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
-                <p><span className="text-gray-500">Cleaners: </span>{job.assignedCleaners.length > 0 ? job.assignedCleaners.map((c: JobsWithDetails["data"][number]["assignedCleaners"][number]) => c.fullName).join(", ") : "Awaiting assignment"}</p>
-                {showOwnerView && <div className="grid gap-2"><CustomerJobPromoCodeField jobId={job.id} status={job.status} checkInTime={job.checkInTime ? String(job.checkInTime) : null} paymentIntentId={job.paymentIntentId ?? null} paymentStatus={job.paymentStatus ?? null} appliedPromoCode={job.appliedPromoCode ?? null} /><CustomerJobCancelButton jobId={job.id} status={job.status} checkInTime={job.checkInTime ? String(job.checkInTime) : null} /></div>}
-                <Link href={`${portalPrefix}/job-oversight/${job.id}` as Route} className="pt-1 font-medium text-teal-700 hover:text-teal-900">{job.evidencePacket?.photoCount ? `Details · ${job.evidencePacket.photoCount} photo${job.evidencePacket.photoCount === 1 ? "" : "s"}` : "Details"}</Link>
-              </div>
-            </details>
-          ))}
+              </details>
+            ))
+          )}
         </div>
 
         <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white md:block">
@@ -339,8 +402,8 @@ export const RealTimeJobBoard = () => {
                           ? job.assignedCleaners
                               .map(
                                 (
-                                  c: JobsWithDetails["data"][number]["assignedCleaners"][number]
-                                ) => c.fullName
+                                  c: JobsWithDetails["data"][number]["assignedCleaners"][number],
+                                ) => c.fullName,
                               )
                               .join(", ")
                           : "Awaiting assignment"}
@@ -348,7 +411,7 @@ export const RealTimeJobBoard = () => {
                       <td className="whitespace-nowrap px-6 py-4">
                         <span
                           className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${getStatusBadge(
-                            job.status || ""
+                            job.status || "",
                           )}`}
                         >
                           {job.status}
@@ -358,7 +421,7 @@ export const RealTimeJobBoard = () => {
                         {(() => {
                           const payment = getPaymentDisplay(
                             job.status,
-                            job.paymentStatus ?? null
+                            job.paymentStatus ?? null,
                           );
                           // Null on every job that predates payment tracking.
                           // An empty cell is the honest answer there — those
@@ -366,7 +429,9 @@ export const RealTimeJobBoard = () => {
                           // status. The PaymentIntent id is admin-only and is
                           // deliberately absent from this board's owner view.
                           if (!payment) {
-                            return <span className="text-sm text-gray-400">—</span>;
+                            return (
+                              <span className="text-sm text-gray-400">—</span>
+                            );
                           }
                           return (
                             <span
@@ -394,7 +459,10 @@ export const RealTimeJobBoard = () => {
                           }
                           return (
                             <div>
-                              <ClientTime dateString={job.checkInTime} dateOnly />
+                              <ClientTime
+                                dateString={job.checkInTime}
+                                dateOnly
+                              />
                               <p className="text-xs text-gray-500">
                                 {window.label}
                               </p>

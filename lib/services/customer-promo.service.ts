@@ -2,9 +2,10 @@ import "server-only";
 
 import { db } from "@/db";
 import { jobs } from "@/db/schemas";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, inArray } from "drizzle-orm";
 import { PricingService } from "@/lib/services/pricing.service";
-import { buildRecurringPricingInput } from "@/lib/pricing/recurring-pricing-input";
+import { buildRentalCharge, rentalJobPricingInput, RentalPricingError } from "@/lib/pricing/rental-charge";
+import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
 import { resolvePromoCodeForAmount } from "@/lib/services/promo-code.service";
 import { isUniqueViolation } from "@/lib/db/errors";
 
@@ -78,7 +79,8 @@ async function loadEligibleJob(jobId: string, customerId: string) {
     new Date(job.checkInTime) > new Date() &&
     (job.status === "unassigned" || job.status === "assigned") &&
     job.paymentIntentId === null &&
-    job.paymentStatus === null;
+    job.paymentStatus === null &&
+    job.rentalCharge == null;
 
   if (!eligible) {
     throw new PromoActionError(
@@ -95,7 +97,15 @@ async function loadEligibleJob(jobId: string, customerId: string) {
     property: job.property,
     subscriptionMonths: job.subscription.durationMonths,
     customerEmail: job.property.customer.email,
+    addonsSnapshot: job.addonsSnapshot,
   };
+}
+
+function pendingPromoUpdate(jobId: string, priorPromoId: string | null) {
+  return and(eq(jobs.id, jobId), isNull(jobs.rentalCharge),
+    isNull(jobs.paymentIntentId), isNull(jobs.paymentStatus),
+    inArray(jobs.status, ["unassigned", "assigned"]),
+    priorPromoId ? eq(jobs.promoCodeId, priorPromoId) : isNull(jobs.promoCodeId));
 }
 
 export async function applyPromoCodeToJob(
@@ -113,14 +123,17 @@ export async function applyPromoCodeToJob(
 
   // Live preview off today's pricing config — same inputs the pre-authorize
   // cron will use when it actually charges this clean.
-  const pricingInput = buildRecurringPricingInput(
-    job.property,
-    job.subscriptionMonths
-  );
-  const priceDetails = await pricingService.calculatePrice(
-    pricingInput as any
-  );
-  const previewAmountCents = Math.round(priceDetails.totalPerClean * 100);
+  let previewAmountCents: number;
+  try {
+    const pricingInput = rentalJobPricingInput(job.property, job.subscriptionMonths, job.addonsSnapshot);
+    const priceDetails = await pricingService.calculatePrice(pricingInput);
+    const refusal = rentalQuoteRefusal(priceDetails, pricingInput);
+    if (refusal) throw new PromoActionError(refusal);
+    previewAmountCents = buildRentalCharge(priceDetails, job.addonsSnapshot, false).amountCents;
+  } catch (error) {
+    if (error instanceof RentalPricingError) throw new PromoActionError(error.message);
+    throw error;
+  }
 
   const { evaluation, promoCodeId } = await resolvePromoCodeForAmount(
     rawCode,
@@ -135,10 +148,12 @@ export async function applyPromoCodeToJob(
   }
 
   try {
-    await db
+    const updated = await db
       .update(jobs)
       .set({ promoCodeId, updatedAt: new Date() })
-      .where(eq(jobs.id, jobId));
+      .where(pendingPromoUpdate(jobId, null))
+      .returning({ id: jobs.id });
+    if (!updated.length) throw new PromoActionError("Billing or another promo change has started. Refresh this clean before changing its code.", 409);
   } catch (error) {
     // The code is already pending (unauthorized) on a different upcoming job.
     // Matched on the specific index so an unrelated unique violation on `jobs`
@@ -166,8 +181,10 @@ export async function removePromoCodeFromJob(
   const job = await loadEligibleJob(jobId, customerId);
   if (!job.promoCodeId) return;
 
-  await db
+  const updated = await db
     .update(jobs)
     .set({ promoCodeId: null, updatedAt: new Date() })
-    .where(eq(jobs.id, jobId));
+    .where(pendingPromoUpdate(jobId, job.promoCodeId))
+    .returning({ id: jobs.id });
+  if (!updated.length) throw new PromoActionError("Billing or another promo change has started. Refresh this clean before changing its code.", 409);
 }

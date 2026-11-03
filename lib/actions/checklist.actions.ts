@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { checklistFiles } from "@/db/schemas";
+import { checklistFiles, jobs } from "@/db/schemas";
 import { getAdminAuth } from "@/lib/admin-auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { CHECKLISTS_BUCKET } from "@/lib/storage/signed-url";
@@ -9,7 +9,7 @@ import {
   CHECKLIST_ALLOWED_MIME_TYPES,
   CHECKLIST_MAX_FILE_SIZE_BYTES,
 } from "@/lib/constants/checklist-files";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 type ActionResult = { success: boolean; error?: string };
 
@@ -22,7 +22,7 @@ type ActionResult = { success: boolean; error?: string };
  */
 export async function uploadPropertyChecklist(
   propertyId: string,
-  formData: FormData
+  formData: FormData,
 ): Promise<ActionResult> {
   const { isAdmin } = await getAdminAuth();
   if (!isAdmin) return { success: false, error: "Unauthorized" };
@@ -71,7 +71,7 @@ export async function uploadPropertyChecklist(
  */
 export async function addPropertyChecklistLink(
   propertyId: string,
-  url: string
+  url: string,
 ): Promise<ActionResult> {
   const { isAdmin } = await getAdminAuth();
   if (!isAdmin) return { success: false, error: "Unauthorized" };
@@ -95,9 +95,9 @@ export async function addPropertyChecklistLink(
   return { success: true };
 }
 
-/** Task 1.15 — admin removes a checklist version (storage object + row). */
+/** Remove an unreferenced guide from the active list; no new retention purge. */
 export async function deletePropertyChecklist(
-  fileId: string
+  fileId: string,
 ): Promise<ActionResult> {
   const { isAdmin } = await getAdminAuth();
   if (!isAdmin) return { success: false, error: "Unauthorized" };
@@ -108,16 +108,21 @@ export async function deletePropertyChecklist(
   });
   if (!row) return { success: false, error: "Checklist file not found" };
 
-  if (row.storagePath) {
-    const supabase = createAdminClient();
-    const { error: removeError } = await supabase.storage
-      .from(CHECKLISTS_BUCKET)
-      .remove([row.storagePath]);
-    if (removeError) {
-      // Log but continue — the DB row is the source of truth the app reads from.
-      console.error("[deletePropertyChecklist] storage remove failed", removeError);
-    }
-  }
+  const referenced = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      sql`${jobs.checklistSnapshot}->'files' @> ${JSON.stringify([{ id: fileId }])}::jsonb`,
+    )
+    .limit(1);
+  if (referenced.length)
+    return {
+      success: false,
+      error: "This guide belongs to an issued job and must be retained.",
+    };
+
+  // Retain the object even if issuance races this list removal. Storage retention
+  // is unchanged; an issued guide path must never become a broken historical link.
 
   await db.delete(checklistFiles).where(eq(checklistFiles.id, fileId));
   return { success: true };

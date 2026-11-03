@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  customerAuthErrorStatus,
-  getCustomerAuth,
-} from "@/lib/customer-auth";
+import { customerAuthErrorStatus, getCustomerAuth } from "@/lib/customer-auth";
 import { bookOneOffClean } from "@/lib/services/one-off.service";
+import { RESIDENTIAL_CLEANING_LEVELS } from "@/lib/pricing/residential";
 
 const bodySchema = z.object({
   propertyId: z.string().uuid(),
@@ -12,6 +10,11 @@ const bodySchema = z.object({
   promoCode: z.string().trim().max(64).optional(),
   /** Required for a residential property; ignored for a rental. */
   arrivalWindow: z.string().trim().max(32).optional(),
+  cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS).optional(),
+  quoteIdentity: z.string().max(512).optional(),
+  pricingVersion: z.enum(["residential-v1", "residential-v2"]).optional(),
+  hotTub: z.enum(["none", "basic", "full"]).optional(),
+  inUnitLaundryLoads: z.number().int().min(0).max(2).optional(),
 });
 
 export async function POST(request: Request) {
@@ -25,7 +28,7 @@ export async function POST(request: Request) {
     if (!customerId) {
       return NextResponse.json(
         { error: error ?? "Unauthorized" },
-        { status: customerAuthErrorStatus(error) }
+        { status: customerAuthErrorStatus(error) },
       );
     }
 
@@ -42,7 +45,7 @@ export async function POST(request: Request) {
       // tells the customer their booking was invalid, which it was not.
       return NextResponse.json(
         { error: result.error },
-        { status: result.status ?? (result.unexpected ? 500 : 400) }
+        { status: result.status ?? (result.unexpected ? 500 : 400) },
       );
     }
 
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
         error:
           "We could not complete this booking. Please try again, or contact CleanNami if you were charged.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

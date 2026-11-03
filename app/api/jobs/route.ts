@@ -6,9 +6,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { properties } from "@/db/schemas";
 import { getJobsWithDetails } from "@/lib/queries/jobs";
-import {
-  getDashboardJobDateRange,
-} from "@/lib/queries/dashboard-job-window";
+import { toCustomerJobListItem } from "@/lib/customer/job-list";
+import { getDashboardJobDateRange } from "@/lib/queries/dashboard-job-window";
 import {
   customerAuthErrorStatus,
   resolvePortalCustomerScope,
@@ -27,7 +26,16 @@ import {
   JOB_LABEL_VALUES,
   isJobLabel,
 } from "@/lib/constants/service-type";
-import { createChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
+import { issuePropertyChecklist } from "@/lib/services/property-checklists";
+import {
+  buildResidentialJobStaffing,
+  residentialOperationalHours,
+} from "@/lib/pricing/residential";
+import { evaluateResidentialSale } from "@/lib/pricing/residential-sales";
+import {
+  getArrivalWindow,
+  windowFitsOperatingDay,
+} from "@/lib/scheduling/arrival-windows";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -37,7 +45,7 @@ export async function GET(request: NextRequest) {
     if (scope.error) {
       return NextResponse.json(
         { error: scope.error, data: [], nextPage: null },
-        { status: customerAuthErrorStatus(scope.error) }
+        { status: customerAuthErrorStatus(scope.error) },
       );
     }
 
@@ -45,7 +53,7 @@ export async function GET(request: NextRequest) {
     const isDashboard = searchParams.get("dashboard") === "1";
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(
-      searchParams.get("limit") || (isDashboard ? "20" : "10")
+      searchParams.get("limit") || (isDashboard ? "20" : "10"),
     );
     const status = (searchParams.get("status") || "all") as
       | "unassigned"
@@ -96,6 +104,7 @@ export async function GET(request: NextRequest) {
     }
 
     const result = await getJobsWithDetails({
+      includeRestockCounts: !scope.customerId,
       page,
       limit,
       status,
@@ -107,16 +116,22 @@ export async function GET(request: NextRequest) {
       sortByCheckIn,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json(
+      scope.customerId
+        ? {
+            data: result.data.map(toCustomerJobListItem),
+            nextPage: result.nextPage,
+          }
+        : result,
+    );
   } catch (error) {
     console.error("Error fetching jobs:", error);
     return NextResponse.json(
       { error: "Failed to fetch jobs" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
-
 
 /**
  * Create a job by hand.
@@ -148,7 +163,7 @@ export async function POST(request: NextRequest) {
   if (!isAdmin) {
     return NextResponse.json(
       { error: authError ?? "Unauthorized" },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
@@ -156,6 +171,11 @@ export async function POST(request: NextRequest) {
     propertyId?: unknown;
     date?: unknown;
     arrivalWindow?: unknown;
+    cleaningLevel?: unknown;
+    pricingVersion?: unknown;
+    hotTub?: unknown;
+    inUnitLaundryLoads?: unknown;
+    quoteIdentity?: unknown;
     jobLabel?: unknown;
     notes?: unknown;
   };
@@ -165,19 +185,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const propertyId = typeof body.propertyId === "string" ? body.propertyId.trim() : "";
+  const propertyId =
+    typeof body.propertyId === "string" ? body.propertyId.trim() : "";
   const date = typeof body.date === "string" ? body.date.trim() : "";
   const arrivalWindow =
     typeof body.arrivalWindow === "string" ? body.arrivalWindow.trim() : "";
   const notes = typeof body.notes === "string" ? body.notes.trim() : "";
 
   if (!propertyId) {
-    return NextResponse.json({ error: "A property is required." }, { status: 400 });
+    return NextResponse.json(
+      { error: "A property is required." },
+      { status: 400 },
+    );
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json(
       { error: "A date is required, as YYYY-MM-DD." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -185,7 +209,9 @@ export async function POST(request: NextRequest) {
   // that keeps bad data out of the table; this is what turns a typo into a
   // sentence the admin can act on instead of a 500 from Postgres.
   const jobLabel =
-    body.jobLabel === undefined || body.jobLabel === null || body.jobLabel === ""
+    body.jobLabel === undefined ||
+    body.jobLabel === null ||
+    body.jobLabel === ""
       ? null
       : body.jobLabel;
   if (jobLabel !== null && !isJobLabel(jobLabel)) {
@@ -194,7 +220,7 @@ export async function POST(request: NextRequest) {
         error: `A job label must be one of: ${JOB_LABEL_VALUES.join(", ")}.`,
         code: "invalid_job_label",
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -210,6 +236,33 @@ export async function POST(request: NextRequest) {
   // a fact about the home; a reclean of a rental turnover is still a rental
   // job, and letting an admin type it here is how the two columns drift.
   const isResidential = property.serviceType === "residential_one_time";
+  const residential = isResidential
+    ? evaluateResidentialSale({
+        bedrooms: property.bedCount,
+        bathrooms: Number(property.bathCount),
+        sqft: property.sqFt,
+        petsAllowed: property.petsAllowed,
+        cleaningLevel: body.cleaningLevel,
+        pricingVersion: body.pricingVersion,
+        hotTub: body.hotTub ?? "none",
+        inUnitLaundryLoads: body.inUnitLaundryLoads ?? 0,
+      })
+    : null;
+  if (residential && !residential.ok) {
+    return NextResponse.json({ error: residential.error }, { status: 400 });
+  }
+  if (
+    residential?.ok &&
+    residential.terms.ruleVersion === "residential-v2" &&
+    body.quoteIdentity !== residential.terms.inputIdentity
+  )
+    return NextResponse.json(
+      {
+        error:
+          "Quote changed. Review the current scope before creating the job.",
+      },
+      { status: 409 },
+    );
 
   let arrival: Date;
   let rentalDeadline: Date | null = null;
@@ -218,7 +271,7 @@ export async function POST(request: NextRequest) {
     if (!arrivalWindow) {
       return NextResponse.json(
         { error: "Choose an arrival window for a residential clean." },
-        { status: 400 }
+        { status: 400 },
       );
     }
     // Returns null rather than an Invalid Date. That matters: `Invalid Date <
@@ -228,7 +281,7 @@ export async function POST(request: NextRequest) {
     if (!instant) {
       return NextResponse.json(
         { error: "That is not an arrival window we offer." },
-        { status: 400 }
+        { status: 400 },
       );
     }
     arrival = instant;
@@ -238,13 +291,16 @@ export async function POST(request: NextRequest) {
     arrival = fromZonedTime(`${date}T${checkOutTime}`, EASTERN_TZ);
     rentalDeadline = fromZonedTime(`${date}T${checkInTime}`, EASTERN_TZ);
 
-    if (Number.isNaN(arrival.getTime()) || Number.isNaN(rentalDeadline.getTime())) {
+    if (
+      Number.isNaN(arrival.getTime()) ||
+      Number.isNaN(rentalDeadline.getTime())
+    ) {
       return NextResponse.json(
         {
           error:
             "This property's check-in/check-out times are misconfigured, so a clean cannot be scheduled for it.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
   }
@@ -258,32 +314,41 @@ export async function POST(request: NextRequest) {
   if (arrival < getStartOfTodayEastern()) {
     return NextResponse.json(
       { error: "Choose today or a later date." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   let staffing;
   try {
-    const hotTubTimeAdditions = await loadHotTubTimeAdditions();
-    staffing = buildJobStaffingUpdate({
-      property: {
-        bedCount: property.bedCount,
-        bathCount: property.bathCount,
-        sqFt: property.sqFt,
-        laundryType: property.laundryType,
-        hotTubServiceLevel: property.hotTubServiceLevel,
-        hotTubDrainCadence: property.hotTubDrainCadence,
-        petsAllowed: property.petsAllowed,
-      },
-      checkInTime: arrival,
-      subscriptionStart: arrival,
-      hotTubTimeAdditions,
-    });
+    const hotTubTimeAdditions = residential?.ok
+      ? null
+      : await loadHotTubTimeAdditions();
+    staffing = residential?.ok
+      ? buildResidentialJobStaffing(
+          residential.terms,
+          0,
+          0,
+          residential.terms.amountCents,
+        )
+      : buildJobStaffingUpdate({
+          property: {
+            bedCount: property.bedCount,
+            bathCount: property.bathCount,
+            sqFt: property.sqFt,
+            laundryType: property.laundryType,
+            hotTubServiceLevel: property.hotTubServiceLevel,
+            hotTubDrainCadence: property.hotTubDrainCadence,
+            petsAllowed: property.petsAllowed,
+          },
+          checkInTime: arrival,
+          subscriptionStart: arrival,
+          hotTubTimeAdditions,
+        });
   } catch (err) {
     console.error("[POST /api/jobs] staffing calculation failed", err);
     return NextResponse.json(
       { error: "Could not work out the staffing for this property." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -291,12 +356,36 @@ export async function POST(request: NextRequest) {
   // the window's end. Needs the staffing result, so it is computed here rather
   // than beside the arrival instant above.
   const deadline = isResidential
-    ? getDeadlineInstant(date, arrivalWindow, staffing.staffing.expectedHoursPerCleaner)
+    ? getDeadlineInstant(
+        date,
+        arrivalWindow,
+        residential?.ok
+          ? residentialOperationalHours(residential.terms)
+          : staffing.staffing.expectedHoursPerCleaner,
+      )
     : rentalDeadline;
 
   const systemLine = jobLabel
     ? `[System] Manual ${JOB_LABELS[jobLabel]} created by admin.`
     : "[System] Manual clean created by admin.";
+  if (residential?.ok && residential.terms.ruleVersion === "residential-v2") {
+    const window = getArrivalWindow(arrivalWindow);
+    if (
+      !deadline ||
+      !window ||
+      !windowFitsOperatingDay(
+        window,
+        residentialOperationalHours(residential.terms),
+      )
+    )
+      return NextResponse.json(
+        {
+          error:
+            "The full service commitment cannot finish within the operating day.",
+        },
+        { status: 400 },
+      );
+  }
 
   try {
     const [created] = await insertIssuedJobs(db, [{
@@ -319,7 +408,19 @@ export async function POST(request: NextRequest) {
         // Manual jobs are still jobs issued to cleaners, so preserve the
         // feedback checklist at creation instead of letting a later property
         // edit rewrite what the cleaner was asked to do.
-        checklistSnapshot: createChecklistSnapshot(property, property.checklistFiles),
+        checklistSnapshot: await issuePropertyChecklist(
+          {
+            ...property,
+            residentialPricing:
+              "residentialPricing" in staffing.addonsSnapshot
+                ? staffing.addonsSnapshot.residentialPricing
+                : undefined,
+            cleaningLevel: residential?.ok
+              ? residential.terms.input.cleaningLevel
+              : null,
+          },
+          property.checklistFiles,
+        ),
         // The admin's reason goes under the system line rather than over it.
         // "Tied to the customer/property in notes or job details" is the whole
         // of the link back to the original clean — there is no reclean_of
@@ -339,13 +440,13 @@ export async function POST(request: NextRequest) {
         serviceType: property.serviceType,
         jobLabel,
       },
-      { status: 201 }
+      { status: 201 },
     );
   } catch (err) {
     console.error("[POST /api/jobs] insert failed", err);
     return NextResponse.json(
       { error: "Could not create the job." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

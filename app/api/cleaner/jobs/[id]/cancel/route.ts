@@ -1,233 +1,141 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/db";
-import { jobs, jobsToCleaners, notifications, reliabilityEvents } from "@/db/schemas";
-import {
-  cleanerAuthErrorStatus,
-  getCleanerAuth,
-  requireCleanerJobAssignment,
-} from "@/lib/cleaner-auth";
-import {
-  getCleanerUserId,
-  notifyAdminsOfJobAlert,
-} from "@/lib/queries/cleaner-notifications";
+import { jobs, jobsToCleaners, reliabilityEvents } from "@/db/schemas";
+import { getCleanerAuth, cleanerAuthErrorStatus } from "@/lib/cleaner-auth";
+import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { recomputeReliabilityScore } from "@/lib/services/reliability/reliability.service";
-import { assignJob } from "@/lib/services/assignment/assignment-engine.service";
+import { triggerUrgentReplacement } from "@/lib/services/urgent-replacement.service";
 import { and, eq } from "drizzle-orm";
 
-const CANCELLABLE_STATUSES = new Set(["unassigned", "assigned"]);
-
-/**
- * Cleaner-initiated cancellation notice tiers (spec §13.2 / decision D5): the
- * server allows cancellation at any notice — it never blocks — but prices it.
- * >48h is neutral, 24-48h is -5, <24h is -10. `reliabilityEvents.penaltyPoints`
- * is informational for a `call_out` event (the score itself is a rolling
- * honored/assigned ratio — see reliability.service.ts), so these numbers are
- * an audit-trail record of the tier, not a literal score decrement.
- */
-const SHORT_NOTICE_HOURS = 48;
-const LATE_NOTICE_HOURS = 24;
-const LATE_NOTICE_PENALTY = 5;
-const VERY_LATE_NOTICE_PENALTY = 10;
-
-async function notifyCleaner(
-  cleanerId: string,
-  title: string,
-  message: string,
-  jobId: string
-) {
-  const userId = await getCleanerUserId(cleanerId);
-  if (!userId) return;
-
-  await db.insert(notifications).values({
-    userId,
-    type: "urgent_job",
-    title,
-    message,
-    jobId,
-    metadata: { source: "cleaner_cancel" },
-  });
-}
-
+/** Existing notice tiers retained; a call-out never invents a photo/pay waiver. */
 export async function POST(
   _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
-  if (!cleanerId) {
+  if (!cleanerId)
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
-  }
-
   const { id: jobId } = await params;
-  const { assignment, error: assignmentError } = await requireCleanerJobAssignment(
-    cleanerId,
-    jobId
-  );
-
-  if (assignmentError || !assignment) {
-    return NextResponse.json(
-      { error: assignmentError ?? "Not assigned to this job" },
-      { status: 403 }
-    );
-  }
-
+  if (!z.uuid().safeParse(jobId).success)
+    return NextResponse.json({ error: "Invalid job" }, { status: 400 });
   try {
-    const job = await db.query.jobs.findFirst({
-      where: eq(jobs.id, jobId),
-      with: {
-        property: { columns: { address: true } },
-        cleaners: {
-          with: { cleaner: { columns: { id: true, fullName: true } } },
-        },
-      },
-    });
-
-    if (!job) {
-      return NextResponse.json({ error: "Job not found" }, { status: 404 });
-    }
-
-    if (!job.status || !CANCELLABLE_STATUSES.has(job.status)) {
-      return NextResponse.json(
-        {
-          error:
-            "This job can no longer be cancelled — cleaning may already be in progress or complete.",
-        },
-        { status: 409 }
-      );
-    }
-
-    if (!job.checkInTime) {
-      return NextResponse.json(
-        { error: "This job has no scheduled start time." },
-        { status: 400 }
-      );
-    }
-
-    const now = new Date();
-    const hoursNotice =
-      (job.checkInTime.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-    let penaltyPoints = 0;
-    let tierLabel = ">48h";
-    if (hoursNotice <= LATE_NOTICE_HOURS) {
-      penaltyPoints = VERY_LATE_NOTICE_PENALTY;
-      tierLabel = "<24h";
-    } else if (hoursNotice <= SHORT_NOTICE_HOURS) {
-      penaltyPoints = LATE_NOTICE_PENALTY;
-      tierLabel = "24-48h";
-    }
-
-    const role = assignment.role;
-    const address = job.property?.address ?? "the property";
-
-    await db
-      .delete(jobsToCleaners)
-      .where(
-        and(eq(jobsToCleaners.jobId, jobId), eq(jobsToCleaners.cleanerId, cleanerId))
-      );
-
-    if (penaltyPoints > 0) {
-      await db.insert(reliabilityEvents).values({
-        cleanerId,
-        jobId,
-        eventType: "call_out",
-        penaltyPoints,
-        notes: `Cancelled ${Math.max(0, Math.round(hoursNotice))}h before check-in (${tierLabel} notice, -${penaltyPoints})`,
+    const removed = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .select()
+        .from(jobs)
+        .where(eq(jobs.id, jobId))
+        .for("update");
+      const assignment = await tx.query.jobsToCleaners.findFirst({
+        where: and(
+          eq(jobsToCleaners.jobId, jobId),
+          eq(jobsToCleaners.cleanerId, cleanerId),
+        ),
       });
-      await recomputeReliabilityScore(cleanerId);
-    }
-
-    let outcome:
-      | "backup_promoted"
-      | "reassignment_triggered"
-      | "uncovered"
-      | "removed" = "removed";
-    let uncoveredReason: string | null = null;
-
-    if (role === "primary") {
-      const backup = job.cleaners.find(
-        (c) => c.role === "backup" && c.cleanerId !== cleanerId
-      );
-
-      if (backup) {
-        await db
-          .update(jobsToCleaners)
-          .set({
-            role: "primary",
-            urgentBonus: tierLabel === "<24h" ? true : backup.urgentBonus,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(jobsToCleaners.jobId, jobId),
-              eq(jobsToCleaners.cleanerId, backup.cleanerId)
-            )
-          );
-
-        await db
+      if (!assignment) throw new Error("NOT_ASSIGNED");
+      if (
+        !job ||
+        !["assigned", "unassigned"].includes(job.status ?? "") ||
+        !job.checkInTime
+      )
+        throw new Error("NOT_CANCELLABLE");
+      const hoursNotice = (job.checkInTime.getTime() - Date.now()) / 3600000;
+      const penaltyPoints = hoursNotice <= 24 ? 10 : hoursNotice <= 48 ? 5 : 0;
+      const working = ["primary", "laundry_lead"].includes(assignment.role);
+      if (working)
+        await tx
           .update(jobs)
-          .set({ status: "assigned", updatedAt: now })
+          .set({ status: "unassigned", updatedAt: new Date() })
           .where(eq(jobs.id, jobId));
-
-        await notifyCleaner(
-          backup.cleanerId,
-          "You are now primary",
-          `A cancellation moved you up to primary for ${address}.${
-            tierLabel === "<24h" ? " Includes a $10 urgent bonus." : ""
-          }`,
-          jobId
+      await tx
+        .delete(jobsToCleaners)
+        .where(
+          and(
+            eq(jobsToCleaners.jobId, jobId),
+            eq(jobsToCleaners.cleanerId, cleanerId),
+          ),
         );
-
-        outcome = "backup_promoted";
-      } else {
-        await db
-          .update(jobs)
-          .set({ status: "unassigned", updatedAt: now })
-          .where(eq(jobs.id, jobId));
-
-        // The engine can legitimately find nobody (starvation, no hot-tub-capable
-        // cleaner, everyone clashing). Reporting "reassignment_triggered"
-        // regardless meant a job could be left with no cleaner at all and
-        // nobody told — the cancelling cleaner walked away believing it was
-        // covered, and no admin was alerted.
-        const assignment = await assignJob({
-          id: job.id,
-          propertyId: job.propertyId,
-          checkInTime: job.checkInTime,
-          expectedHours: job.expectedHours,
-          addonsSnapshot: job.addonsSnapshot,
+      if (penaltyPoints > 0)
+        await tx.insert(reliabilityEvents).values({
+          cleanerId,
+          jobId,
+          eventType: "call_out",
+          penaltyPoints,
+          notes: `Cancelled ${Math.max(0, Math.round(hoursNotice))}h before check-in (notice tier -${penaltyPoints})`,
         });
-
-        if (assignment.status === "skipped") {
-          outcome = "uncovered";
-          uncoveredReason = assignment.reason;
-
+      return { working, penaltyPoints, hoursNotice };
+    });
+    if (removed.penaltyPoints > 0) {
+      try {
+        await recomputeReliabilityScore(cleanerId);
+      } catch (error) {
+        console.error("[cancel reliability refresh]", error);
+      }
+    }
+    let outcome = "removed",
+      uncoveredReason: string | null = null;
+    if (removed.working) {
+      try {
+        const replacement = await triggerUrgentReplacement(jobId, {
+          vacatedCleanerId: cleanerId,
+          alreadyRemoved: true,
+          recordPenalty: false,
+        });
+        outcome =
+          replacement.outcome === "backup_promoted"
+            ? "backup_promoted"
+            : "uncovered";
+        uncoveredReason =
+          outcome === "uncovered"
+            ? "Replacement offers are open; the working team is not yet complete"
+            : null;
+      } catch (e) {
+        outcome = "uncovered";
+        uncoveredReason =
+          "Assignment was removed; replacement needs admin review";
+        console.error("[cancel replacement]", e);
+      }
+      if (outcome === "uncovered")
+        try {
           await notifyAdminsOfJobAlert({
             title: "Job left uncovered by a cancellation",
-            message: `${address} on ${job.checkInTime.toISOString()} has no cleaner after a cancellation — automatic reassignment could not fill it (${assignment.reason}).`,
+            message: uncoveredReason!,
             jobId,
             outcome: "cancel_uncovered",
           });
-        } else {
-          outcome = "reassignment_triggered";
+        } catch (e) {
+          console.error("[cancel alert]", e);
         }
-      }
     }
-
     return NextResponse.json({
       success: true,
-      penaltyPoints,
-      hoursNotice: Math.max(0, Math.round(hoursNotice)),
+      ...removed,
+      hoursNotice: Math.max(0, Math.round(removed.hoursNotice)),
       outcome,
       uncoveredReason,
     });
-  } catch (err) {
-    console.error("[POST /api/cleaner/jobs/[id]/cancel]", err);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
     return NextResponse.json(
-      { error: "Failed to cancel job" },
-      { status: 500 }
+      {
+        error:
+          message === "NOT_ASSIGNED"
+            ? "You are no longer assigned"
+            : message === "NOT_CANCELLABLE"
+              ? "This job can no longer be canceled"
+              : "Failed to cancel assignment",
+      },
+      {
+        status:
+          message === "NOT_ASSIGNED"
+            ? 403
+            : message === "NOT_CANCELLABLE"
+              ? 409
+              : 500,
+      },
     );
   }
 }

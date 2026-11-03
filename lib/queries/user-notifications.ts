@@ -1,8 +1,9 @@
 import "server-only";
 
 import { db } from "@/db";
-import { notifications, users } from "@/db/schemas";
-import { and, desc, eq } from "drizzle-orm";
+import { jobs, notifications, users } from "@/db/schemas";
+import { and, count, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { adminNotificationUrl } from "@/lib/notifications/destination";
 
 export type UserNotification = {
   id: string;
@@ -75,12 +76,21 @@ export async function getUserNotificationsBySupabaseId(
     return { notifications: [], unreadCount: 0 };
   }
 
+  const visible = and(
+    eq(notifications.userId, userId),
+    or(isNull(notifications.scheduledFor), lte(notifications.scheduledFor, new Date()))
+  );
   const rows = await db.query.notifications.findMany({
-    where: eq(notifications.userId, userId),
+    where: visible,
     orderBy: [desc(notifications.createdAt)],
     limit,
   });
 
+  // Legacy restock alerts have only a job ID. Resolve property destinations in
+  // one scoped batch; keep old records intact and deleted jobs on the safe queue.
+  const restockJobIds = [...new Set(rows.filter(n => n.metadata?.source === "restock_request" && !n.metadata?.propertyId && n.jobId).map(n => n.jobId!))];
+  const restockJobs = restockJobIds.length ? await db.select({ id: jobs.id, propertyId: jobs.propertyId }).from(jobs).where(inArray(jobs.id, restockJobIds)) : [];
+  const restockProperties = new Map(restockJobs.map(j => [j.id, j.propertyId]));
   const mapped = rows.map((n) => ({
     id: n.id,
     type: n.type,
@@ -89,12 +99,16 @@ export async function getUserNotificationsBySupabaseId(
     isRead: n.isRead,
     createdAt: n.createdAt.toISOString(),
     jobId: n.jobId,
-    url: typeof n.metadata?.url === "string" ? n.metadata.url : null,
+    url: adminNotificationUrl(n.metadata?.source === "restock_request" && !n.metadata?.propertyId ? { ...n, metadata: { ...n.metadata, propertyId: n.jobId ? restockProperties.get(n.jobId) : null } } : n),
   }));
+
+  // The badge counts the whole inbox, not just the first page. Keep DB reads sequential.
+  const [unread] = await db.select({ total: count() }).from(notifications)
+    .where(and(visible, eq(notifications.isRead, false)));
 
   return {
     notifications: mapped,
-    unreadCount: mapped.filter((n) => !n.isRead).length,
+    unreadCount: unread.total,
   };
 }
 
@@ -117,7 +131,8 @@ export async function markUserNotificationRead(
     .where(
       and(
         eq(notifications.id, notificationId),
-        eq(notifications.userId, userId)
+        eq(notifications.userId, userId),
+        or(isNull(notifications.scheduledFor), lte(notifications.scheduledFor, new Date()))
       )
     )
     .returning({ id: notifications.id });
@@ -141,6 +156,7 @@ export async function markAllUserNotificationsRead(
     .update(notifications)
     .set({ isRead: true })
     .where(
-      and(eq(notifications.userId, userId), eq(notifications.isRead, false))
+      and(eq(notifications.userId, userId), eq(notifications.isRead, false),
+        or(isNull(notifications.scheduledFor), lte(notifications.scheduledFor, new Date())))
     );
 }

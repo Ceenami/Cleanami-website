@@ -5,7 +5,8 @@ import { and, eq } from "drizzle-orm";
 import sharp from "sharp";
 import { z } from "zod";
 import { db } from "@/db";
-import { evidencePackets, jobExecutionContracts, jobs, jobsToCleaners, properties } from "@/db/schemas";
+import { evidencePackets, jobExecutionContracts, jobs, jobsToCleaners, properties, phase2cAudit } from "@/db/schemas";
+import { isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import { getRoomPhotoRequirements, type RoomPhotosMap } from "@/lib/cleaner/evidence";
 import { createAdminClient } from "@/lib/supabase/server";
 import { createSignedUrl, EVIDENCE_BUCKET, toStoragePath } from "@/lib/storage/signed-url";
@@ -69,7 +70,9 @@ async function locked<T>(jobId: string, cleanerId: string, work: (
       throw new LegacyUploadError("Evidence is not open for changes. Your local photos are retained.");
     const [property] = await tx.select().from(properties).where(eq(properties.id, job.propertyId!));
     if (!property) throw new LegacyUploadError("Property not found", 404);
-    return work(tx, packet, getRoomPhotoRequirements(property).map(room => room.roomKey));
+    const rooms = isChecklistSnapshot(job.checklistSnapshot) && job.checklistSnapshot.photoRequirements
+      ? job.checklistSnapshot.photoRequirements : getRoomPhotoRequirements(property);
+    return work(tx, packet, rooms.map(room => room.roomKey));
   });
 }
 function checkTicket(ticket: Ticket, packet: typeof evidencePackets.$inferSelect, rooms: string[]) {
@@ -118,11 +121,17 @@ export async function acknowledgeLegacyPhoto(jobId: string, cleanerId: string, r
     checkTicket(ticket, packet, rooms);
     const log = (packet.checklistLog ?? {}) as { items?: unknown[]; roomPhotos?: RoomPhotosMap };
     const roomPhotos = { ...log.roomPhotos };
+    const isNew = !(roomPhotos[ticket.roomKey] ?? []).includes(path);
     roomPhotos[ticket.roomKey] = [...new Set([...(roomPhotos[ticket.roomKey] ?? []), path])];
     await tx.update(evidencePackets).set({
       checklistLog: { ...log, roomPhotos },
       photoUrls: [...new Set([...(packet.photoUrls ?? []), path])], updatedAt: new Date(),
     }).where(eq(evidencePackets.jobId, jobId));
+    if (isNew) await tx.insert(phase2cAudit).values({
+      subjectId: jobId, actorId: cleanerId, kind: "evidence_photo_uploaded",
+      payload: { roomKey: ticket.roomKey, clientUploadId: ticket.uploadId, path,
+        capturedAt: new Date(ticket.issuedAt).toISOString(), source: "camera_or_gallery" },
+    });
   });
   return { path, url: await createSignedUrl(EVIDENCE_BUCKET, path), roomKey: ticket.roomKey };
 }

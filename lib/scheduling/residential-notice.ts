@@ -22,6 +22,7 @@ import {
   getAvailableArrivalWindows,
   minutesToTimeOfDay,
   type ArrivalWindow,
+  type ArrivalWindowKey,
 } from "./arrival-windows";
 
 const EASTERN_TZ = "America/New_York";
@@ -47,6 +48,15 @@ export const RESIDENTIAL_NO_WINDOW_MESSAGE =
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+function validCalendarDate(value: string): boolean {
+  if (!DATE_ONLY.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  );
+}
+
 /** `YYYY-MM-DD` for the Eastern calendar day an instant falls on. */
 export function toEasternDateKey(date: Date): string {
   return date.toLocaleDateString("en-CA", { timeZone: EASTERN_TZ });
@@ -62,16 +72,16 @@ export function toEasternDateKey(date: Date): string {
  */
 export function getArrivalInstant(
   cleanDate: string,
-  windowKey: string | undefined | null
+  windowKey: string | undefined | null,
 ): Date | null {
-  if (!DATE_ONLY.test(cleanDate)) return null;
+  if (!validCalendarDate(cleanDate)) return null;
 
   const window = getArrivalWindow(windowKey);
   if (!window) return null;
 
   const instant = fromZonedTime(
     `${cleanDate}T${minutesToTimeOfDay(window.startMinutes)}`,
-    EASTERN_TZ
+    EASTERN_TZ,
   );
   return Number.isNaN(instant.getTime()) ? null : instant;
 }
@@ -83,9 +93,9 @@ export function getArrivalInstant(
 export function getDeadlineInstant(
   cleanDate: string,
   windowKey: string | undefined | null,
-  expectedHours: number
+  expectedHours: number,
 ): Date | null {
-  if (!DATE_ONLY.test(cleanDate)) return null;
+  if (!validCalendarDate(cleanDate)) return null;
   if (!Number.isFinite(expectedHours) || expectedHours <= 0) return null;
 
   const window = getArrivalWindow(windowKey);
@@ -93,9 +103,9 @@ export function getDeadlineInstant(
 
   const instant = fromZonedTime(
     `${cleanDate}T${minutesToTimeOfDay(
-      window.endMinutes + Math.ceil(expectedHours * 60)
+      window.endMinutes + Math.ceil(expectedHours * 60),
     )}`,
-    EASTERN_TZ
+    EASTERN_TZ,
   );
   return Number.isNaN(instant.getTime()) ? null : instant;
 }
@@ -104,7 +114,7 @@ export function getDeadlineInstant(
 export function meetsResidentialNotice(
   cleanDate: string,
   windowKey: string | undefined | null,
-  now: Date = new Date()
+  now: Date = new Date(),
 ): boolean {
   const arrival = getArrivalInstant(cleanDate, windowKey);
   if (!arrival) return false;
@@ -125,10 +135,10 @@ export function meetsResidentialNotice(
 export function getBookableWindows(
   cleanDate: string,
   expectedHours: number,
-  now: Date = new Date()
+  now: Date = new Date(),
 ): ArrivalWindow[] {
   return getAvailableArrivalWindows(expectedHours).filter((w) =>
-    meetsResidentialNotice(cleanDate, w.key, now)
+    meetsResidentialNotice(cleanDate, w.key, now),
   );
 }
 
@@ -143,21 +153,48 @@ export function getBookableWindows(
 export function earliestBookableDate(
   expectedHours: number,
   now: Date = new Date(),
-  maxDaysAhead = 14
+  maxDaysAhead = 14,
 ): string | null {
   if (getAvailableArrivalWindows(expectedHours).length === 0) return null;
 
   const startOfSearch = new Date(
-    now.getTime() + RESIDENTIAL_NOTICE_HOURS * 60 * 60 * 1000
+    now.getTime() + RESIDENTIAL_NOTICE_HOURS * 60 * 60 * 1000,
   );
 
   for (let offset = 0; offset <= maxDaysAhead; offset++) {
     const candidate = toEasternDateKey(
-      new Date(startOfSearch.getTime() + offset * 24 * 60 * 60 * 1000)
+      new Date(startOfSearch.getTime() + offset * 24 * 60 * 60 * 1000),
     );
     if (getBookableWindows(candidate, expectedHours, now).length > 0) {
       return candidate;
     }
+  }
+  return null;
+}
+
+/** Customer scheduling uses server-approved windows without receiving hours. */
+export function getBookableWindowsFromKeys(
+  cleanDate: string,
+  keys: readonly ArrivalWindowKey[],
+  now = new Date(),
+): ArrivalWindow[] {
+  return keys.flatMap((key) => {
+    const window = getArrivalWindow(key);
+    return window && meetsResidentialNotice(cleanDate, key, now)
+      ? [window]
+      : [];
+  });
+}
+
+export function earliestBookableDateFromKeys(
+  keys: readonly ArrivalWindowKey[],
+  now = new Date(),
+): string | null {
+  for (let offset = 2; offset <= 16; offset++) {
+    const date = toEasternDateKey(
+      new Date(now.getTime() + offset * 24 * 60 * 60 * 1000),
+    );
+    if (getBookableWindowsFromKeys(date, keys, now).length) return date;
   }
   return null;
 }

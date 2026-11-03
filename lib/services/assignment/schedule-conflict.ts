@@ -2,7 +2,7 @@ import "server-only";
 
 import { db } from "@/db";
 import { jobs, jobsToCleaners } from "@/db/schemas";
-import { and, eq, isNotNull, lt, ne, sql } from "drizzle-orm";
+import { and, eq, isNotNull, lt, ne, sql, inArray } from "drizzle-orm";
 import { toEasternDateString } from "@/lib/time/eastern";
 
 /**
@@ -51,7 +51,9 @@ export type ScheduleConflictInput = {
 
 function toHours(value: string | number | null | undefined): number {
   const hours = Number(value);
-  return Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_EXPECTED_JOB_HOURS;
+  return Number.isFinite(hours) && hours > 0
+    ? hours
+    : DEFAULT_EXPECTED_JOB_HOURS;
 }
 
 /**
@@ -70,7 +72,7 @@ function toHours(value: string | number | null | undefined): number {
  *    values inside `sql` templates yourself; lt()/eq()/ne() map themselves.
  */
 export async function findScheduleConflict(
-  input: ScheduleConflictInput
+  input: ScheduleConflictInput,
 ): Promise<ScheduleConflict | null> {
   const {
     cleanerId,
@@ -90,7 +92,7 @@ export async function findScheduleConflict(
   // No index on the expression, deliberately: the query filters by cleaner_id
   // first, so it only ever evaluates over one cleaner's jobs.
   const sameDayPredicate = sql`(${jobs.checkInTime} AT TIME ZONE 'America/New_York')::date = ${toEasternDateString(
-    checkInTime
+    checkInTime,
   )}::date`;
 
   /**
@@ -99,8 +101,20 @@ export async function findScheduleConflict(
    * exactly as the next begins) do not conflict.
    */
   const end = new Date(
-    checkInTime.getTime() + toHours(expectedHours) * 60 * 60 * 1000
+    checkInTime.getTime() + toHours(expectedHours) * 60 * 60 * 1000,
   );
+  if (rule === "window" && excludeJobId) {
+    const target = await db.query.jobs.findFirst({
+      where: eq(jobs.id, excludeJobId),
+      columns: { serviceType: true, checkOutTime: true },
+    });
+    if (
+      target?.serviceType === "residential_one_time" &&
+      target.checkOutTime &&
+      target.checkOutTime > end
+    )
+      end.setTime(target.checkOutTime.getTime());
+  }
 
   const rows = await db
     .select({
@@ -113,6 +127,7 @@ export async function findScheduleConflict(
     .where(
       and(
         eq(jobsToCleaners.cleanerId, cleanerId),
+        inArray(jobsToCleaners.role, ["primary", "laundry_lead"]),
         // Unchanged: a completed job still blocks. Whether it should is a
         // separate question and not one to answer quietly here.
         ne(jobs.status, "canceled"),
@@ -123,10 +138,10 @@ export async function findScheduleConflict(
               // existing.start < this.end
               lt(jobs.checkInTime, end),
               // existing.start + existing.duration > this.start
-              sql`${jobs.checkInTime} + (COALESCE(${jobs.expectedHours}::double precision, ${DEFAULT_EXPECTED_JOB_HOURS}::double precision) * interval '1 hour') > ${checkInTime.toISOString()}::timestamptz`
+              sql`CASE WHEN ${jobs.serviceType} = 'residential_one_time' THEN GREATEST(${jobs.checkOutTime}, ${jobs.checkInTime} + COALESCE(${jobs.expectedHours}::double precision, ${DEFAULT_EXPECTED_JOB_HOURS}) * interval '1 hour') ELSE ${jobs.checkInTime} + COALESCE(${jobs.expectedHours}::double precision, ${DEFAULT_EXPECTED_JOB_HOURS}) * interval '1 hour' END > ${checkInTime.toISOString()}::timestamptz`,
             ),
-        excludeJobId ? ne(jobs.id, excludeJobId) : undefined
-      )
+        excludeJobId ? ne(jobs.id, excludeJobId) : undefined,
+      ),
     )
     .orderBy(jobs.checkInTime)
     .limit(1);
@@ -151,7 +166,7 @@ export async function findScheduleConflict(
  * cleans on one day were allowed.
  */
 export async function hasScheduleConflict(
-  input: ScheduleConflictInput
+  input: ScheduleConflictInput,
 ): Promise<boolean> {
   return (await findScheduleConflict(input)) !== null;
 }

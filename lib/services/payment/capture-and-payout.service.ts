@@ -10,17 +10,21 @@ import {
   payouts,
   jobsToCleaners,
 } from "@/db/schemas";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { SERVICE_UNAVAILABLE } from "@/lib/env/messages";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
+import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
+import { readRentalCharge } from "@/lib/pricing/rental-charge";
+import { verifySettledPayment } from "./verify-settled-payment";
 import { computeReserveRate } from "@/lib/services/payment/reserve";
 import { sendJobCompletionEmail } from "@/lib/services/email.service";
 import { evaluateArrival } from "@/lib/services/gps/geofence";
 import { reconcileEvidenceAccountability } from "@/lib/services/gps/reconcile-evidence";
 import { isSkippedPaymentIntent } from "@/lib/billing/customer-billing";
 import { appendJobNote } from "@/lib/jobs/job-notes";
+import { getJobDisplay } from "@/lib/constants/service-type";
 
 /** Roles eligible for payout. */
 const PAID_ROLES = new Set(["primary", "laundry_lead"]);
@@ -34,7 +38,8 @@ export type CaptureOutcome = {
 async function emailCompletion(
   customerEmail: string | null | undefined,
   customerName: string | null | undefined,
-  propertyAddress: string | null | undefined
+  propertyAddress: string | null | undefined,
+  serviceLabel: string,
 ): Promise<void> {
   if (!customerEmail) return;
   try {
@@ -42,6 +47,7 @@ async function emailCompletion(
       to: customerEmail,
       name: customerName ?? undefined,
       propertyAddress: propertyAddress ?? "your property",
+      serviceLabel,
     });
   } catch (err) {
     console.error("[capture-and-payout] completion email failed:", err);
@@ -50,9 +56,29 @@ async function emailCompletion(
 
 /** Settle a completed job and create cleaner payouts. */
 export async function captureAndCreatePayouts(
-  jobId: string
+  jobId: string,
 ): Promise<CaptureOutcome> {
+  // The issued protocol owns its own short claims and ledger transactions.
+  // Dispatch before acquiring a legacy lock to avoid waiting on ourselves.
   if (await getExecutionContract(jobId)) return settleExecutionJob(jobId);
+  const afterCommit: Array<() => Promise<void>> = [];
+  const outcome = await db.transaction(async (tx) => {
+    // Cancellation takes this same row lock. Read terms/status only after it
+    // is held, and commit the job, reserve and whole team's payouts together.
+    await tx.execute(sql`select id from jobs where id = ${jobId} for update`);
+    return captureLocked(jobId, tx, afterCommit);
+  });
+  for (const action of afterCommit) await action();
+  return outcome;
+}
+
+type CaptureWriter = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function captureLocked(
+  jobId: string,
+  db: CaptureWriter,
+  afterCommit: Array<() => Promise<void>>,
+): Promise<CaptureOutcome> {
   const job = await db.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
     with: {
@@ -64,6 +90,14 @@ export async function captureAndCreatePayouts(
 
   if (!job) {
     return { ok: false, httpStatus: 404, body: { error: "Job not found" } };
+  }
+
+  if (job.status === "canceled" || job.paymentStatus === "refunded") {
+    return {
+      ok: false,
+      httpStatus: 409,
+      body: { error: "Canceled or refunded jobs cannot be settled." },
+    };
   }
 
   const evidence = await db.query.evidencePackets.findFirst({
@@ -119,9 +153,61 @@ export async function captureAndCreatePayouts(
     : null;
   const arrivalDelayMinutes =
     serverArrival?.delayMinutes ?? evidence.arrivalDelayMinutes;
+  // Validate every v2 worker BEFORE any capture, reserve, payout or job update.
+  // A missing adjustment policy must not leave partial financial execution.
+  let contract: ReturnType<typeof readResidentialSnapshot>;
+  try {
+    contract = readResidentialSnapshot(job.addonsSnapshot);
+  } catch {
+    return {
+      ok: false,
+      httpStatus: 409,
+      body: {
+        error:
+          "Residential pay terms require review before settlement. No new financial actions were taken.",
+      },
+    };
+  }
+  const v2Assignments =
+    contract.kind === "v2"
+      ? await db.query.jobsToCleaners.findMany({
+          where: eq(jobsToCleaners.jobId, jobId),
+          with: { cleaner: true },
+        })
+      : null;
+  const v2Pay = new Map<string, ReturnType<typeof computeCleanerPay>>();
+  if (v2Assignments) {
+    try {
+      const workers = v2Assignments.filter((a) => PAID_ROLES.has(a.role));
+      if (workers.length !== job.addonsSnapshot?.residentialPricing?.teamSize)
+        throw new Error("Incomplete v2 team");
+      for (const a of workers)
+        v2Pay.set(
+          a.cleanerId,
+          computeCleanerPay({
+            residentialPricing: job.addonsSnapshot?.residentialPricing,
+            assignmentTerms: a.residentialPayTerms,
+            expectedHours: Number(job.expectedHours ?? 0),
+            hourlyRateCents: a.frozenHourlyRateCents,
+            role: a.role,
+            urgentBonus: a.urgentBonus,
+            arrivalDelayMinutes,
+          }),
+        );
+    } catch {
+      return {
+        ok: false,
+        httpStatus: 409,
+        body: {
+          error:
+            "Residential pay terms require review before settlement. No new financial actions were taken.",
+        },
+      };
+    }
+  }
 
   // Update accountability fields without blocking settlement.
-  await reconcileEvidenceAccountability({ job, evidence });
+  afterCommit.push(() => reconcileEvidenceAccountability({ job, evidence }));
 
   // Prepaid jobs and skipped billing need no Stripe capture.
   const billingSkipped = isSkippedPaymentIntent(job.paymentIntentId);
@@ -152,7 +238,7 @@ export async function captureAndCreatePayouts(
           paymentStatus: "capture_failed",
           notes: appendJobNote(
             job.notes,
-            `[System] Could not read payment intent: ${message}`
+            `[System] Could not read payment intent: ${message}`,
           ),
           updatedAt: new Date(),
         })
@@ -188,7 +274,7 @@ export async function captureAndCreatePayouts(
           paymentFailed: true,
           notes: appendJobNote(
             job.notes,
-            `[System] Capture not possible: payment intent is "${intent.status}".`
+            `[System] Capture not possible: payment intent is "${intent.status}".`,
           ),
           updatedAt: new Date(),
         })
@@ -218,16 +304,18 @@ export async function captureAndCreatePayouts(
             : job.jobSource === "manual"
               ? // Manually created jobs were never charged.
                 "[System] Manual job – no charge was due. Marked as captured so the cleaner is paid."
-              : "[System] Prepaid during onboarding – marked as captured."
+              : "[System] Prepaid during onboarding – marked as captured.",
         ),
         updatedAt: new Date(),
       })
       .where(eq(jobs.id, jobId));
 
-    const assignedCleaners = await db.query.jobsToCleaners.findMany({
-      where: eq(jobsToCleaners.jobId, jobId),
-      with: { cleaner: true },
-    });
+    const assignedCleaners =
+      v2Assignments ??
+      (await db.query.jobsToCleaners.findMany({
+        where: eq(jobsToCleaners.jobId, jobId),
+        with: { cleaner: true },
+      }));
 
     const captureType = billingSkipped
       ? "skipped_billing"
@@ -256,19 +344,25 @@ export async function captureAndCreatePayouts(
 
     const expectedHours = parseFloat(job.expectedHours || "0");
     const workingCleaners = assignedCleaners.filter((a) =>
-      PAID_ROLES.has(a.role)
+      PAID_ROLES.has(a.role),
     );
 
     // Insert sequentially; the production pooler cannot pipeline DB writes.
     for (const assignment of workingCleaners) {
-      const pay = computeCleanerPay({
-        expectedHours,
-        hourlyRateCents: assignment.cleaner?.hourlyRateCents,
-        role: assignment.role,
-        laundryLoads: job.addonsSnapshot?.laundryLoads,
-        urgentBonus: assignment.urgentBonus,
-        arrivalDelayMinutes,
-      });
+      const pay =
+        v2Pay.get(assignment.cleanerId) ??
+        computeCleanerPay({
+          residentialPricing: job.addonsSnapshot?.residentialPricing,
+          assignmentTerms: assignment.residentialPayTerms,
+          expectedHours,
+          hourlyRateCents:
+            assignment.frozenHourlyRateCents ??
+            assignment.cleaner?.hourlyRateCents,
+          role: assignment.role,
+          laundryLoads: job.addonsSnapshot?.laundryLoads,
+          urgentBonus: assignment.urgentBonus,
+          arrivalDelayMinutes,
+        });
 
       await db
         .insert(payouts)
@@ -276,8 +370,13 @@ export async function captureAndCreatePayouts(
           jobId,
           cleanerId: assignment.cleanerId,
           amount: pay.total.toFixed(2),
-          urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
-          laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+          payReceipt: pay.receipt ?? null,
+          urgentBonusAmount: pay.urgentBonus
+            ? pay.urgentBonus.toFixed(2)
+            : null,
+          laundryBonusAmount: pay.laundryBonus
+            ? pay.laundryBonus.toFixed(2)
+            : null,
           lateDeductionAmount: pay.lateDeduction
             ? pay.lateDeduction.toFixed(2)
             : null,
@@ -294,12 +393,13 @@ export async function captureAndCreatePayouts(
       .set({ status: "completed", updatedAt: new Date() })
       .where(eq(jobs.id, jobId));
 
-    await emailCompletion(
+    afterCommit.push(() => emailCompletion(
       // Subscription-less jobs resolve through the property.
       job.subscription?.customer?.email ?? job.property?.customer?.email,
       job.subscription?.customer?.name ?? job.property?.customer?.name,
-      job.property?.address
-    );
+      job.property?.address,
+      getJobDisplay(job).label,
+    ));
 
     return {
       ok: true,
@@ -332,7 +432,7 @@ export async function captureAndCreatePayouts(
       (await stripe.paymentIntents.capture(
         job.paymentIntentId,
         {},
-        { idempotencyKey: `capture_${jobId}` }
+        { idempotencyKey: `capture_${jobId}` },
       ));
   } catch (stripeError) {
     const message =
@@ -356,16 +456,20 @@ export async function captureAndCreatePayouts(
     };
   }
 
-  // Base reserve calculations on the amount collected.
-  const capturedAmount = paymentIntent.amount_received || paymentIntent.amount;
+  // Validate provider money/refunds before any reserve or worker payout.
+  const frozenAmount = contract.kind === "v1" || contract.kind === "v2"
+    ? Number(contract.terms.amountChargedCents)
+    : readRentalCharge(job.rentalCharge)?.chargeAmountCents;
+  try { await verifySettledPayment(stripe, paymentIntent, frozenAmount ?? paymentIntent.amount); }
+  catch { return { ok: false, httpStatus: 409, body: { error: "Payment amount, currency or refund state needs review before settlement." } }; }
+  const capturedAmount = paymentIntent.amount_received;
   // Reserve rate accounts for recent dispute risk.
   const reserveRate = await computeReserveRate();
   const reserveAmount = Math.round(capturedAmount * reserveRate);
   const netAmount = capturedAmount - reserveAmount;
 
   // Ledger writes are safe to repeat after a partial failure.
-  await db.transaction(async (tx) => {
-    await tx
+  await db
       .insert(reserveTransactions)
       .values({
         jobId,
@@ -376,12 +480,12 @@ export async function captureAndCreatePayouts(
       })
       .onConflictDoNothing({ target: reserveTransactions.jobId });
 
-  });
-
-  const assignedCleaners = await db.query.jobsToCleaners.findMany({
-    where: eq(jobsToCleaners.jobId, jobId),
-    with: { cleaner: true },
-  });
+  const assignedCleaners =
+    v2Assignments ??
+    (await db.query.jobsToCleaners.findMany({
+      where: eq(jobsToCleaners.jobId, jobId),
+      with: { cleaner: true },
+    }));
 
   if (assignedCleaners.length === 0) {
     await db
@@ -411,19 +515,25 @@ export async function captureAndCreatePayouts(
 
   const expectedHours = parseFloat(job.expectedHours || "0");
   const workingCleaners = assignedCleaners.filter((a) =>
-    PAID_ROLES.has(a.role)
+    PAID_ROLES.has(a.role),
   );
 
   // Insert sequentially; the production pooler cannot pipeline DB writes.
   for (const assignment of workingCleaners) {
-    const pay = computeCleanerPay({
-      expectedHours,
-      hourlyRateCents: assignment.cleaner?.hourlyRateCents,
-      role: assignment.role,
-      laundryLoads: job.addonsSnapshot?.laundryLoads,
-      urgentBonus: assignment.urgentBonus,
-      arrivalDelayMinutes,
-    });
+    const pay =
+      v2Pay.get(assignment.cleanerId) ??
+      computeCleanerPay({
+        residentialPricing: job.addonsSnapshot?.residentialPricing,
+        assignmentTerms: assignment.residentialPayTerms,
+        expectedHours,
+        hourlyRateCents:
+          assignment.frozenHourlyRateCents ??
+          assignment.cleaner?.hourlyRateCents,
+        role: assignment.role,
+        laundryLoads: job.addonsSnapshot?.laundryLoads,
+        urgentBonus: assignment.urgentBonus,
+        arrivalDelayMinutes,
+      });
 
     await db
       .insert(payouts)
@@ -431,8 +541,11 @@ export async function captureAndCreatePayouts(
         jobId,
         cleanerId: assignment.cleanerId,
         amount: pay.total.toFixed(2),
+        payReceipt: pay.receipt ?? null,
         urgentBonusAmount: pay.urgentBonus ? pay.urgentBonus.toFixed(2) : null,
-        laundryBonusAmount: pay.laundryBonus ? pay.laundryBonus.toFixed(2) : null,
+        laundryBonusAmount: pay.laundryBonus
+          ? pay.laundryBonus.toFixed(2)
+          : null,
         lateDeductionAmount: pay.lateDeduction
           ? pay.lateDeduction.toFixed(2)
           : null,
@@ -453,12 +566,13 @@ export async function captureAndCreatePayouts(
     })
     .where(eq(jobs.id, jobId));
 
-  await emailCompletion(
+  afterCommit.push(() => emailCompletion(
     // Subscription-less jobs resolve through the property.
     job.subscription?.customer?.email ?? job.property?.customer?.email,
     job.subscription?.customer?.name ?? job.property?.customer?.name,
-    job.property?.address
-  );
+    job.property?.address,
+    getJobDisplay(job).label,
+  ));
 
   return {
     ok: true,

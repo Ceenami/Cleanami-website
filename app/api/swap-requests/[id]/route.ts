@@ -10,14 +10,14 @@ import { eq } from "drizzle-orm";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { isAdmin, error: authError } = await getAdminAuth(request);
+    const { isAdmin, actorId, error: authError } = await getAdminAuth(request);
     if (!isAdmin) {
       return NextResponse.json(
         { error: authError ?? "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -34,11 +34,14 @@ export async function PATCH(
     });
 
     if (!targetRequest) {
-      return NextResponse.json({ error: "Swap request not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Swap request not found" },
+        { status: 404 },
+      );
     }
 
     if (action === "accept") {
-      const result = await approveCleanerSwapRequest(id);
+      const result = await approveCleanerSwapRequest(id, actorId ?? undefined);
       if (!result.success) {
         return NextResponse.json({ error: result.message }, { status: 409 });
       }
@@ -66,7 +69,7 @@ export async function PATCH(
     console.error("Error updating swap request:", error);
     return NextResponse.json(
       { error: "Failed to update swap request" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

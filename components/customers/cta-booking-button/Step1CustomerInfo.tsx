@@ -19,33 +19,39 @@ export const Step1CustomerInfo = ({
         label="Full Name"
         name="name"
         type="text"
+        autoComplete="name"
         placeholder="Jane Doe"
         value={formData.name || ""}
         onChange={handleChange}
         error={!!errors.name}
       />
-      <FormField
-        label="Email Address"
-        name="email"
-        type="email"
-        placeholder="you@example.com"
-        value={formData.email || ""}
-        onChange={handleChange}
-        error={!!errors.email}
-      />
-      <FormField
-        label="Confirm Email Address"
-        name="emailConfirm"
-        type="email"
-        placeholder="you@example.com"
-        value={formData.emailConfirm || ""}
-        onChange={handleChange}
-        error={!!errors.emailConfirm}
-      />
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <FormField
+          label="Email Address"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+          value={formData.email || ""}
+          onChange={handleChange}
+          error={!!errors.email}
+        />
+        <FormField
+          label="Confirm Email Address"
+          name="emailConfirm"
+          type="email"
+          autoComplete="off"
+          placeholder="you@example.com"
+          value={formData.emailConfirm || ""}
+          onChange={handleChange}
+          error={!!errors.emailConfirm}
+        />
+      </div>
       <FormField
         label="Phone Number"
         name="phoneNumber"
         type="tel"
+        autoComplete="tel"
         placeholder="(555) 123-4567"
         value={formData.phoneNumber || ""}
         onChange={handleChange}

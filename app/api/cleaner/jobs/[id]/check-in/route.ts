@@ -1,9 +1,8 @@
-import { getExecutionContract } from "@/lib/services/job-execution-contract";
 import { executionResponse, executionVisitRequest } from "@/lib/services/job-execution-http";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
-import { cleaners, evidencePackets, jobs } from "@/db/schemas";
+import { jobs } from "@/db/schemas";
 import {
   cleanerAuthErrorStatus,
   getCleanerAuth,
@@ -28,7 +27,8 @@ import {
   formatWindowTimeEt,
 } from "@/lib/cleaner/check-in-window";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { JobVisitError, recordJobArrival } from "@/lib/services/job-visit";
 
 const locationSchema = z
   .object({
@@ -49,25 +49,28 @@ const overrideSchema = z.object({
 
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { cleanerId, error } = await getCleanerAuth();
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   const { id: jobId } = await params;
-  const { error: assignmentError } = await requireCleanerJobAssignment(
-    cleanerId,
-    jobId
-  );
+  const { assignment, error: assignmentError } =
+    await requireCleanerJobAssignment(cleanerId, jobId);
 
   if (assignmentError) {
     return NextResponse.json({ error: assignmentError }, { status: 403 });
   }
+  if (!assignment || !["primary", "laundry_lead"].includes(assignment.role))
+    return NextResponse.json(
+      { error: "Only the working team may record arrival" },
+      { status: 403 },
+    );
 
   const issuedResponse = await executionResponse(jobId, async () => ({ ...await executionVisitRequest(request, jobId, cleanerId, "arrival"), job: await getCleanerJobDetail(cleanerId, jobId) }));
   if (issuedResponse) return issuedResponse;
@@ -79,7 +82,9 @@ export async function POST(
   let overrideReason: string | null = null;
   try {
     const rawBody = await request.json();
-    const parsed = locationSchema.safeParse(rawBody?.location ?? rawBody ?? null);
+    const parsed = locationSchema.safeParse(
+      rawBody?.location ?? rawBody ?? null,
+    );
     if (parsed.success && parsed.data) device = parsed.data;
 
     const parsedOverride = overrideSchema.safeParse(rawBody?.override);
@@ -99,7 +104,7 @@ export async function POST(
     // assigned start time"), reconciliation and the window check below rely on.
     const jobBefore = await db.query.jobs.findFirst({
       where: eq(jobs.id, jobId),
-      columns: { propertyId: true, checkInTime: true, status: true },
+      columns: { propertyId: true, checkInTime: true, checkOutTime: true, status: true },
       with: {
         property: { columns: { defaultCheckOutTime: true } },
       },
@@ -110,6 +115,22 @@ export async function POST(
     // insert a second arrival reliability event (which would skew the score)
     // or re-flag the arrival to admins.
     const alreadyCheckedIn = jobBefore?.status === "in-progress";
+    if (!jobBefore)
+      return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    if (alreadyCheckedIn)
+      return NextResponse.json({
+        success: true,
+        alreadyCheckedIn: true,
+        job: await getCleanerJobDetail(cleanerId, jobId),
+      });
+    if (jobBefore.status !== "assigned")
+      return NextResponse.json(
+        {
+          error:
+            "Only an assigned job can start; departed or finalized jobs cannot be reopened",
+        },
+        { status: 409 },
+      );
 
     // 1.17 — restrict check-in to the allowed cleaning window. Before the guest
     // checks out the property is still occupied and the clean cannot start, so
@@ -125,13 +146,13 @@ export async function POST(
       return NextResponse.json(
         {
           error: `Check-in opens at ${formatWindowTimeEt(
-            checkInWindow.opensAt
+            checkInWindow.opensAt,
           )}, when the guest checks out.`,
           code: "check_in_window_not_open",
           opensAt: checkInWindow.opensAt.toISOString(),
           minutesEarly: checkInWindow.minutesEarly,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -160,8 +181,8 @@ export async function POST(
       geofence.verdict === "outside"
         ? "outside_geofence"
         : geofence.reason === "no_device_location"
-        ? "location_required"
-        : null;
+          ? "location_required"
+          : null;
 
     // An override is only meaningful against a refusal on a first check-in.
     // Accepting one on a clean check-in would litter the review queue with
@@ -190,7 +211,7 @@ export async function POST(
               code: "location_required",
               canOverride: true,
             },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -198,105 +219,53 @@ export async function POST(
 
     const otherInProgressIds = await getCleanerInProgressJobIds(
       cleanerId,
-      jobId
+      jobId,
     );
 
-    for (const otherId of otherInProgressIds) {
-      if (await getExecutionContract(otherId)) return NextResponse.json({ error: "Record departure from your other active job before checking in." }, { status: 409 });
-    }
+    if (otherInProgressIds.length > 0)
+      return NextResponse.json(
+        {
+          error:
+            "Record departure from your active job before starting another",
+          activeJobIds: otherInProgressIds,
+        },
+        { status: 409 },
+      );
 
-    await db.transaction(async (tx) => {
-      const [lockedJob] = await tx
-        .select()
-        .from(jobs)
-        .where(eq(jobs.id, jobId))
-        .for("update");
-      if (
-        !lockedJob ||
-        lockedJob.checkInTime?.getTime() !== scheduledCheckIn?.getTime() ||
-        lockedJob.status !== jobBefore?.status
-      ) {
-        throw new Error("BOOKING_SCHEDULE_CHANGED");
-      }
-      if (otherInProgressIds.length > 0) {
-        await tx
-          .update(jobs)
-          .set({
-            status: "completed_pending_evidence",
-            checkOutTime: now,
-            updatedAt: now,
-          })
-          .where(inArray(jobs.id, otherInProgressIds));
-
-        for (const otherJobId of otherInProgressIds) {
-          await tx
-            .update(evidencePackets)
-            .set({
-              gpsCheckOutTimestamp: now,
-              updatedAt: now,
-            })
-            .where(eq(evidencePackets.jobId, otherJobId));
-        }
-      }
-
-      // `checkInTime` is intentionally left alone — see the note above.
-      await tx
-        .update(jobs)
-        .set({
-          status: "in-progress",
-          updatedAt: now,
-        })
-        .where(eq(jobs.id, jobId));
-
-      const gpsFields = {
-        checkInLatitude: device ? device.latitude.toString() : null,
-        checkInLongitude: device ? device.longitude.toString() : null,
-        checkInAccuracyMeters:
-          device?.accuracy != null ? device.accuracy.toString() : null,
-        checkInDistanceMiles:
-          geofence.distanceMiles != null
-            ? geofence.distanceMiles.toString()
-            : null,
-        checkInWithinGeofence: geofence.withinGeofence,
-        arrivalDelayMinutes: arrival?.delayMinutes ?? null,
-        arrivalOnTime: arrival?.onTime ?? null,
-        // Written only on an override, so a plain check-in never clears or
-        // overwrites a reason recorded earlier.
-        ...(overrideApplied
-          ? {
-              checkInOverrideReason: overrideReason,
-              checkInOverrideAt: now,
-            }
-          : {}),
-      };
-
-      const existingPacket = await tx.query.evidencePackets.findFirst({
-        where: eq(evidencePackets.jobId, jobId),
-      });
-
-      if (!existingPacket) {
-        await tx.insert(evidencePackets).values({
-          jobId,
-          status: "incomplete",
-          gpsCheckInTimestamp: now,
-          ...gpsFields,
-        });
-      } else {
-        await tx
-          .update(evidencePackets)
-          .set({
-            gpsCheckInTimestamp: now,
-            updatedAt: now,
-            ...gpsFields,
-          })
-          .where(eq(evidencePackets.jobId, jobId));
-      }
-
-      await tx
-        .update(cleaners)
-        .set({ onCallStatus: "on_job", updatedAt: now })
-        .where(eq(cleaners.id, cleanerId));
+    const gpsFields = {
+      checkInLatitude: device ? device.latitude.toString() : null,
+      checkInLongitude: device ? device.longitude.toString() : null,
+      checkInAccuracyMeters:
+        device?.accuracy != null ? device.accuracy.toString() : null,
+      checkInDistanceMiles:
+        geofence.distanceMiles != null
+          ? geofence.distanceMiles.toString()
+          : null,
+      checkInWithinGeofence: geofence.withinGeofence,
+      arrivalDelayMinutes: arrival?.delayMinutes ?? null,
+      arrivalOnTime: arrival?.onTime ?? null,
+      // Written only on an override, so a plain check-in never clears or
+      // overwrites a reason recorded earlier.
+      ...(overrideApplied
+        ? {
+            checkInOverrideReason: overrideReason,
+            checkInOverrideAt: now,
+          }
+        : {}),
+    };
+    const { started } = await recordJobArrival({
+      jobId,
+      cleanerId,
+      now,
+      gpsFields,
+      expectedSchedule: { start: jobBefore?.checkInTime ?? null, deadline: jobBefore?.checkOutTime ?? null },
     });
+    if (!started)
+      return NextResponse.json({
+        success: true,
+        alreadyCheckedIn: true,
+        job: await getCleanerJobDetail(cleanerId, jobId),
+      });
 
     // Audit trail + accountability (record & flag; never blocks check-in).
     // Only on the first check-in: re-entering the workflow screen on a job
@@ -337,7 +306,7 @@ export async function POST(
       flags.push(
         geofence.verdict === "outside" && geofence.distanceMiles != null
           ? `OVERRODE the geofence from ${geofence.distanceMiles} mi away — reason: "${overrideReason}"`
-          : `OVERRODE the location requirement with no device fix — reason: "${overrideReason}"`
+          : `OVERRODE the location requirement with no device fix — reason: "${overrideReason}"`,
       );
     } else if (
       geofence.withinGeofence === false &&
@@ -346,11 +315,11 @@ export async function POST(
       flags.push(`checked in ${geofence.distanceMiles} mi from the property`);
     } else if (geofence.reason === "low_accuracy") {
       flags.push(
-        "location could not be verified — the device fix was too imprecise to place it at the property"
+        "location could not be verified — the device fix was too imprecise to place it at the property",
       );
     } else if (geofence.reason === "property_not_geocoded") {
       flags.push(
-        "location could not be verified — this property has no coordinates on file"
+        "location could not be verified — this property has no coordinates on file",
       );
     }
     if (arrival && !arrival.onTime) {
@@ -370,16 +339,9 @@ export async function POST(
     const job = await getCleanerJobDetail(cleanerId, jobId);
     return NextResponse.json({ success: true, job });
   } catch (err) {
-    if (err instanceof Error && err.message === "BOOKING_SCHEDULE_CHANGED") {
-      return NextResponse.json(
-        { error: "The booking changed while you were checking in. Refresh the job and try again." },
-        { status: 409 }
-      );
-    }
+    if (err instanceof JobVisitError)
+      return NextResponse.json({ error: err.message }, { status: err.status });
     console.error("[POST /api/cleaner/jobs/[id]/check-in]", err);
-    return NextResponse.json(
-      { error: "Failed to check in" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to check in" }, { status: 500 });
   }
 }

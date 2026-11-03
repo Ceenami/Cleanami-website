@@ -157,7 +157,7 @@ export interface PriceDetails {
   /**
    * The property cannot be priced from the rules and needs a manual quote —
    * either it is over the sq ft ceiling, or its bedroom/bathroom combination
-   * falls outside the base price matrix.
+   * falls outside the base price matrix or supported automatic staffing.
    */
   isCustomQuote: boolean;
   /**
@@ -170,7 +170,7 @@ export interface PriceDetails {
    * The property has a laundry service but no usable load count, so the price
    * shown is too low (it omits the per-load charge). A data defect on the
    * property, not a property we cannot price — the distinction matters because
-   * unattended recurring charges log and proceed where interactive flows refuse.
+   * recurring authorization and interactive charging must both refuse it.
    */
   laundryLoadsMissing: boolean;
   periodicCharges: Array<{

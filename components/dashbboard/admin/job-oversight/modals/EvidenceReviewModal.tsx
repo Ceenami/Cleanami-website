@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
+import { useState } from "react";
 
 export function EvidenceReviewModal({
   photoUrls,
@@ -25,16 +25,25 @@ export function EvidenceReviewModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Evidence photos"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onClose();
+      }}
+      className="fixed inset-0 z-50 overflow-y-auto"
+    >
       <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         {/* Background overlay */}
         <div
           className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
+          aria-hidden="true"
           onClick={onClose}
         />
 
         {/* Modal panel */}
-        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+        <div className="relative z-10 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
           {/* Header */}
           <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
             <div className="flex items-center justify-between mb-4">
@@ -44,17 +53,32 @@ export function EvidenceReviewModal({
                   : `Evidence Photo ${activeIndex + 1} of ${photoUrls.length}`}
               </h3>
               <button
+                autoFocus
+                aria-label="Close photo viewer"
                 onClick={onClose}
                 className="text-gray-400 hover:text-gray-500"
               >
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
 
             {/* Image display */}
-            <div className="relative bg-gray-100 rounded-lg overflow-hidden" style={{ minHeight: '400px' }}>
+            <div
+              className="relative bg-gray-100 rounded-lg overflow-hidden"
+              style={{ minHeight: "400px" }}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element -- dynamic evidence URLs */}
               <img
                 src={photoUrls[activeIndex]}
@@ -66,19 +90,41 @@ export function EvidenceReviewModal({
               {photoUrls.length > 1 && (
                 <>
                   <button
+                    aria-label="Previous photo"
                     onClick={goToPrevious}
                     className="absolute left-4 top-1/2 transform -translate-y-1/2 bg-black bg-opacity-50 hover:bg-opacity-75 text-white rounded-full p-2"
                   >
-                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    <svg
+                      className="h-6 w-6"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
                     </svg>
                   </button>
                   <button
+                    aria-label="Next photo"
                     onClick={goToNext}
                     className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-black bg-opacity-50 hover:bg-opacity-75 text-white rounded-full p-2"
                   >
-                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    <svg
+                      className="h-6 w-6"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
                     </svg>
                   </button>
                 </>
@@ -91,9 +137,12 @@ export function EvidenceReviewModal({
                 {photoUrls.map((url, index) => (
                   <button
                     key={index}
+                    aria-label={`View photo ${index + 1}`}
                     onClick={() => setActiveIndex(index)}
                     className={`flex-shrink-0 w-20 h-20 rounded-md overflow-hidden border-2 ${
-                      index === activeIndex ? 'border-teal-500' : 'border-gray-300'
+                      index === activeIndex
+                        ? "border-teal-500"
+                        : "border-gray-300"
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element -- dynamic evidence URLs */}

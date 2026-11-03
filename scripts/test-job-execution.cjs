@@ -222,6 +222,8 @@ async function run() {
       }
       return `"${c.name}" ${c.getSQLType()}${c.primary ? " PRIMARY KEY" : ""}${c.notNull ? " NOT NULL" : ""}${def}`;
     });
+    for (const primary of t.primaryKeys)
+      columns.push(`PRIMARY KEY (${primary.columns.map(c => `"${c.name}"`).join(",")})`);
     await pg.exec(`CREATE TABLE "${t.name}" (${columns.join(",")});`);
     for (const idx of t.indexes.filter((i) => i.config.unique)) {
       const cfg = idx.config;
@@ -774,6 +776,10 @@ async function run() {
         computeCleanerPay({ ...base, arrivalDelayMinutes: delay }).total,
         total,
       );
+  });
+  if (process.argv.includes("--phase2c")) await require("./test-phase2c-integration.cjs").verify({
+    db, pg, schema, seed, make, row, contracts, service, settlement, cancellation,
+    test, replace, jpeg, media, reserveInput, root, uuid,
   });
   console.log(
     `${passed} PostgreSQL/service regressions passed. Hosted Auth/Storage/provider/device gates remain separate.`,

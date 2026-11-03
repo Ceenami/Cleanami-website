@@ -1,210 +1,198 @@
 "use client";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import type { Route } from "next";
+import {
+  restockPropertyUrl,
+  type RestockSummary,
+} from "@/lib/restocking/types";
+import {
+  fetchRestocking,
+  restockDate,
+  restockFocus,
+  restockLink,
+} from "./RestockRequestsPanel";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
-import { format } from "date-fns";
-import type { RestockStatus, RestockUrgency } from "@/db/schemas";
-
-export type RestockRow = {
-  id: string;
-  jobId: string | null;
-  propertyId: string;
-  propertyAddress: string | null;
-  cleanerName: string | null;
-  item: string;
-  quantity: number;
-  urgency: RestockUrgency;
-  notes: string | null;
-  status: RestockStatus;
-  adminNotes: string | null;
-  createdAt: string;
-  resolvedAt: string | null;
-};
-
-const STATUS_STYLES: Record<RestockStatus, string> = {
-  requested: "bg-blue-100 text-blue-800",
-  approved: "bg-indigo-100 text-indigo-800",
-  ordered: "bg-purple-100 text-purple-800",
-  fulfilled: "bg-green-100 text-green-800",
-  declined: "bg-gray-100 text-gray-700",
-};
-
-const URGENCY_STYLES: Record<RestockUrgency, string> = {
-  low: "text-gray-500",
-  normal: "text-gray-700",
-  urgent: "text-red-600 font-semibold",
-};
-
-/** What an admin can do next from each state. */
-const NEXT_ACTIONS: Record<RestockStatus, RestockStatus[]> = {
-  requested: ["approved", "declined"],
-  approved: ["ordered", "fulfilled", "declined"],
-  ordered: ["fulfilled", "declined"],
-  fulfilled: [],
-  declined: ["requested"],
-};
-
-const ACTION_LABELS: Record<RestockStatus, string> = {
-  requested: "Reopen",
-  approved: "Approve",
-  ordered: "Mark ordered",
-  fulfilled: "Mark fulfilled",
-  declined: "Decline",
-};
-
-export function RestockingClientPage({ requests }: { requests: RestockRow[] }) {
-  const router = useRouter();
-  const [showResolved, setShowResolved] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const visible = useMemo(
-    () =>
-      showResolved
-        ? requests
-        : requests.filter(
-            (request) =>
-              request.status !== "fulfilled" && request.status !== "declined"
-          ),
-    [requests, showResolved]
-  );
-
-  const openCount = requests.filter(
-    (request) => request.status !== "fulfilled" && request.status !== "declined"
-  ).length;
-
-  async function move(row: RestockRow, status: RestockStatus) {
-    setBusyId(row.id);
-    try {
-      const response = await fetch(`/api/restock-requests/${row.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error ?? "Could not update that request.");
-      }
-
-      toast.success(`${row.item} → ${status}`);
-      router.refresh();
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not update that request."
-      );
-    } finally {
-      setBusyId(null);
-    }
-  }
-
+export function RestockingClientPage() {
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [includeResolved, setIncludeResolved] = useState(false);
+  const [page, setPage] = useState(1);
+  const result = useQuery({
+    queryKey: ["restocking", "properties", search, includeResolved, page],
+    queryFn: () =>
+      fetchRestocking<RestockSummary>(
+        new URLSearchParams({
+          query: search,
+          page: String(page),
+          includeResolved: includeResolved ? "1" : "0",
+        }),
+      ),
+    staleTime: 0,
+    refetchInterval: 30000,
+  });
+  const data = result.data;
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-900">
-          {openCount} open{" "}
-          <span className="text-sm font-normal text-gray-500">
-            of {requests.length} total
-          </span>
-        </h2>
-        <label className="flex items-center gap-2 text-sm text-gray-600">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <form
+          className="flex min-w-0 flex-1 gap-2 sm:max-w-md"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSearch(query.trim());
+            setPage(1);
+          }}
+        >
+          <label htmlFor="restock-search" className="sr-only">
+            Search property address
+          </label>
+          <input
+            id="restock-search"
+            type="search"
+            maxLength={120}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search property address"
+            className={`min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm ${restockFocus}`}
+          />
+          <button
+            type="submit"
+            className={`rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 ${restockFocus}`}
+          >
+            Search
+          </button>
+        </form>
+        <label className="flex min-h-10 items-center gap-2 text-sm text-gray-700">
           <input
             type="checkbox"
-            checked={showResolved}
-            onChange={(e) => setShowResolved(e.target.checked)}
-            className="rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+            checked={includeResolved}
+            onChange={(e) => {
+              setIncludeResolved(e.target.checked);
+              setPage(1);
+            }}
+            className="accent-teal-700"
           />
-          Show fulfilled and declined
+          Include resolved properties
         </label>
       </div>
-
-      <div className="overflow-x-auto rounded-lg bg-white shadow-md">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              {["Item", "Property", "Requested by", "Status", "Actions"].map(
-                (heading) => (
-                  <th
-                    key={heading}
-                    className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                  >
-                    {heading}
-                  </th>
-                )
-              )}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {visible.length === 0 && (
+      <p aria-live="polite" className="text-sm text-gray-600">
+        {data ? (
+          <>
+            <strong className="text-lg text-gray-900">
+              {data.totals.openCount} open
+            </strong>{" "}
+            across {data.totals.propertyCount} properties ·{" "}
+            {data.totals.urgentCount} urgent
+            {search ? " matching your search" : ""}
+          </>
+        ) : (
+          "Loading property counts…"
+        )}
+      </p>
+      {result.isError ? (
+        <div role="alert" className="text-sm text-red-700">
+          Could not load properties.{" "}
+          <button
+            type="button"
+            onClick={() => result.refetch()}
+            className={restockLink}
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
+            <caption className="sr-only">
+              Restocking requests grouped by property. Open a property to view
+              individual requests.
+            </caption>
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-600">
               <tr>
-                <td
-                  colSpan={5}
-                  className="px-6 py-8 text-center text-sm text-gray-500"
-                >
-                  {requests.length === 0
-                    ? "No restock requests yet."
-                    : "Nothing open — every request has been resolved."}
-                </td>
+                {["Property", "Open requests", "Urgent", "Latest request"].map(
+                  (h) => (
+                    <th key={h} scope="col" className="px-4 py-3">
+                      {h}
+                    </th>
+                  ),
+                )}
               </tr>
-            )}
-            {visible.map((row) => (
-              <tr key={row.id}>
-                <td className="px-6 py-4">
-                  <div className="text-sm font-medium text-gray-900">
-                    {row.quantity} × {row.item}
-                  </div>
-                  <div className={`text-xs ${URGENCY_STYLES[row.urgency]}`}>
-                    {row.urgency} priority
-                  </div>
-                  {row.notes && (
-                    <div className="mt-1 max-w-xs text-xs text-gray-500">
-                      {row.notes}
-                    </div>
-                  )}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-700">
-                  {row.propertyAddress ?? "—"}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-700">
-                  <div>{row.cleanerName ?? "—"}</div>
-                  <div className="text-xs text-gray-400">
-                    {format(new Date(row.createdAt), "MMM d, yyyy h:mm a")}
-                  </div>
-                </td>
-                <td className="whitespace-nowrap px-6 py-4">
-                  <span
-                    className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${STATUS_STYLES[row.status]}`}
-                  >
-                    {row.status}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-6 py-4 text-sm">
-                  <div className="flex gap-3">
-                    {NEXT_ACTIONS[row.status].map((next) => (
-                      <button
-                        key={next}
-                        type="button"
-                        onClick={() => void move(row, next)}
-                        disabled={busyId === row.id}
-                        className={`font-medium disabled:opacity-50 ${
-                          next === "declined"
-                            ? "text-red-600 hover:text-red-800"
-                            : "text-teal-600 hover:text-teal-800"
-                        }`}
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {result.isPending ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-gray-500">
+                    Loading properties…
+                  </td>
+                </tr>
+              ) : !data?.properties.length ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-gray-500">
+                    {search
+                      ? "No properties match this search."
+                      : includeResolved
+                        ? "No restocking requests yet."
+                        : "No open restocking requests. Include resolved properties to view history."}
+                  </td>
+                </tr>
+              ) : (
+                data.properties.map((property) => (
+                  <tr key={property.propertyId} className="hover:bg-gray-50">
+                    <th
+                      scope="row"
+                      className="min-w-52 max-w-md px-4 py-5 font-normal"
+                    >
+                      <Link
+                        href={restockPropertyUrl(property.propertyId) as Route}
+                        className={restockLink}
                       >
-                        {ACTION_LABELS[next]}
-                      </button>
-                    ))}
-                    {NEXT_ACTIONS[row.status].length === 0 && (
-                      <span className="text-xs text-gray-400">Closed</span>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                        {property.address}
+                      </Link>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {property.totalCount} total requests
+                      </p>
+                    </th>
+                    <td className="px-4 py-5 font-semibold text-gray-900">
+                      {property.openCount}
+                    </td>
+                    <td
+                      className={`px-4 py-5 ${property.urgentCount ? "font-semibold text-red-700" : "text-gray-500"}`}
+                    >
+                      {property.urgentCount}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-5 text-gray-600">
+                      {restockDate(property.latestRequestAt)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <nav
+        aria-label="Property pages"
+        className="flex items-center gap-4 text-sm"
+      >
+        <button
+          type="button"
+          disabled={page === 1 || result.isFetching}
+          onClick={() => setPage((p) => p - 1)}
+          className={`min-h-10 rounded-md border border-gray-300 px-4 disabled:opacity-40 ${restockFocus}`}
+        >
+          Previous
+        </button>
+        <span>Page {page}</span>
+        <button
+          type="button"
+          disabled={!data?.hasMore || result.isFetching}
+          onClick={() => setPage((p) => p + 1)}
+          className={`min-h-10 rounded-md border border-gray-300 px-4 disabled:opacity-40 ${restockFocus}`}
+        >
+          Next
+        </button>
+      </nav>
     </div>
   );
 }

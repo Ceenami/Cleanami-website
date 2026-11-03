@@ -8,18 +8,35 @@ export async function GET() {
   if (!cleanerId) {
     return NextResponse.json(
       { error: error ?? "Unauthorized" },
-      { status: cleanerAuthErrorStatus(error) }
+      { status: cleanerAuthErrorStatus(error) },
     );
   }
 
   try {
     const requests = await listRestockRequestsForCleaner(cleanerId);
-    return NextResponse.json({ requests });
+    return NextResponse.json(
+      {
+        requests: requests.map((r) => ({
+          id: r.id,
+          item: r.item,
+          quantity: r.quantity,
+          urgency: r.urgency,
+          status: r.status,
+          propertyId: r.propertyId,
+          propertyAddress: r.propertyAddress,
+          jobId: r.jobId,
+          notes: r.notes,
+          createdAt: r.createdAt,
+          resolvedAt: r.resolvedAt,
+        })),
+      },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (err) {
     console.error("[GET /api/cleaner/restock-requests]", err);
     return NextResponse.json(
       { error: "Failed to load restock requests" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

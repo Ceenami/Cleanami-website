@@ -1,4 +1,5 @@
 import "server-only";
+import { effectiveChecklist } from "./effective-checklist";
 import { db, type Database } from "@/db";
 import { jobs, properties, jobExecutionContracts } from "@/db/schemas";
 import { eq } from "drizzle-orm";
@@ -18,7 +19,7 @@ import {
 
 export async function getExecutionContract(jobId: string, database: Database | Transaction = db) {
   const [row] = await database
-    .select({ contract: jobExecutionContracts, start: jobs.checkInTime, deadline: jobs.checkOutTime })
+    .select({ contract: jobExecutionContracts, start: jobs.checkInTime, deadline: jobs.checkOutTime, checklist: jobs.checklistSnapshot })
     .from(jobExecutionContracts)
     .innerJoin(jobs, eq(jobs.id, jobExecutionContracts.jobId))
     .where(eq(jobExecutionContracts.jobId, jobId));
@@ -26,9 +27,11 @@ export async function getExecutionContract(jobId: string, database: Database | T
   if (row.contract.protocol !== EXECUTION_PROTOCOL)
     throw Error("Unsupported issued execution protocol");
   const terms = issuedTermsSchema.parse(row.contract.terms);
+  const checklist = await effectiveChecklist(jobId, row.checklist, database);
   // SQL0053 only permits audited unstarted schedule revisions. Original issued
   // terms stay immutable; every workflow consumes the same effective schedule.
-  return issuedTermsSchema.parse({ ...terms, plannedStart: row.start?.toISOString(), plannedDeadline: row.deadline?.toISOString() });
+  return issuedTermsSchema.parse({ ...terms, plannedStart: row.start?.toISOString(), plannedDeadline: row.deadline?.toISOString(),
+    ...(checklist ? { checklist: getExpectedChecklistItemsFromSnapshot(checklist), rooms: checklist.photoRequirements ?? terms.rooms } : {}) });
 }
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 /** Only rows returned by INSERT DO NOTHING can be enrolled. Contracts and jobs commit together. */
@@ -84,7 +87,7 @@ export async function insertIssuedJobs(
         source: job.jobSource,
         propertyCheckOutTime: property.defaultCheckOutTime,
         propertyCheckInTime: property.defaultCheckInTime,
-        rooms: getRoomPhotoRequirements(property),
+        rooms: snapshot.photoRequirements ?? getRoomPhotoRequirements(property),
         checklist: getExpectedChecklistItemsFromSnapshot(snapshot),
       });
       await tx

@@ -110,15 +110,15 @@ export type ChecklistLogPayload = {
 
 export function getMissingPhotoRequirements(
   requirements: RoomPhotoRequirement[],
-  roomPhotos: RoomPhotosMap
+  roomPhotos: RoomPhotosMap,
 ): string[] {
   const missing: string[] = [];
 
   for (const req of requirements) {
-    const count = roomPhotos[req.roomKey]?.length ?? 0;
+    const count = new Set(roomPhotos[req.roomKey] ?? []).size;
     if (count < req.minPhotos) {
       missing.push(
-        `${req.label}: ${count}/${req.minPhotos} photo${req.minPhotos > 1 ? "s" : ""}`
+        `${req.label}: ${count}/${req.minPhotos} photo${req.minPhotos > 1 ? "s" : ""}`,
       );
     }
   }
@@ -162,7 +162,7 @@ export type EvidenceRoomGroup = {
  */
 export function buildEvidenceRoomGroups(
   requirements: RoomPhotoRequirement[],
-  roomPhotos: RoomPhotosMap
+  roomPhotos: RoomPhotosMap,
 ): EvidenceRoomGroup[] {
   const groups: EvidenceRoomGroup[] = requirements.map((req) => ({
     roomKey: req.roomKey,
@@ -189,7 +189,11 @@ export function flattenRoomPhotos(roomPhotos: RoomPhotosMap): string[] {
   return Object.values(roomPhotos).flat();
 }
 
-export type ExpectedChecklistItem = { id: string; task: string; section?: string };
+export type ExpectedChecklistItem = {
+  id: string;
+  task: string;
+  section?: string;
+};
 
 /**
  * A property with its own uploaded checklist
@@ -209,7 +213,7 @@ export function getExpectedChecklistItems(
      */
     serviceType?: string | null;
   },
-  checklistFiles: { id: string; fileName: string }[]
+  checklistFiles: { id: string; fileName: string }[],
 ): ExpectedChecklistItem[] {
   // Unchanged, and it comes FIRST on purpose: a residential customer who
   // uploaded their own checklist gets their own checklist, exactly as a rental
@@ -235,16 +239,20 @@ export function getExpectedChecklistItems(
   return items.map(({ id, task, section }) => ({ id, task, section }));
 }
 
-export function getExpectedChecklistItemsFromSnapshot(snapshot: ChecklistSnapshot): ExpectedChecklistItem[] {
+export function getExpectedChecklistItemsFromSnapshot(
+  snapshot: ChecklistSnapshot,
+): ExpectedChecklistItem[] {
   return snapshot.items.map(({ id, task, section }) => ({ id, task, section }));
 }
 
 /** Recomputes the expected items and overlays any prior completion state by id. */
 export function mergeChecklistItems(
   expected: ExpectedChecklistItem[],
-  existing: { id: string; completed: boolean }[]
+  existing: { id: string; completed: boolean }[],
 ): { id: string; task: string; completed: boolean; section?: string }[] {
-  const completedById = new Map(existing.map((item) => [item.id, item.completed]));
+  const completedById = new Map(
+    existing.map((item) => [item.id, item.completed]),
+  );
   return expected.map((item) => ({
     ...item,
     completed: completedById.get(item.id) ?? false,
@@ -254,10 +262,10 @@ export function mergeChecklistItems(
 /** Every expected item's id must appear, completed, in the submission. */
 export function getMissingChecklistItems(
   expected: ExpectedChecklistItem[],
-  submitted: { id: string; completed: boolean }[]
+  submitted: { id: string; completed: boolean }[],
 ): string[] {
   const completedIds = new Set(
-    submitted.filter((item) => item.completed).map((item) => item.id)
+    submitted.filter((item) => item.completed).map((item) => item.id),
   );
   return expected
     .filter((item) => !completedIds.has(item.id))
@@ -270,7 +278,10 @@ export function validateEvidenceComplete(
     checklistLog: unknown;
     photoUrls: string[] | null;
   },
-  property: Pick<Property, "bedCount" | "bathCount" | "hasHotTub" | "laundryType">
+  property: Pick<
+    Property,
+    "bedCount" | "bathCount" | "hasHotTub" | "laundryType"
+  >,
 ): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
 
@@ -283,7 +294,10 @@ export function validateEvidenceComplete(
   const requirements = getRoomPhotoRequirements(property);
   missing.push(...getMissingPhotoRequirements(requirements, roomPhotos));
 
-  if (!evidence.photoUrls?.length && flattenRoomPhotos(roomPhotos).length === 0) {
+  if (
+    !evidence.photoUrls?.length &&
+    flattenRoomPhotos(roomPhotos).length === 0
+  ) {
     missing.push("No photos uploaded");
   }
 

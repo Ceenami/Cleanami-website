@@ -1,4 +1,4 @@
-import { sendAvailabilityReminders } from "@/lib/services/notifications/reminders.service";
+import { sendStagedAvailabilityReminders as sendAvailabilityReminders } from "@/lib/services/notifications/availability-reminders";
 import { assertCronAuth } from "@/lib/auth/cron-auth";
 
 export async function GET(request: Request) {
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
     console.error("[cron/availability-reminders] failed", error);
     return Response.json(
       { success: false, error: "Availability reminders failed" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

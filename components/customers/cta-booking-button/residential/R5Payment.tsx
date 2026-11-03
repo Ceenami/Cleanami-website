@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Elements } from "@stripe/react-stripe-js";
 import type { StripeElementsOptions } from "@stripe/stripe-js";
 import { toast } from "sonner";
@@ -8,7 +14,10 @@ import { AlertTriangle, Lock } from "lucide-react";
 import { CheckoutForm } from "../CheckoutForm";
 import { getStripe } from "@/lib/stripe/client";
 import { isServiceUnavailableMessage } from "@/lib/env/messages";
-import { RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER } from "@/lib/constants/service-type";
+import {
+  RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER,
+  getJobDisplay,
+} from "@/lib/constants/service-type";
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { serializeResidentialFormForServer } from "@/lib/validations/residential/serialize";
 import { PromoCodeField } from "../PromoCodeField";
@@ -21,9 +30,10 @@ interface Props {
   /** Carries the amount actually charged, which is not the list price when a code applied. */
   onPaymentSuccess: (
     paymentIntentId: string,
-    chargedAmountCents: number | null
+    chargedAmountCents: number | null,
   ) => void;
   paymentFinalizing?: boolean;
+  quoteReady: boolean;
 }
 
 /**
@@ -47,6 +57,7 @@ export const R5Payment = ({
   setFormData,
   onPaymentSuccess,
   paymentFinalizing = false,
+  quoteReady,
 }: Props) => {
   const [clientSecret, setClientSecret] = useState("");
   const [amountInCents, setAmountInCents] = useState<number | null>(null);
@@ -60,15 +71,25 @@ export const R5Payment = ({
 
   const payload = useMemo(
     () => serializeResidentialFormForServer(formData),
-    [formData]
+    [formData],
   );
   const requestKey = useMemo(() => JSON.stringify(payload), [payload]);
+  const currentKeyRef = useRef(requestKey);
+  currentKeyRef.current = requestKey;
+  const requestSequence = useRef(0);
+  const [resolvedKey, setResolvedKey] = useState<string | null>(null);
 
   const initializePayment = useCallback(async () => {
+    if (!quoteReady) return;
+    const sequence = ++requestSequence.current;
+    const isCurrent = () =>
+      sequence === requestSequence.current &&
+      currentKeyRef.current === requestKey;
     setIsInitializing(true);
     setError(null);
     setEarliestDate(null);
     setClientSecret("");
+    setResolvedKey(null);
     setAmountInCents(null);
     setPromoDiscountCents(0);
     setPriceBeforeDiscountCents(null);
@@ -88,6 +109,7 @@ export const R5Payment = ({
         error?: string;
         earliestBookableDate?: string | null;
       };
+      if (!isCurrent()) return;
 
       if (!response.ok || result.error) {
         const message =
@@ -104,18 +126,20 @@ export const R5Payment = ({
         setAmountInCents(result.amountInCents ?? null);
         setPromoDiscountCents(result.promoDiscountCents ?? 0);
         setPriceBeforeDiscountCents(result.priceBeforeDiscountCents ?? null);
+        setResolvedKey(requestKey);
       } else {
         setError("Could not start your booking. Please refresh and try again.");
       }
     } catch (initError) {
+      if (!isCurrent()) return;
       console.error("Residential payment initialization failed:", initError);
       setError(
-        "Could not reach the payment service. Check your connection and try again."
+        "Could not reach the payment service. Check your connection and try again.",
       );
     } finally {
-      setIsInitializing(false);
+      if (isCurrent()) setIsInitializing(false);
     }
-  }, [payload]);
+  }, [payload, quoteReady, requestKey]);
 
   // Keyed on the payload, not on "do we already have a secret". The
   // vacation-rental step learned this the hard way: a "have a secret, never
@@ -123,11 +147,11 @@ export const R5Payment = ({
   // underneath it, and the customer was charged the old amount.
   const initializedKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (paymentFinalizing) return;
+    if (paymentFinalizing || !quoteReady) return;
     if (initializedKeyRef.current === requestKey) return;
     initializedKeyRef.current = requestKey;
     void initializePayment();
-  }, [requestKey, initializePayment, paymentFinalizing]);
+  }, [requestKey, initializePayment, paymentFinalizing, quoteReady]);
 
   const options: StripeElementsOptions = {
     clientSecret,
@@ -136,8 +160,37 @@ export const R5Payment = ({
 
   return (
     <div className="space-y-6">
+      {formData.pricingVersion === "residential-v2" && (
+        <div className="text-sm text-gray-700">
+          <p>
+            Cancel at least 24 hours before your scheduled arrival for a full refund.
+            With less than 24 hours’ notice and a working cleaner assigned, the booked
+            charge is retained to compensate the reserved time.
+          </p>
+          {formData.cleaningLevel === "deep" && (
+            <p>Interior oven and refrigerator cleaning included.</p>
+          )}
+          {formData.hotTub && formData.hotTub !== "none" && (
+            <p>
+              {formData.hotTub === "basic"
+                ? "Basic hot-tub care"
+                : "Hot-tub drain, clean and refill"}
+            </p>
+          )}
+          {(formData.inUnitLaundryLoads ?? 0) > 0 && (
+            <p>{formData.inUnitLaundryLoads} in-unit laundry load(s).</p>
+          )}
+        </div>
+      )}
       <div>
-        <h3 className="text-lg font-medium text-gray-900">Confirm and pay</h3>
+        <h3 className="text-lg font-medium text-gray-900">
+          {
+            getJobDisplay({
+              serviceType: "residential_one_time",
+              cleaningLevel: formData.cleaningLevel,
+            }).label
+          }
+        </h3>
         <p className="mt-1 text-sm text-gray-600">
           Your clean is paid for now and scheduled straight away.
         </p>
@@ -150,13 +203,15 @@ export const R5Payment = ({
       {/* Applying a code re-creates the PaymentIntent rather than adjusting a
           number on screen, so what is displayed below is always what Stripe
           will charge. The server re-resolves the code regardless. */}
-      <PromoCodeField
-        residentialFormData={formData}
-        onApply={(code) =>
-          setFormData((prev) => ({ ...prev, promoCode: code || undefined }))
-        }
-        disabled={isInitializing || paymentFinalizing}
-      />
+      {formData.pricingVersion !== "residential-v2" && (
+        <PromoCodeField
+          residentialFormData={formData}
+          onApply={(code) =>
+            setFormData((prev) => ({ ...prev, promoCode: code || undefined }))
+          }
+          disabled={isInitializing || paymentFinalizing}
+        />
+      )}
 
       {amountInCents !== null && !error && (
         <div className="space-y-1 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3">
@@ -201,7 +256,7 @@ export const R5Payment = ({
                   <strong>
                     {new Date(`${earliestDate}T12:00:00`).toLocaleDateString(
                       "en-US",
-                      { weekday: "long", month: "long", day: "numeric" }
+                      { weekday: "long", month: "long", day: "numeric" },
                     )}
                   </strong>
                   . Go back a step to choose it.
@@ -230,8 +285,8 @@ export const R5Payment = ({
         </div>
       )}
 
-      {clientSecret && !error ? (
-        <Elements options={options} stripe={stripePromise}>
+      {clientSecret && !error && quoteReady && resolvedKey === requestKey ? (
+        <Elements key={clientSecret} options={options} stripe={stripePromise}>
           <CheckoutForm
             onPaymentSuccess={(paymentIntentId) =>
               // The amount the intent was created for, not the list price: with

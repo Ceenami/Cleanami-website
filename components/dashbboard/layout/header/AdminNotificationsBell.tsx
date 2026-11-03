@@ -1,80 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { Bell, Loader2, X } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
-
-type Notification = {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-  jobId: string | null;
-  url?: string | null;
-};
+import { useNotificationInbox } from "@/hooks/useNotificationInbox";
 
 export function AdminNotificationsBell() {
   const { data: user } = useCurrentUser();
-  const userRole = user?.user_metadata?.role as string | undefined;
+  const userRole = user?.role as string | undefined;
   const isAdmin = userRole === "admin" || userRole === "super_admin";
 
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [initialLoading, setInitialLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const loadNotifications = useCallback(async (isRefresh = false) => {
-    if (isRefresh) {
-      setRefreshing(true);
-    } else {
-      setInitialLoading(true);
-    }
-
-    try {
-      const response = await fetch("/api/notifications");
-      const data = (await response.json()) as {
-        notifications?: Notification[];
-        unreadCount?: number;
-      };
-
-      if (!response.ok) {
-        if (!isRefresh) {
-          setNotifications([]);
-          setUnreadCount(0);
-        }
-        return;
-      }
-
-      setNotifications(data.notifications ?? []);
-      setUnreadCount(data.unreadCount ?? 0);
-    } finally {
-      setInitialLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-
-    loadNotifications(false);
-    const interval = setInterval(() => loadNotifications(true), 60_000);
-    return () => clearInterval(interval);
-  }, [isAdmin, loadNotifications]);
+  const { data, isLoading: initialLoading, isFetching: refreshing, isError, refetch, markRead } =
+    useNotificationInbox("admin", isAdmin);
+  const notifications = data?.notifications ?? [];
+  const unreadCount = data?.unreadCount ?? 0;
 
   if (!isAdmin) {
     return null;
-  }
-
-  async function handleMarkAllRead() {
-    await fetch("/api/notifications", { method: "PATCH" });
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    setUnreadCount(0);
   }
 
   function formatTime(iso: string) {
@@ -93,7 +39,7 @@ export function AdminNotificationsBell() {
         type="button"
         onClick={() => {
           setOpen(true);
-          loadNotifications(true);
+          refetch();
         }}
         className="relative text-gray-500 hover:text-gray-700"
         aria-label="Notifications"
@@ -137,8 +83,9 @@ export function AdminNotificationsBell() {
               <div className="border-b px-4 py-2">
                 <button
                   type="button"
-                  onClick={handleMarkAllRead}
-                  className="text-sm font-medium text-teal-600 hover:underline"
+                  onClick={() => markRead.mutate(undefined)}
+                  disabled={markRead.isPending}
+                  className="text-sm font-medium text-teal-600 hover:underline disabled:opacity-50"
                 >
                   Mark all read
                 </button>
@@ -146,10 +93,14 @@ export function AdminNotificationsBell() {
             )}
 
             <div className="flex-1 overflow-y-auto">
+              {isError && <p role="alert" className="p-4 text-sm text-red-600">Could not load notifications. <button type="button" className="underline" onClick={() => refetch()}>Retry</button></p>}
+              {markRead.isError && <p role="alert" className="p-4 text-sm text-red-600">{markRead.error.message}</p>}
               {initialLoading && notifications.length === 0 ? (
                 <p className="p-4 text-sm text-gray-500">Loading…</p>
-              ) : notifications.length === 0 ? (
-                <p className="p-4 text-sm text-gray-500">No notifications yet.</p>
+              ) : notifications.length === 0 && !isError ? (
+                <p className="p-4 text-sm text-gray-500">
+                  No notifications yet.
+                </p>
               ) : (
                 <ul className="divide-y divide-gray-100">
                   {notifications.map((n) => (
@@ -160,7 +111,9 @@ export function AdminNotificationsBell() {
                       <p className="text-sm font-semibold text-gray-900">
                         {n.title}
                       </p>
-                      <p className="mt-0.5 text-sm text-gray-600">{n.message}</p>
+                      <p className="mt-0.5 text-sm text-gray-600">
+                        {n.message}
+                      </p>
                       <p className="mt-1 text-xs text-gray-400">
                         {formatTime(n.createdAt)}
                       </p>

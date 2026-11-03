@@ -2,8 +2,13 @@
 
 import { CheckCircle, Mail, ShieldCheck } from "lucide-react";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { getJobDisplay } from "@/lib/constants/service-type";
 
 interface Props {
+  cleaningLevel?: "standard" | "deep";
+  pricingVersion?: "residential-v1" | "residential-v2";
+  hotTub?: "none" | "basic" | "full";
+  inUnitLaundryLoads?: number;
   paymentIntentId?: string;
   amountInCents?: number | null;
   /** Shown so the customer can see the code was actually taken into account. */
@@ -22,6 +27,10 @@ interface Props {
  * surface but the property row.
  */
 export const R6Confirmation = ({
+  cleaningLevel,
+  pricingVersion,
+  hotTub,
+  inUnitLaundryLoads,
   paymentIntentId,
   amountInCents,
   promoCode,
@@ -43,6 +52,31 @@ export const R6Confirmation = ({
       </p>
 
       <div className="mt-6 text-left bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2 text-sm">
+        <p className="font-medium text-gray-900">
+          {
+            getJobDisplay({
+              serviceType: "residential_one_time",
+              cleaningLevel,
+            }).label
+          }
+        </p>
+        {pricingVersion === "residential-v2" && (
+          <>
+            {cleaningLevel === "deep" && (
+              <p>Interior oven and refrigerator included.</p>
+            )}
+            {hotTub && hotTub !== "none" && (
+              <p>
+                {hotTub === "basic"
+                  ? "Basic hot-tub care"
+                  : "Hot-tub drain, clean and refill"}
+              </p>
+            )}
+            {(inUnitLaundryLoads ?? 0) > 0 && (
+              <p>{inUnitLaundryLoads} in-unit laundry load(s).</p>
+            )}
+          </>
+        )}
         {cleanDate && (
           <div className="flex justify-between">
             <span className="text-gray-600">Date</span>

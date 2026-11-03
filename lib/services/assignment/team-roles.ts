@@ -18,13 +18,29 @@ const WORKING_ROLES = new Set(["primary", "laundry_lead"]);
  *
  * Safe to call repeatedly: it writes only the rows whose designation changed.
  */
+type AssignmentTransaction = Parameters<
+  Parameters<typeof db.transaction>[0]
+>[0];
 export async function recalculateJobRoles(jobId: string): Promise<void> {
-  const job = await db.query.jobs.findFirst({
+  await db.transaction(async (tx) => {
+    await tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(eq(jobs.id, jobId))
+      .for("update");
+    await recalculateJobRolesInTransaction(tx, jobId);
+  });
+}
+export async function recalculateJobRolesInTransaction(
+  tx: AssignmentTransaction,
+  jobId: string,
+): Promise<void> {
+  const job = await tx.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
-    columns: { addonsSnapshot: true },
+    columns: { addonsSnapshot: true, checklistSnapshot: true },
   });
 
-  const assignments = await db
+  const assignments = await tx
     .select({
       cleanerId: jobsToCleaners.cleanerId,
       role: jobsToCleaners.role,
@@ -50,16 +66,21 @@ export async function recalculateJobRoles(jobId: string): Promise<void> {
       scoreOf(current.reliabilityScore) > scoreOf(best.reliabilityScore)
         ? current
         : best,
-    team[0]
+    team[0],
   );
 
   // Laundry Lead exists only on off-site laundry jobs and carries the $5/load
   // bonus, so it must sit with a working cleaner — preferably a certified one.
-  const isOffSite = job?.addonsSnapshot?.laundryType === "off_site";
-  const laundryLead = isOffSite
-    ? team.find((m) => m.hasLaundryLeadCert) ?? leader
-    : null;
+  const isOffSite =
+    job?.addonsSnapshot?.laundryType === "off_site" ||
+    (
+      job?.checklistSnapshot as {
+        capabilityRequirements?: { laundryLead: boolean };
+      } | null
+    )?.capabilityRequirements?.laundryLead;
+  const laundryLead = isOffSite ? team.find((m) => m.hasLaundryLeadCert) : null;
 
+  if (isOffSite && !laundryLead) throw new Error("team_missing_laundry_lead");
   const now = new Date();
 
   for (const assignment of assignments) {
@@ -74,14 +95,14 @@ export async function recalculateJobRoles(jobId: string): Promise<void> {
       continue;
     }
 
-    await db
+    await tx
       .update(jobsToCleaners)
       .set({ isTeamLeader: isLeader, role: nextRole, updatedAt: now })
       .where(
         and(
           eq(jobsToCleaners.jobId, jobId),
-          eq(jobsToCleaners.cleanerId, assignment.cleanerId)
-        )
+          eq(jobsToCleaners.cleanerId, assignment.cleanerId),
+        ),
       );
   }
 }

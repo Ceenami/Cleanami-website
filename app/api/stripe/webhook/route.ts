@@ -7,6 +7,7 @@ import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 import { recordDisputeAndHoldPayouts } from "@/lib/services/payment/dispute.service";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { stripe } from "@/lib/stripe/config";
+import { reconcileStripePayment } from "@/lib/services/payment/reconcile-stripe-payment";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 
@@ -32,22 +33,13 @@ async function appendJobNoteByPaymentIntent(
     .where(eq(jobs.id, job.id));
 }
 
-/** Mark a job refunded only after Stripe reports the full charge returned. */
-async function markRefundedByPaymentIntent(
-  paymentIntentId: string | null,
-  amountRefunded: number,
-  chargeAmount: number
-): Promise<void> {
-  if (!paymentIntentId || amountRefunded < chargeAmount) return;
-  const job = await db.query.jobs.findFirst({
-    where: eq(jobs.paymentIntentId, paymentIntentId),
-    columns: { id: true, paymentStatus: true },
-  });
-  if (!job || job.paymentStatus === "refunded") return;
-  await db
-    .update(jobs)
-    .set({ paymentStatus: "refunded", updatedAt: new Date() })
-    .where(eq(jobs.id, job.id));
+const objectId = (value: string | { id: string } | null) =>
+  typeof value === "string" ? value : value?.id ?? null;
+
+async function reconcilePayment(paymentIntentId: string | null, event: Stripe.Event) {
+  if (!paymentIntentId) return;
+  const result = await reconcileStripePayment(stripe, paymentIntentId, event);
+  if (result?.becameFailed) await notifyPaymentFailed(paymentIntentId, result.failureReason);
 }
 
 /**
@@ -115,71 +107,33 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       break;
     }
 
-    case "payment_intent.succeeded": {
+    case "payment_intent.succeeded":
+    case "payment_intent.payment_failed":
+    case "payment_intent.canceled":
+    case "payment_intent.processing":
+    case "payment_intent.amount_capturable_updated": {
       const pi = event.data.object as Stripe.PaymentIntent;
-      await db
-        .update(jobs)
-        .set({
-          paymentStatus: "captured",
-          paymentFailed: false,
-          updatedAt: new Date(),
-        })
-        .where(eq(jobs.paymentIntentId, pi.id));
-      break;
-    }
-
-    case "payment_intent.payment_failed": {
-      const pi = event.data.object as Stripe.PaymentIntent;
-      const reason = pi.last_payment_error?.message ?? "unknown reason";
-      await db
-        .update(jobs)
-        .set({
-          paymentStatus: "failed",
-          paymentFailed: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(jobs.paymentIntentId, pi.id));
-      await appendJobNoteByPaymentIntent(
-        pi.id,
-        `[Stripe] Payment failed: ${reason} (${new Date().toISOString()})`
-      );
-      // Spec §20.5: notify customer + admin (best-effort; not just a note).
-      await notifyPaymentFailed(pi.id, reason);
+      await reconcilePayment(pi.id, event);
       break;
     }
 
     case "charge.refunded": {
       const charge = event.data.object as Stripe.Charge;
-      const pi =
-        typeof charge.payment_intent === "string"
-          ? charge.payment_intent
-          : null;
-      const isFullyRefunded = charge.amount_refunded >= charge.amount;
-      await appendJobNoteByPaymentIntent(
-        pi,
-        `[Stripe] Charge ${isFullyRefunded ? "fully refunded" : "partially refunded"}: ${charge.amount_refunded} of ${charge.amount} cents (${new Date().toISOString()})`
-      );
-      await markRefundedByPaymentIntent(
-        pi,
-        charge.amount_refunded,
-        charge.amount
-      );
+      await reconcilePayment(objectId(charge.payment_intent), event);
       break;
     }
 
-    // Keep the individual refund in the audit trail. `charge.refunded` carries
-    // the aggregate charge amount, which is what tells a partial refund from a
-    // full one and therefore owns the payment-status transition.
-    case "refund.created": {
+    case "refund.created":
+    case "refund.updated":
+    case "refund.failed":
+    case "charge.refund.updated": {
       const refund = event.data.object as Stripe.Refund;
-      const pi =
-        typeof refund.payment_intent === "string"
-          ? refund.payment_intent
-          : null;
-      await appendJobNoteByPaymentIntent(
-        pi,
-        `[Stripe] Refund created: ${refund.amount} cents (${new Date().toISOString()})`
-      );
+      let pi = objectId(refund.payment_intent);
+      if (!pi && refund.charge) {
+        const charge = await stripe.charges.retrieve(objectId(refund.charge)!);
+        pi = objectId(charge.payment_intent);
+      }
+      await reconcilePayment(pi, event);
       break;
     }
 

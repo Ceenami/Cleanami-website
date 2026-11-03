@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import {
   getRoomPhotoRequirements,
+  type RoomPhotoRequirement,
   type RoomPhotosMap,
 } from "@/lib/cleaner/evidence";
 import type { ChecklistItem } from "@/lib/constants/default-checklist";
@@ -25,6 +26,8 @@ type EvidenceFormData = {
   jobId: string;
   queueOwner: string;
   evidenceOpen: boolean;
+  roomRequirements?: RoomPhotoRequirement[];
+  explanations?: Record<string, string>;
   property: {
     bedCount: number;
     bathCount: string | number;
@@ -49,6 +52,8 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
   const [roomPhotos, setRoomPhotos] = useState<RoomPhotosMap>({});
   const [roomPhotoPreviews, setRoomPhotoPreviews] = useState<RoomPhotosMap>({});
   const [notes, setNotes] = useState("");
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
+  const [draftNotice, setDraftNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingRoom, setUploadingRoom] = useState<string | null>(null);
@@ -83,6 +88,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         setRoomPhotos(data.roomPhotos);
         setRoomPhotoPreviews(data.roomPhotoPreviews ?? {});
         setNotes(draft?.notes ?? data.cleanerNotes);
+        setExplanations(draft?.explanations ?? data.explanations ?? {});
         setPendingPhotos(photos);
       } catch (error) {
         if (!cancelled) setError(error instanceof Error ? error.message : "Could not load evidence form.");
@@ -96,9 +102,47 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
   useEffect(() => {
     if (loading || !formData?.evidenceOpen) return;
-    void saveLegacyDraft({ owner: formData.queueOwner, jobId, items: checklistItems, notes })
+    void saveLegacyDraft({ owner: formData.queueOwner, jobId, items: checklistItems, notes, explanations })
       .catch(() => setStorageWarning("Checklist changes could not be saved on this device. Keep this page open and retry."));
-  }, [checklistItems, notes, loading, formData, jobId]);
+  }, [checklistItems, notes, explanations, loading, formData, jobId]);
+
+  async function sendUploadReport(photo: LegacyPhoto) {
+    if (!photo.selectedAt || !photo.reportRevision || !navigator.onLine) return;
+    try {
+      await fetch(`/api/cleaner/jobs/${jobId}/evidence/upload-status`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(5000),
+        body: JSON.stringify({ uploadId: photo.uploadId, roomKey: photo.roomKey,
+          capturedAt: photo.selectedAt, revision: photo.reportRevision,
+          state: photo.reportState ?? "pending", issue: photo.reportState === "failed" ? "upload_failed" : null }),
+      });
+    } catch { /* Retain metadata and replay after reconnect. */ }
+  }
+  async function reportUpload(photo: LegacyPhoto, state: "pending" | "failed" | "discarded") {
+    const latest = (await legacyPhotos(photo.owner, jobId)).find(p => p.uploadId === photo.uploadId) ?? photo;
+    const updated = { ...latest, reportRevision: (latest.reportRevision ?? 0) + 1, reportState: state };
+    await saveLegacyPhoto(updated);
+    await sendUploadReport(updated);
+  }
+  useEffect(() => {
+    if (!formData?.queueOwner || formData.isSubmitted) return;
+    const replay = () => { void legacyPhotos(formData.queueOwner, jobId).then(async photos => {
+      for (const photo of photos) await sendUploadReport(photo);
+    }).catch(() => {}); };
+    replay(); window.addEventListener("online", replay);
+    return () => window.removeEventListener("online", replay);
+  }, [formData?.queueOwner, formData?.isSubmitted, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveDraft() {
+    setError(null); setDraftNotice("");
+    try {
+      await photoJson(`/api/cleaner/jobs/${jobId}/evidence`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "draft", checklistLog: { items: checklistItems, roomPhotos },
+          cleanerNotes: notes, explanations }),
+      });
+      setDraftNotice("Progress saved. Required photo minimums still apply.");
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not save progress; retry."); }
+  }
 
   useEffect(() => {
     let account: string | null = null;
@@ -117,7 +161,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
 
   const roomRequirements = useMemo(() => {
     if (!formData) return [];
-    return getRoomPhotoRequirements(formData.property);
+    return formData.roomRequirements ?? getRoomPhotoRequirements(formData.property);
   }, [formData]);
 
   const allChecklistChecked = checklistItems.every((item) => item.completed);
@@ -161,7 +205,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
           try {
             const blob = await normalizePhoto(file);
             await saveLegacyPhoto({ uploadId: crypto.randomUUID(), owner: formData.queueOwner, jobId,
-              roomKey: roomKey!, fileName: file.name, blob, sha256: await photoHash(blob) });
+              roomKey: roomKey!, fileName: file.name, blob, sha256: await photoHash(blob), selectedAt: new Date().toISOString() });
           } catch (err) { failures.push(`${file.name}: ${err instanceof Error ? err.message : "Could not save photo on this device"}`); }
         }
         if (signal.aborted) throw Error("Upload paused. Saved photos are retained.");
@@ -174,6 +218,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         for (const [index, photo] of queued.entries()) {
           if (signal.aborted) break;
           try {
+            await reportUpload(photo, "pending").catch(() => {});
             const data = await uploadLegacyPhoto(photo, signal, value => setPhotoStatus(prev => ({ ...prev, [photo.uploadId]: value })));
             if (signal.aborted) break;
             if (!savedPaths.current.has(data.path)) {
@@ -190,6 +235,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
             await deleteLegacyPhoto(photo.uploadId);
             setPendingPhotos(await legacyPhotos(formData.queueOwner, jobId));
           } catch (err) {
+            await reportUpload(photo, "failed").catch(() => {});
             const message = err instanceof Error ? err.message : "Upload failed; retry";
             setPhotoStatus(prev => ({ ...prev, [photo.uploadId]: message }));
             failures.push(`${photo.fileName}: ${message}`);
@@ -230,6 +276,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
     if (uploadInProgress.current || submitting) return;
     uploadInProgress.current = true; setUploadingRoom("remove-local");
     try {
+      await reportUpload(photo, "discarded").catch(() => {});
       await deleteLegacyPhoto(photo.uploadId);
       setPendingPhotos(await legacyPhotos(photo.owner, jobId));
       setError(null);
@@ -243,10 +290,11 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
     setError(null);
 
     try {
-      await photoJson(`/api/cleaner/jobs/${jobId}/evidence`, {
+      const result = await photoJson<{ pendingPhysicalCheckout?: boolean }>(`/api/cleaner/jobs/${jobId}/evidence`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: "final", explanations,
           checklistLog: {
             items: checklistItems,
             roomPhotos,
@@ -256,7 +304,7 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
       });
 
       await deleteLegacyDraft(formData!.queueOwner, jobId).catch(() => {});
-      router.push(`/cleaner/jobs/${jobId}?evidenceSubmitted=1`);
+      router.push(`/cleaner/jobs/${jobId}?${result.pendingPhysicalCheckout ? "evidenceSaved" : "evidenceSubmitted"}=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submit failed");
     } finally {
@@ -400,6 +448,14 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
                 )}
               </div>
 
+              {!met && !isOptional && (
+                <label className="mb-3 block text-xs text-gray-600">
+                  Missing-photo explanation (saved progress; photo minimums still apply)
+                  <textarea maxLength={1000} disabled={!formData?.evidenceOpen}
+                    className="mt-1 block w-full rounded border p-2" value={explanations[req.roomKey] ?? ""}
+                    onChange={e => setExplanations(previous => ({ ...previous, [req.roomKey]: e.target.value }))} />
+                </label>
+              )}
               {photos.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-2">
                   {photos.map((path, index) => (
@@ -477,6 +533,9 @@ export function EvidencePacketClient({ jobId }: { jobId: string }) {
         </div>
       )}
 
+      {formData?.evidenceOpen && <button type="button" disabled={submitting || !!uploadingRoom}
+        onClick={() => void saveDraft()} className="min-h-11 text-sm font-medium text-teal-800">Save progress & explanations</button>}
+      {draftNotice && <p role="status" className="text-sm text-teal-800">{draftNotice}</p>}
       <button
         type="button"
         onClick={handleSubmit}

@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { PackagePlus, Check } from "lucide-react";
+import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 
 const URGENCIES = [
   { value: "low", label: "Low" },
@@ -16,6 +18,8 @@ const URGENCIES = [
  * reaches a charge. It files a request for an admin to action.
  */
 export function RestockRequestCard({ jobId }: { jobId: string }) {
+  const qc = useQueryClient();
+  const [confirmation, setConfirmation] = useState("");
   const [open, setOpen] = useState(false);
   const [item, setItem] = useState("");
   const [quantity, setQuantity] = useState("1");
@@ -55,10 +59,18 @@ export function RestockRequestCard({ jobId }: { jobId: string }) {
       }
 
       setSubmitted(true);
+      setConfirmation(
+        data.adminNotificationRecorded === true
+          ? "Request saved and an office alert was added."
+          : "Request saved, but the office alert could not be confirmed. Contact the office if this is urgent.",
+      );
+      await qc.invalidateQueries({ queryKey: ["cleaner-restock-requests"] });
       setOpen(false);
       reset();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send that request.");
+      setError(
+        err instanceof Error ? err.message : "Could not send that request.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -70,7 +82,7 @@ export function RestockRequestCard({ jobId }: { jobId: string }) {
         {submitted && (
           <div className="mb-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
             <Check className="h-4 w-4 shrink-0" />
-            Restock request sent — the office has been notified.
+            {confirmation}
           </div>
         )}
         <button
@@ -84,6 +96,12 @@ export function RestockRequestCard({ jobId }: { jobId: string }) {
           <PackagePlus className="h-4 w-4" />
           {submitted ? "Request something else" : "Request a restock"}
         </button>
+        <Link
+          href="/cleaner/restocking"
+          className="mt-3 inline-block text-sm font-medium text-brand hover:underline"
+        >
+          View my supply requests
+        </Link>
       </div>
     );
   }

@@ -5,6 +5,7 @@ import type { ResidentialFormData } from "@/lib/validations/residential";
 import { AddressAutocomplete } from "../AddressAutoComplete";
 import { StepFeedback } from "../StepFeedback";
 import { PetsField } from "../PetsField";
+import { ResidentialLevelChoice } from "./ResidentialLevelChoice";
 import {
   PETS_QUESTION_RESIDENTIAL,
   RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER,
@@ -29,17 +30,16 @@ const inputClass =
 export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
   const handleNumber = (
     field: "sqft" | "bedrooms" | "bathrooms",
-    value: string
+    value: string,
   ) => {
-    // Digits only. A stray character used to make `Number(value)` NaN on the
-    // vacation-rental form, which priced the property at $0 without saying why.
-    const digits = value.replace(/[^0-9]/g, "");
-    setFormData((prev) => ({ ...prev, [field]: Number(digits) }));
+    // Preserve unsupported precision for validation; never turn 750.5 into 7505.
+    setFormData((prev) => ({ ...prev, [field]: Number(value) }));
   };
 
   /** 0 renders empty so the box can be cleared and retyped; the schema still
    *  rejects it, so an empty field cannot be skipped past. */
-  const numberValue = (value: number | undefined) => (value ? String(value) : "");
+  const numberValue = (value: number | undefined) =>
+    value ? String(value) : "";
 
   return (
     <div className="space-y-6">
@@ -49,6 +49,18 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
           These details help us prepare the right clean and price.
         </p>
       </div>
+
+      <ResidentialLevelChoice
+        value={formData.cleaningLevel}
+        pricingVersion={formData.pricingVersion}
+        onChange={(cleaningLevel) =>
+          setFormData((prev) => ({
+            ...prev,
+            cleaningLevel,
+            arrivalWindow: undefined,
+          }))
+        }
+      />
 
       <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         {RESIDENTIAL_HEAVY_CONDITION_DISCLAIMER}
@@ -72,7 +84,7 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
             Great! This address is in our service area.
           </div>
         )}
-        {formData.isAddressInServiceArea === false && (
+        {formData.address && formData.isAddressInServiceArea === false && (
           <div className="mt-2 flex items-center text-sm text-red-600">
             <XCircle className="h-4 w-4 mr-2" />
             Sorry, this address is outside our service area.
@@ -82,7 +94,10 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>
-          <label htmlFor="sqft" className="block text-sm font-medium text-gray-700 mb-1">
+          <label
+            htmlFor="sqft"
+            className="block text-sm font-medium text-gray-700 mb-1"
+          >
             Square footage
           </label>
           <input
@@ -152,6 +167,7 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
         errors={errors}
         fields={[
           "address",
+          "cleaningLevel",
           "isAddressInServiceArea",
           "sqft",
           "bedrooms",
