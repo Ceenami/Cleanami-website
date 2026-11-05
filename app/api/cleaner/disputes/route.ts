@@ -10,28 +10,46 @@ import {
   getCleanerRecentJobsForDispute,
   isJobAssignedToCleaner,
 } from "@/lib/queries/cleaner-jobs";
+import {
+  CLEANER_DISPUTE_HISTORY_LIMIT,
+  getCleanerDisputeHistory,
+} from "@/lib/queries/cleaner-disputes";
 import { eq } from "drizzle-orm";
 
 const VALID_TYPES = ["pay", "reliability_score", "job_assignment"] as const;
 
-/** The jobs this cleaner may attach to a support request. */
+/** Own history and optional related-job picker. Database calls stay sequential. */
 export async function GET() {
   const { cleanerId, error } = await getCleanerAuth();
+  const headers = { "Cache-Control": "private, no-store" };
   if (!cleanerId) {
     return NextResponse.json(
-      { error: error ?? "Unauthorized", jobs: [] },
-      { status: cleanerAuthErrorStatus(error) }
+      { error: error ?? "Unauthorized", jobs: [], disputes: [] },
+      { status: cleanerAuthErrorStatus(error), headers }
     );
   }
-
+  let jobs: Awaited<ReturnType<typeof getCleanerRecentJobsForDispute>> = [];
   try {
-    const jobs = await getCleanerRecentJobsForDispute(cleanerId);
-    return NextResponse.json({ jobs });
+    jobs = await getCleanerRecentJobsForDispute(cleanerId);
   } catch (err) {
-    console.error("[GET /api/cleaner/disputes]", err);
-    // The picker is optional, so a failure here must not stop a cleaner
-    // filing: the form falls back to submitting with no job attached.
-    return NextResponse.json({ jobs: [] });
+    console.error("[GET /api/cleaner/disputes] job picker unavailable", err);
+  }
+  try {
+    const disputes = await getCleanerDisputeHistory(cleanerId);
+    return NextResponse.json(
+      { jobs, disputes, historyLimit: CLEANER_DISPUTE_HISTORY_LIMIT },
+      { headers }
+    );
+  } catch (err) {
+    console.error("[GET /api/cleaner/disputes] history unavailable", err);
+    return NextResponse.json(
+      {
+        error: "Support history is unavailable. You can still submit a request.",
+        jobs,
+        disputes: [],
+      },
+      { status: 503, headers }
+    );
   }
 }
 
@@ -61,9 +79,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!body.description?.trim() || body.description.trim().length < 10) {
+    if (
+      typeof body.description !== "string" ||
+      body.description.trim().length < 10 ||
+      body.description.trim().length > 2000
+    ) {
       return NextResponse.json(
-        { error: "Please provide a description (at least 10 characters)" },
+        { error: "Please provide a description between 10 and 2000 characters" },
         { status: 400 }
       );
     }
@@ -74,7 +96,10 @@ export async function POST(request: NextRequest) {
     // someone reporting a pay problem. Never trust the id the form sends —
     // `cleanerId` comes from the session, not the body.
     let jobId: string | null = null;
-    const submittedJobId = body.jobId?.trim();
+    const submittedJobId =
+      typeof body.jobId === "string" && /^[0-9a-f-]{36}$/i.test(body.jobId.trim())
+        ? body.jobId.trim()
+        : null;
     if (submittedJobId) {
       const owned = await isJobAssignedToCleaner(cleanerId, submittedJobId);
       if (owned) {
