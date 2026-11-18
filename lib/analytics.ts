@@ -1,11 +1,11 @@
 // Existing website destinations. Confirm the purchase action in Google Ads before launch.
 export const GA4_MEASUREMENT_ID = "G-43JSM385K7";
 export const GOOGLE_ADS_ID = "AW-17499794760";
-const PURCHASE_ACTION = `${GOOGLE_ADS_ID}/wQ47CITTlskbEMjaxphB`;
+const PURCHASE_ACTION = `${GOOGLE_ADS_ID}/zER5CNvZ0YsbEMjaxphB`;
 const BOOKING_START_ACTION = `${GOOGLE_ADS_ID}/NY5gCKPU594bEMjaxphB`;
 const APPOINTMENT_CLICK_ACTION = `${GOOGLE_ADS_ID}/nbASCOrI5N4bEMjaxphB`;
-// Copy only the label from the existing Contact action's Google tag setup.
-const CONTACT_LABEL = process.env.NEXT_PUBLIC_GOOGLE_ADS_CONTACT_LABEL;
+// Verified against the Contact action's tag setup; an empty override disables Ads contact events.
+const CONTACT_LABEL = process.env.NEXT_PUBLIC_GOOGLE_ADS_CONTACT_LABEL ?? "wQ47CITTlskbEMjaxphB";
 const PURCHASE_HISTORY_KEY = `cleannami:paid-conversions:${GOOGLE_ADS_ID}:v1`;
 
 export type BookingConversion = { transactionId: string; amountCents: number };

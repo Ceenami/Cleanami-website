@@ -61,7 +61,14 @@ check("calendar click is separate from completed appointment/purchase", () => {
   assert.equal(events()[1][1], "book_appointment_click");
   assert.equal(events().length, 2);
 });
-for (const contactLabel of [undefined, "", "AW-123/wrong", "label with spaces"]) {
+check("verified default Contact action is distinct from Purchase", () => {
+  const { api, events } = setup(); api.trackContactClick("email");
+  assert.equal(events()[0][2].send_to, "AW-17499794760/wQ47CITTlskbEMjaxphB");
+  assert.equal(events()[1][1], "contact_click");
+  api.trackPaidBooking({ transactionId: "pi_actual_purchase", amountCents: 100 });
+  assert.equal(events()[2][2].send_to, "AW-17499794760/zER5CNvZ0YsbEMjaxphB");
+});
+for (const contactLabel of ["", "AW-123/wrong", "label with spaces"]) {
   check(`unknown/invalid Contact label never emits Ads conversion: ${contactLabel}`, () => {
     const { api, events } = setup({ contactLabel }); api.trackContactClick("email");
     assert.equal(events().length, 1);
@@ -83,7 +90,7 @@ check("accurate paid amount, stable action/identity, duplicate suppression", () 
   assert.equal(events()[0][2].value, 123.45);
   assert.equal(events()[0][2].currency, "USD");
   assert.equal(events()[0][2].transaction_id, paid.transactionId);
-  assert.equal(events()[0][2].send_to, "AW-17499794760/wQ47CITTlskbEMjaxphB");
+  assert.equal(events()[0][2].send_to, "AW-17499794760/zER5CNvZ0YsbEMjaxphB");
   api.trackPaidBooking({ ...paid, transactionId: "pi_second_purchase" }); assert.equal(events().length, 2);
 });
 check("purchase replay across page reload is suppressed within tab", () => {
