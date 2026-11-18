@@ -14,7 +14,8 @@ export function bookingConversion(transactionId: unknown, amountCents: unknown):
 
 export function isProductionTrackingHost(): boolean {
   return process.env.NODE_ENV === "production" && typeof window !== "undefined" &&
-    window.location.hostname === "cleannami.ceenami.com";
+    ["cleannami.ceenami.com", "cleannami.com", "www.cleannami.com"]
+      .includes(window.location.hostname.toLowerCase());
 }
 
 let initialized = false;
