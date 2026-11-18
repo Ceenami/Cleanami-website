@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { Calendar, ArrowRight } from "lucide-react";
+import { trackAppointmentClick } from "@/lib/analytics";
 
 interface FounderCardProps {
   onBookCall: () => void;
@@ -32,11 +33,7 @@ export function FounderCard({
   continueIsPrimary = false,
 }: FounderCardProps) {
   const handleBookCall = () => {
-    if (typeof window !== 'undefined' && typeof window.gtag === 'function') {
-    window.gtag('event', 'conversion', {
-      send_to: 'AW-17499794760/nbASCOrI5N4bEMjaxphB',
-    });
-  }
+    trackAppointmentClick();
     // Open Google Calendar booking in new tab
     window.open(GOOGLE_CALENDAR_BOOKING_URL, "_blank", "noopener,noreferrer");
     // Trigger the callback (saves session, etc.)

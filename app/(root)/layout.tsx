@@ -2,6 +2,7 @@ import { Header } from "@/components/home/Header";
 import Link from "next/link";
 import Image from "next/image";
 import { Logo } from "@/lib/constants";
+import { ContactLink } from "@/components/ContactLink";
 
 export default function Layout({
   children,
@@ -22,7 +23,8 @@ export default function Layout({
                 Dedicated to providing spotless clean and exceptional service.
               </p>
               <div className="flex flex-col space-y-1 text-sm text-gray-700">
-                <a
+                <ContactLink
+                  contactMethod="email"
                   href="mailto:cleannami@ceenami.com"
                   className="hover:text-brand transition-colors duration-200 flex items-center"
                 >
@@ -41,8 +43,9 @@ export default function Layout({
                     ></path>
                   </svg>
                   cleannami@ceenami.com
-                </a>
-                <a
+                </ContactLink>
+                <ContactLink
+                  contactMethod="phone"
                   href="tel:+14073497342"
                   className="hover:text-brand transition-colors duration-200 flex items-center"
                 >
@@ -61,7 +64,7 @@ export default function Layout({
                     ></path>
                   </svg>
                   +1 407-349-7342
-                </a>
+                </ContactLink>
               </div>
             </div>
 

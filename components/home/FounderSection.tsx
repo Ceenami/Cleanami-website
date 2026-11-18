@@ -4,6 +4,7 @@ import Image from "next/image";
 import { SignupModal } from "../customers/cta-booking-button";
 import { Calendar } from "lucide-react";
 import { Suspense } from "react";
+import { trackAppointmentClick } from "@/lib/analytics";
 
 const FOUNDER_IMAGE_PATH = "/images/ceenami-headshot.jpg";
 const GOOGLE_CALENDAR_BOOKING_URL =
@@ -11,11 +12,7 @@ const GOOGLE_CALENDAR_BOOKING_URL =
 
 export const FounderSection = () => {
   const handleBookCall = () => {
-    if (typeof window !== 'undefined' && typeof window.gtag === 'function') {
-    window.gtag('event', 'conversion', {
-      send_to: 'AW-17499794760/nbASCOrI5N4bEMjaxphB',
-    });
-  }
+    trackAppointmentClick();
   
     window.open(GOOGLE_CALENDAR_BOOKING_URL, "_blank", "noopener,noreferrer");
   };

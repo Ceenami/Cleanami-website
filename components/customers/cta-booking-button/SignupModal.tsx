@@ -13,6 +13,7 @@ import { hasSavedBookingProgress, readSessionServiceType } from "@/lib/validatio
 import { isServiceTypeChoiceEnabled } from "@/lib/config/booking-flags";
 import type { ServiceType } from "@/lib/constants/service-type";
 import { SERVICE_TYPE_LABELS } from "@/lib/constants/service-type";
+import { trackBookingStart } from "@/lib/analytics";
 import { normalizeResidentialFormData } from "@/lib/validations/residential/serialize";
 
 interface ResumeData {
@@ -135,11 +136,7 @@ export const SignupModal = () => {
 
   // Handle modal open (from button click)
   const handleOpen = useCallback(() => {
-    if (typeof window !== 'undefined' && typeof window.gtag === 'function') {
-    window.gtag('event', 'conversion', {
-      send_to: 'AW-17499794760/NY5gCKPU594bEMjaxphB',
-    });
-  }
+    trackBookingStart();
     setIsModalOpen(true);
     setResumeData(null);
     if (serviceTypeChoiceEnabled) {
