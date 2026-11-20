@@ -17,9 +17,12 @@ export async function latestChecklistRevision(jobId: string, reader: Reader = db
   return { snapshot: row.payload.next, revision };
 }
 export async function effectiveChecklist(jobId: string, original: unknown, reader: Reader = db): Promise<ChecklistSnapshot | null> {
+  return (await effectiveChecklistState(jobId, original, reader)).snapshot;
+}
+export async function effectiveChecklistState(jobId: string, original: unknown, reader: Reader = db) {
   const revised = await latestChecklistRevision(jobId, reader);
-  if (revised) return revised.snapshot;
-  if (original == null) return null;
+  if (revised) return revised;
+  if (original == null) return { snapshot: null, revision: 0 };
   if (!isChecklistSnapshot(original)) throw new Error("Issued checklist requires review");
-  return original;
+  return { snapshot: original, revision: 0 };
 }

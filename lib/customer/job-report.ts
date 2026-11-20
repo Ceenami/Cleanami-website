@@ -29,6 +29,8 @@ export function toCustomerJobReport(job: JobDetails) {
     serviceLabel: getJobDisplay(job).label,
     purchasedScope: residentialCustomerScope(job.addonsSnapshot),
     status: job.status,
+    statusLabel: job.statusLabel ?? job.status,
+    financialPolicy: job.financialPolicy,
     plannedArrival: iso(job.checkInTime),
     arrivalWindowLabel: window?.label ?? null,
     address: job.property?.address ?? null,
@@ -49,6 +51,7 @@ export function toCustomerJobReport(job: JobDetails) {
     // Only explicitly published anonymous notes are loaded by the owning service.
     publishedNotes: [] as string[],
     canApplyPromo:
+      !job.financialQuoteFrozen &&
       job.addonsSnapshot?.residentialPricing?.ruleVersion !==
         "residential-v2" &&
       job.paymentIntentId === null &&

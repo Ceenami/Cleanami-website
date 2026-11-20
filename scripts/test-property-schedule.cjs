@@ -245,7 +245,7 @@ async function setup() {
     for (const idx of t.indexes.filter((i) => i.config.unique)) {
       const cfg = idx.config;
       await pg.exec(
-        `CREATE UNIQUE INDEX "${cfg.name}" ON "${t.name}" (${cfg.columns.map((c) => `"${c.name}"`).join(",")})${cfg.where ? " WHERE " + dialect.sqlToQuery(cfg.where).sql : ""}`,
+        `CREATE UNIQUE INDEX "${cfg.name}" ON "${t.name}" (${cfg.columns.map((c) => is(c, SQL) ? dialect.sqlToQuery(c).sql.replaceAll(`"${t.name}".`, "") : `"${c.name}"`).join(",")})${cfg.where ? " WHERE " + dialect.sqlToQuery(cfg.where).sql : ""}`,
       );
     }
   }
@@ -730,6 +730,32 @@ async function run() {
     } finally {
       feedUnavailable = false;
     }
+  });
+  await test("non-time edits accept an unchanged PostgreSQL microsecond timestamp", async () => {
+    const f = await seed();
+    await pg.query("update properties set updated_at='2026-01-01 00:00:00.123456'::timestamp where id=$1", [f.property.id]);
+    await updateProperty(f.property.id, { bedCount: 3 });
+    assert.equal((await row(schema.properties, schema.properties.id, f.property.id)).bedCount, 3);
+  });
+  await test("non-time edits reject a concurrent change within the same JavaScript millisecond", async () => {
+    const f = await seed();
+    await pg.query("update properties set updated_at='2026-01-01 00:00:00.123456'::timestamp where id=$1", [f.property.id]);
+    const original = db.query.properties.findFirst;
+    let changed = false;
+    db.query.properties.findFirst = async function (...args) {
+      const value = await original.apply(this, args);
+      if (!changed && value?.id === f.property.id) {
+        changed = true;
+        await pg.query("update properties set bed_count=4,updated_at='2026-01-01 00:00:00.123789'::timestamp where id=$1", [f.property.id]);
+      }
+      return value;
+    };
+    try {
+      await assert.rejects(() => updateProperty(f.property.id, { bedCount: 5 }), /property changed/i);
+    } finally {
+      db.query.properties.findFirst = original;
+    }
+    assert.equal((await row(schema.properties, schema.properties.id, f.property.id)).bedCount, 4);
   });
   await test("non-time admin edits and calendar replacement do not implicitly reconcile bookings", async () => {
     const f = await seed({ defaultCheckOutTime: "12:45:00" });

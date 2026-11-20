@@ -1,3 +1,5 @@
+import { ChecklistViewer } from "@/components/checklists/ChecklistViewer";
+import { PrepaymentBalance } from "@/components/customer/PrepaymentBalance";
 import { redirect } from "next/navigation";
 import { getPropertyDetails } from "@/lib/queries/properties";
 import { PropertyDetailesRightColumn } from "@/components/dashbboard/admin/properties/PropertyDetailsRightColumn";
@@ -153,6 +155,9 @@ export default async function Page({
           )}
         </div>
       </div>
+      <ChecklistViewer title="Current property checklist" residential={propertyDetails.serviceType === "residential_one_time"}
+        endpoint={`/api/properties/${id}/checklist-view${showAdminControls ? "" : "?ownerScope=1"}`} />
+      <PrepaymentBalance propertyId={id} admin={showAdminControls} />
       {propertyDetails.serviceType !== "residential_one_time" && (
         <PropertyChecklistBuilder propertyId={id} admin={showAdminControls} />
       )}

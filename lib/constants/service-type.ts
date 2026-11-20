@@ -1,3 +1,8 @@
+import {
+  isResidentialPurpose,
+  RESIDENTIAL_PURPOSE_LABELS,
+} from "./residential-purpose";
+
 /**
  * Service types, entry methods, and the copy the client dictated.
  *
@@ -92,7 +97,11 @@ export function getJobDisplay(job: {
   serviceType?: string | null;
   jobLabel?: string | null;
   cleaningLevel?: unknown;
-  addonsSnapshot?: { cleaningLevel?: unknown } | null;
+  purpose?: unknown;
+  addonsSnapshot?: {
+    cleaningLevel?: unknown;
+    residentialPricing?: { input?: { purpose?: unknown } };
+  } | null;
 }): JobDisplay {
   if (isJobLabel(job.jobLabel)) {
     return {
@@ -110,6 +119,15 @@ export function getJobDisplay(job: {
   const level = job.cleaningLevel ?? job.addonsSnapshot?.cleaningLevel;
   const levelLabel =
     level === "standard" ? "Standard" : level === "deep" ? "Deep" : null;
+  const purpose = job.addonsSnapshot?.residentialPricing?.input?.purpose ?? job.purpose;
+  if (serviceType === "residential_one_time" && isResidentialPurpose(purpose)) {
+    return {
+      label: `${SERVICE_TYPE_LABELS[serviceType]} - ${RESIDENTIAL_PURPOSE_LABELS[purpose]}`,
+      short: RESIDENTIAL_PURPOSE_LABELS[purpose],
+      specific: null,
+      tone: "residential",
+    };
+  }
 
   return {
     label:

@@ -245,6 +245,9 @@
 // };
 
 "use client";
+import { NotificationWorkflowQueue } from "./NotificationWorkflowQueue";
+import { RentalFinancialQueue } from "./RentalFinancialQueue";
+import { AdminSmsStatus } from "./AdminSmsStatus";
 
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
@@ -283,7 +286,9 @@ interface AssignedCleaner {
 }
 
 interface JobRecord {
+  statusLabel?: string | null;
   openRestockCount?: number;
+  conditionReviewRequired?: boolean;
   id: string;
   property?: { address: string } | null;
   assignedCleaners: AssignedCleaner[];
@@ -297,11 +302,13 @@ interface JobRecord {
   arrivalWindow?: string | null;
   paymentStatus?: string | null;
   cleaningLevel?: string | null;
+  purpose?: import("@/lib/constants/residential-purpose").ResidentialPurpose | null;
   operations?: AdminJobOperations | null;
 }
 
 /** the admin job list is filterable by service type. */
 type ServiceTypeFilter = ServiceType | "all";
+type AssignmentIssue = "all" | "missing_confirmation" | "coverage_incomplete" | "response_overdue" | "reconfirmation_overdue" | "notification_attention" | "arrival_overdue";
 
 /**
  * Which end of the customer's history the list is showing.
@@ -342,6 +349,8 @@ type JobsQueryKey = readonly [
     serviceType: ServiceTypeFilter;
     ownerScope: boolean;
     timeframe: Timeframe;
+    conditionReviewOnly: boolean;
+    assignmentIssue: AssignmentIssue;
   },
 ];
 
@@ -359,7 +368,7 @@ function startOfToday(): Date {
 
 async function fetchJobs(context: FetchJobsContext) {
   const { pageParam = 1, queryKey } = context;
-  const { status, query, serviceType, ownerScope, timeframe } = queryKey[1];
+  const { status, query, serviceType, ownerScope, timeframe, conditionReviewOnly, assignmentIssue } = queryKey[1];
   const params = new URLSearchParams({
     page: String(pageParam),
     limit: "15",
@@ -379,13 +388,15 @@ async function fetchJobs(context: FetchJobsContext) {
       );
       params.set("sortByCheckIn", "desc");
     }
-  } else {
+  } else if (!conditionReviewOnly && assignmentIssue === "all") {
     const { startDate, endDate } = getDashboardJobDateRange();
     params.set("dashboard", "1");
     params.set("startDate", startDate.toISOString());
     params.set("endDate", endDate.toISOString());
   }
 
+  if (!ownerScope && conditionReviewOnly) params.set("conditionReview", "1");
+  if (!ownerScope && assignmentIssue !== "all") params.set("assignmentIssue", assignmentIssue);
   if (status !== "all") {
     params.append("status", status);
   }
@@ -457,6 +468,8 @@ export const JobListView = () => {
   const isOwnerPortal = pathname.startsWith("/customer");
   const portalPrefix = isOwnerPortal ? "/customer" : "/admin";
 
+  const [conditionReviewOnly, setConditionReviewOnly] = useState(false);
+  const [assignmentIssue, setAssignmentIssue] = useState<AssignmentIssue>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<JobStatus>("all");
   const [serviceTypeFilter, setServiceTypeFilter] =
@@ -469,6 +482,8 @@ export const JobListView = () => {
       [
         "jobs",
         {
+          conditionReviewOnly,
+          assignmentIssue,
           status: statusFilter,
           query: searchTerm,
           serviceType: serviceTypeFilter,
@@ -476,7 +491,7 @@ export const JobListView = () => {
           timeframe,
         },
       ] as const,
-    [statusFilter, searchTerm, serviceTypeFilter, isOwnerPortal, timeframe],
+    [statusFilter, searchTerm, serviceTypeFilter, isOwnerPortal, timeframe, conditionReviewOnly, assignmentIssue],
   );
 
   const {
@@ -528,6 +543,9 @@ export const JobListView = () => {
   return (
     <div className="space-y-6">
       <CreateJobModal open={creating} onClose={() => setCreating(false)} />
+      {!isOwnerPortal && <NotificationWorkflowQueue />}
+      {!isOwnerPortal && <RentalFinancialQueue />}
+      {!isOwnerPortal && <AdminSmsStatus />}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">
@@ -538,7 +556,9 @@ export const JobListView = () => {
               ? timeframe === "upcoming"
                 ? "Today and everything booked ahead"
                 : "Everything before today, most recent first"
-              : `Check-in order · last ${DASHBOARD_PAST_DAYS} days through ${DASHBOARD_FUTURE_DAYS} days ahead`}
+              : assignmentIssue !== "all"
+                ? "Assignment follow-up · all dates"
+                : `Check-in order · last ${DASHBOARD_PAST_DAYS} days through ${DASHBOARD_FUTURE_DAYS} days ahead`}
           </p>
         </div>
 
@@ -591,6 +611,16 @@ export const JobListView = () => {
               {SERVICE_TYPE_LABELS.residential_one_time}
             </option>
           </select>
+          {!isOwnerPortal && <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={conditionReviewOnly} onChange={e => setConditionReviewOnly(e.target.checked)} />Condition review bookings</label>}
+          {!isOwnerPortal && <select aria-label="Assignment follow-up" value={assignmentIssue} onChange={e => setAssignmentIssue(e.target.value as AssignmentIssue)} className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700">
+            <option value="all">All assignment responses</option>
+            <option value="missing_confirmation">Missing working or backup confirmations</option>
+            <option value="coverage_incomplete">Coverage Incomplete</option>
+            <option value="response_overdue">Overdue assignment responses</option>
+            <option value="reconfirmation_overdue">Overdue reconfirmation</option>
+            <option value="notification_attention">Notification needs review</option>
+            <option value="arrival_overdue">Overdue GPS arrivals</option>
+          </select>}
           <select
             aria-label="Status"
             value={statusFilter}
@@ -638,7 +668,7 @@ export const JobListView = () => {
                 <span
                   className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}
                 >
-                  {job.status}
+                  {job.statusLabel ?? job.status}{!isOwnerPortal && job.conditionReviewRequired && <span className="ml-2 text-amber-800"> · Condition review</span>}
                 </span>
               </summary>
               <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 text-sm">
@@ -778,7 +808,7 @@ export const JobListView = () => {
                         <span
                           className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}
                         >
-                          {job.status}
+                          {job.statusLabel ?? job.status}{!isOwnerPortal && job.conditionReviewRequired && <span className="ml-2 text-amber-800"> · Condition review</span>}
                         </span>
                         {!isOwnerPortal && !!job.openRestockCount && <p className="mt-2 text-xs font-semibold text-teal-800">Restocking · {job.openRestockCount} open</p>}
                         {job.operations && (

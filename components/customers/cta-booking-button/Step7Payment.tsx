@@ -10,6 +10,7 @@ import { FounderCard } from '../../FounderCard';
 import { ShieldCheck, Lock } from 'lucide-react';
 import { isServiceUnavailableMessage } from '@/lib/env/messages';
 import { getStripe } from '@/lib/stripe/client';
+import { THIRTY_DAY_MINIMUM } from '@/lib/subscriptions/minimum';
 
 const stripePromise = getStripe();
 
@@ -42,6 +43,9 @@ export const Step7Payment = ({
 }: Props) => {
   const [clientSecret, setClientSecret] = useState('');
   const [amountInCents, setAmountInCents] = useState<number | null>(null);
+  const [minimumPolicy, setMinimumPolicy] = useState<string | undefined>();
+  const [termEndPolicy, setTermEndPolicy] = useState<string | undefined>();
+  const [financePolicy, setFinancePolicy] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
 
@@ -68,6 +72,8 @@ export const Step7Payment = ({
     setError(null);
     setClientSecret('');
     setAmountInCents(null);
+    setMinimumPolicy(undefined);
+    setTermEndPolicy(undefined);
 
     try {
       const response = await fetch('/api/payment/create-intent', {
@@ -81,6 +87,9 @@ export const Step7Payment = ({
       const result = (await response.json()) as {
         clientSecret?: string;
         amountInCents?: number;
+        minimumCommitmentPolicy?: string;
+        termEndPolicy?: string;
+        financePolicy?: string;
         error?: string;
       };
 
@@ -98,6 +107,9 @@ export const Step7Payment = ({
       if (result.clientSecret) {
         setClientSecret(result.clientSecret);
         setAmountInCents(result.amountInCents ?? null);
+        setMinimumPolicy(result.minimumCommitmentPolicy);
+        setTermEndPolicy(result.termEndPolicy);
+        setFinancePolicy(result.financePolicy);
       } else {
         setError('Could not initialize payment. Please refresh and try again.');
       }
@@ -213,9 +225,22 @@ export const Step7Payment = ({
           )}
 
           {clientSecret && !error ? (
-            <Elements options={options} stripe={stripePromise}>
-              <CheckoutForm onPaymentSuccess={(id) => onPaymentSuccess(id, amountInCents)} />
-            </Elements>
+            <>
+              <p className="text-sm text-gray-600">
+                {minimumPolicy === THIRTY_DAY_MINIMUM
+                  ? "Your subscription has a 30-day minimum from its service start date, using US Eastern calendar days. You can cancel the subscription after that minimum; individual cleans follow the cancellation policy."
+                  : "Your subscription has a first-month minimum from its service start date. You can cancel the subscription after that minimum; individual cleans follow the cancellation policy."}
+              </p>
+              {termEndPolicy === "stop_at_selected_end_v1" && <p className="text-sm text-gray-600">Service ends on your selected end date without automatic renewal. New cleans after that date require an explicit extension. A short one-month term lasts at least the 30-day minimum.</p>}
+              <Elements options={options} stripe={stripePromise}>
+                <CheckoutForm onPaymentSuccess={(id) => onPaymentSuccess(id, amountInCents)}
+                  beforeConfirm={financePolicy ? async () => {
+                    const response = await fetch("/api/payment/accept-rental-terms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientSecret, accepted: true }) });
+                    if (!response.ok) throw Error("Could not record your payment agreement. Please retry before paying.");
+                  } : undefined}
+                  consentText={financePolicy ? "I authorize CleanNami to save this payment method and charge accepted scheduled-clean amounts after completion, and the full scheduled price for customer cancellations less than 24 hours before start. At least 24 hours before start there is no late fee. This purchase funds first-clean credit for this property, preserved on cancellation/rescheduling or term end; late fees are separate. Standard refunds require an approved exception. Changed scope requiring extra payment will be presented for approval." : undefined} />
+              </Elements>
+            </>
           ) : (
             !error && (
               <div className="h-48 flex flex-col items-center justify-center gap-3">
@@ -232,8 +257,7 @@ export const Step7Payment = ({
                 Payments are processed securely via Stripe.
               </p>
               <p className="text-sm text-gray-600 mt-1">
-                Your first clean is charged now. Later cleans are authorized the
-                night before and captured only after the job is completed.
+                {financePolicy ? "Your property credit is funded now. It is applied to an eligible completed clean. Other scheduled cleans are charged after final evidence; any late-cancellation fee is collected separately." : "Your first clean is charged now. Later cleans are authorized the night before and captured only after the job is completed."}
               </p>
             </div>
           </div>

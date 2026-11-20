@@ -1,4 +1,7 @@
 import "server-only";
+import { prepareRentalCompletion, applyRentalCompletion } from "./rental-finance.service";
+import { RentalFinanceError } from "./rental-finance-error";
+import { recordFinancialPromo } from "./rental-finance-promo";
 import { sendExecutionNotice } from "./execution-notices";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -172,7 +175,10 @@ export async function settleExecutionJob(
       };
     let total = 0;
     const intentId = context.job.paymentIntentId;
-    if (intentId && !isSkippedPaymentIntent(intentId)) {
+    const financial = await prepareRentalCompletion(jobId);
+    if (financial) {
+      total = financial.collectedCents;
+    } else if (intentId && !isSkippedPaymentIntent(intentId)) {
       const stripe = getStripe();
       if (!stripe)
         throw new ExecutionError("Payment provider unavailable", 503);
@@ -195,6 +201,7 @@ export async function settleExecutionJob(
       catch { throw new ExecutionError("Payment amount, currency or refund state requires review before payout"); }
       total = intent.amount_received;
     } else if (
+      !financial &&
       !isSkippedPaymentIntent(intentId) &&
       context.job.jobSource !== "manual"
     ) {
@@ -235,6 +242,7 @@ export async function settleExecutionJob(
         .limit(1);
       if (last?.identity !== claim)
         throw new ExecutionError("A newer settlement retry owns this job");
+      if (financial) await applyRentalCompletion(tx, jobId, financial);
       const assignments = await tx.query.jobsToCleaners.findMany({
         where: eq(jobsToCleaners.jobId, jobId),
         with: { cleaner: true },
@@ -246,12 +254,13 @@ export async function settleExecutionJob(
         throw new ExecutionError(
           "Working assignments are missing; review before settlement",
         );
-      if (total && intentId)
+      const reservePaymentId = financial ? financial.paymentId ?? `prepaid:${financial.entitlementId}` : intentId;
+      if (total && reservePaymentId)
         await tx
           .insert(reserveTransactions)
           .values({
             jobId,
-            paymentIntentId: intentId,
+            paymentIntentId: reservePaymentId,
             totalAmountCents: total,
             reserveAmountCents: reserve,
             netAmountCents: total - reserve,
@@ -312,16 +321,17 @@ export async function settleExecutionJob(
         .onConflictDoNothing();
       return { success: true, payoutsCreated: paid.length };
     });
+    if (financial) await recordFinancialPromo(jobId);
     if (!("alreadySettled" in outcome))
       await sendExecutionNotice(jobId, "completed");
     return { ok: true, httpStatus: 200, body: outcome };
   } catch (error) {
     return {
       ok: false,
-      httpStatus: error instanceof ExecutionError ? error.status : 502,
+      httpStatus: error instanceof ExecutionError ? error.status : error instanceof RentalFinanceError ? 409 : 502,
       body: {
         error:
-          error instanceof ExecutionError
+          error instanceof ExecutionError || error instanceof RentalFinanceError
             ? error.message
             : "Settlement interrupted; retry safely after five minutes",
         retryable: true,

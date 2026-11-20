@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { SubscriptionsWithDetails } from "@/lib/queries/subscriptions";
 import { Subscription } from "@/db/schemas";
+import { formatSubscriptionDate, subscriptionStatusLabel } from "@/lib/subscriptions/display";
+import { ReactivateRentalSubscription } from "./ReactivateRentalSubscription";
+import { PrepaymentBalance } from "@/components/customer/PrepaymentBalance";
 
 interface SubscriptionModalProps {
   subscription: SubscriptionsWithDetails['data'][number];
@@ -15,8 +18,7 @@ export const SubscriptionDetailModal = ({
   onClose,
   onUpdate,
 }: SubscriptionModalProps) => {
-  // Extract only the Subscription fields, plus autoRenew for UI state
-  const [localSub] = useState<Subscription & { autoRenew: boolean }>(() => {
+  const [localSub] = useState<Subscription>(() => {
     const sub: Subscription = {
       id: subscription.id,
       customerId: subscription.customerId,
@@ -27,13 +29,13 @@ export const SubscriptionDetailModal = ({
       firstCleanPaymentId: subscription.firstCleanPaymentId,
       isFirstCleanPrepaid: subscription.isFirstCleanPrepaid,
       startDate: subscription.startDate,
-      endDate: subscription.endDate ?? new Date().toISOString().split('T')[0],
+      endDate: subscription.endDate ?? "",
       iCalSyncFailed: subscription.iCalSyncFailed ?? false,
       lastSyncAttempt: subscription.lastSyncAttempt ?? null,
       createdAt: subscription.createdAt,
       updatedAt: subscription.updatedAt,
     };
-    return { ...sub, autoRenew: true };
+    return sub;
   });
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
   const [actionLoading, setActionLoading] = useState<
@@ -50,9 +52,7 @@ export const SubscriptionDetailModal = ({
   }, [onClose]);
 
   const handleSave = () => {
-    const { autoRenew, ...subscriptionData } = localSub;
-    void autoRenew;
-    onUpdate(subscriptionData);
+    onUpdate(localSub);
   };
 
   const runAction = async (action: "pause" | "resume" | "cancel") => {
@@ -74,9 +74,7 @@ export const SubscriptionDetailModal = ({
             ? "paused"
             : "active";
       // Notify parent to refresh + close the modal.
-      const { autoRenew, ...subscriptionData } = localSub;
-      void autoRenew;
-      onUpdate({ ...subscriptionData, status: nextStatus });
+      onUpdate({ ...localSub, status: nextStatus });
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : `Failed to ${action} subscription`
@@ -113,13 +111,18 @@ export const SubscriptionDetailModal = ({
                 <span className="font-semibold ml-2">{localSub.durationMonths} Month Term</span>
               </div>
               <div className="flex items-center text-sm">
-                <CalendarDaysIcon className="h-5 w-5 mr-3 text-gray-400" /> Renews on:{" "}
-                <span className="font-semibold ml-2">{new Date(localSub.startDate).toLocaleDateString()}</span>
+                <CalendarDaysIcon className="h-5 w-5 mr-3 text-gray-400" /> Selected end date:{" "}
+                <span className="font-semibold ml-2">{formatSubscriptionDate(localSub.endDate)}</span>
               </div>
+              <p className="text-sm">Start date: {formatSubscriptionDate(localSub.startDate)}</p>
+              <p className="text-sm">Status: {subscriptionStatusLabel(localSub.status)}</p>
+              {subscription.termEndPolicy === "stop_at_selected_end_v1" && <p className="text-sm">New service stops after the selected end date. This term does not renew automatically.</p>}
+              <PrepaymentBalance propertyId={subscription.propertyId} admin />
+              {["expired", "canceled"].includes(localSub.status) && <ReactivateRentalSubscription subscriptionId={subscription.id} onCreated={() => onUpdate(localSub)} />}
               {localSub.isFirstCleanPrepaid && (
                 <div className="flex items-center text-sm">
                   <CheckCircleIcon className="h-5 w-5 mr-3 text-green-500" />
-                  <span className="font-semibold text-green-700">Prepaid Term</span>
+                  <span className="font-semibold text-green-700">First-clean prepayment recorded</span>
                 </div>
               )}
               

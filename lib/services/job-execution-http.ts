@@ -1,6 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { BeforeRequirementError } from "./before-requirements.service";
 import { getExecutionContract } from "./job-execution-contract";
 import {
   ExecutionError,
@@ -20,10 +21,10 @@ export async function executionResponse(
 ) {
   try {
     if (!(await getExecutionContract(jobId))) return null;
-    return NextResponse.json(await handle());
+    return NextResponse.json(await handle(), { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const status =
-      error instanceof ExecutionError
+      error instanceof ExecutionError || error instanceof BeforeRequirementError
         ? error.status
         : error instanceof ZodError || error instanceof SyntaxError
           ? 400
@@ -37,7 +38,7 @@ export async function executionResponse(
               ? error.message
               : "Request failed",
       },
-      { status },
+      { status, headers: { "Cache-Control": "private, no-store" } },
     );
   }
 }

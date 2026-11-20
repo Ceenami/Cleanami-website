@@ -188,6 +188,7 @@ export const R5Payment = ({
             getJobDisplay({
               serviceType: "residential_one_time",
               cleaningLevel: formData.cleaningLevel,
+              purpose: formData.purpose,
             }).label
           }
         </h3>
@@ -243,6 +244,8 @@ export const R5Payment = ({
           </div>
         </div>
       )}
+
+      {formData.unusualConditions && <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Unusual conditions reported. Management will review your booking after payment.</p>}
 
       {error && (
         <div className="space-y-3">

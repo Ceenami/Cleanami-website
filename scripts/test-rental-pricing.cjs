@@ -24,7 +24,12 @@ const pay = pure("lib/pricing/cleaner-pay.ts");
 let now = Date.parse("2030-01-28T12:00Z");
 class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
 function emptyImports(file) {
-  return Object.fromEntries([...fs.readFileSync(path.join(tree, file), "utf8").matchAll(/from\s+["']([^"']+)["']/g)].map(m => [m[1], {}]));
+  // This VM suite deliberately exercises unmarked legacy contracts with env
+  // empty. New enrolled-credit paths have their own actual SQL/service suite.
+  const disabledFinance = { prepareFinancialJob: async()=>false, isFinancialJob:async()=>false, cancelFinancialJob:async()=>null, jobFinance:async()=>null };
+  const adapters = { '@/lib/services/payment/rental-finance.service':disabledFinance, './payment/rental-finance.service':disabledFinance,
+    '@/lib/services/payment/rental-finance-reconciliation':{reconcileRentalFinancialPayment:async()=>false} };
+  return Object.fromEntries([...fs.readFileSync(path.join(tree, file), "utf8").matchAll(/from\s+["']([^"']+)["']/g)].map(m => [m[1], adapters[m[1]] ?? {}]));
 }
 function load(file, mocks, append = "") {
   const source = fs.readFileSync(path.join(tree, file), "utf8") + append;
@@ -132,6 +137,8 @@ function route(config = rules(), options = {}) {
       return result;
     } },
     "@/lib/services/payment/rental-authorization": authorization,
+    // This legacy fixture has no recorded term; term-enrolled routes are tested separately.
+    "@/lib/services/subscription-term.service": { assertSubscriptionServiceAllowed: async () => {} },
     "@/lib/stripe/get-stripe": { getStripe: () => fakeStripe },
     "@/lib/services/cancellation-detection/cancellationDetection.service": { CancellationDetectionService: class { async detectCancellationsForAllSubscriptions() { return { success: true,totalJobsCancelled: 0,totalSubscriptions: 0 }; } } },
     "@/lib/auth/cron-auth": { assertCronAuth: () => null },

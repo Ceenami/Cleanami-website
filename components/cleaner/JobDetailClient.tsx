@@ -1,5 +1,7 @@
 "use client";
 
+import { ChecklistViewer } from "@/components/checklists/ChecklistViewer";
+import { AssignmentOffers } from "@/components/cleaner/AssignmentOffers";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -260,7 +262,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
         </div>
 
         <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500">
-          {statusLabels[job.status] ?? job.status}
+          {job.statusLabel === "Late Canceled" ? job.statusLabel : statusLabels[job.status] ?? job.status}
         </p>
 
         <dl className="space-y-2 text-sm text-gray-600">
@@ -385,27 +387,8 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
 
       <PayBreakdown payout={job.payBreakdown} />
 
-      {job.checklistFiles.length > 0 && (
-        <div className="rounded-xl border bg-white p-4">
-          <h3 className="mb-2 text-sm font-semibold text-gray-900">
-            Property checklist
-          </h3>
-          <ul className="space-y-1">
-            {job.checklistFiles.map((file) => (
-              <li key={file.id}>
-                <a
-                  href={file.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-brand hover:underline"
-                >
-                  {file.fileName}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <ChecklistViewer endpoint={`/api/cleaner/jobs/${jobId}/checklist`} />
+      <AssignmentOffers jobId={jobId} onChange={loadJob} />
 
       <RestockRequestCard jobId={jobId} />
 

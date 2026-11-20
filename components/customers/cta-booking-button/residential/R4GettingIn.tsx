@@ -1,5 +1,6 @@
 "use client";
 
+import { ConditionReviewFields } from "./ConditionReviewFields";
 import type { ResidentialFormData } from "@/lib/validations/residential";
 import { AccessFields, type AccessFieldValues } from "../AccessFields";
 
@@ -19,10 +20,8 @@ interface Props {
  * This step collects credentials. `entryInstructions` holds door, lockbox, gate
  * and garage codes, and they may go to the `properties` row and nowhere else.
  *
- * "Special notes" is the customer's own field. It is also where the withdrawn
- * home-condition question's signal lands — an
- * admin reads "the house is in rough shape" here like any other note. Unlike
- * the access box it is ordinary content, so it is safe on other surfaces.
+ * Condition review is a separate, booking-specific disclosure. Access details
+ * stay in the property fields above.
  */
 export const R4GettingIn = ({ formData, setFormData, errors }: Props) => (
   <div className="space-y-6">
@@ -39,6 +38,8 @@ export const R4GettingIn = ({ formData, setFormData, errors }: Props) => (
       }
     />
 
+    <ConditionReviewFields selected={formData.unusualConditions} description={formData.conditionDescription}
+      error={errors.conditionDescription?.[0]} onChange={patch => setFormData(prev => ({ ...prev, ...patch }))} />
     <div>
       <label
         htmlFor="specialNotes"

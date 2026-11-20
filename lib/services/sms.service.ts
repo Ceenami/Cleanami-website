@@ -35,11 +35,13 @@ export function getTwilio(): TwilioClient | null {
  * from-number is not configured, or the recipient has no phone — matching the
  * app's graceful-degradation pattern for optional providers.
  */
-export async function sendSms(
+export type SmsOutcome = { status: "sent" | "skipped" | "failed" | "unknown"; reason?: string; providerMessageId?: string };
+
+export async function sendSmsOutcome(
   to: string | null | undefined,
   body: string,
   meta: NotificationMeta & { cleanerId: string }
-): Promise<boolean> {
+): Promise<SmsOutcome> {
   const client = getTwilio();
   const from = process.env.TWILIO_FROM_NUMBER;
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
@@ -63,13 +65,17 @@ export async function sendSms(
           : "no phone number on file for this recipient",
       meta: logMeta,
     });
-    return false;
+    return { status: "skipped", reason: !client ? "unconfigured" : !to ? "missing_phone" : "missing_sender" };
   }
 
   try {
     const normalized = normalizeSmsPhone(to);
-    const [cleaner] = await db.select({ phone: cleaners.phone }).from(cleaners)
+    const [cleaner] = await db.select({ phone: cleaners.phone, accountStatus: cleaners.accountStatus }).from(cleaners)
       .where(eq(cleaners.id, meta.cleanerId)).limit(1);
+    if (!cleaner || cleaner.accountStatus !== "active") {
+      await recordNotificationAttempt({ channel: "sms", status: "skipped", error: "Cleaner is not active", meta: logMeta });
+      return { status: "skipped", reason: "inactive" };
+    }
     const consent = await getCleanerSmsConsentState(meta.cleanerId, cleaner?.phone ?? null);
     if (!normalized || normalized !== consent.phone || !consent.canSend) {
       await recordNotificationAttempt({
@@ -77,19 +83,22 @@ export async function sendSms(
         error: "No current SMS consent for this number, or carrier opt-out is active",
         meta: logMeta,
       });
-      return false;
+      return { status: "skipped", reason: "consent" };
     }
-    await client.messages.create({
+    const sent = await client.messages.create({
       to: normalized,
       ...(messagingServiceSid ? { messagingServiceSid } : { from }),
       body: `CleanNami: ${body}\nReply STOP to opt out or HELP for help.`,
+      ...(process.env.NOTIFICATION_WORKFLOWS_SCHEMA_READY === "true" && process.env.TWILIO_STATUS_WEBHOOK_URL
+        ? { statusCallback: process.env.TWILIO_STATUS_WEBHOOK_URL } : {}),
     });
     await recordNotificationAttempt({
       channel: "sms",
       status: "sent",
+      providerMessageId: sent.sid,
       meta: logMeta,
     });
-    return true;
+    return { status: "sent", providerMessageId: sent.sid };
   } catch (error) {
     console.error("[sms.service] send failed:", error);
     await recordNotificationAttempt({
@@ -98,6 +107,13 @@ export async function sendSms(
       error,
       meta: logMeta,
     });
-    return false;
+    // Transport errors can occur after provider acceptance. Do not automatically replay.
+    const code = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
+    return { status: code >= 400 && code < 500 ? "failed" : "unknown", reason: "provider" };
   }
+}
+
+/** Boolean compatibility for existing callers; new dispatchers retain the full outcome. */
+export async function sendSms(to: string | null | undefined, body: string, meta: NotificationMeta & { cleanerId: string }): Promise<boolean> {
+  return (await sendSmsOutcome(to, body, meta)).status === "sent";
 }

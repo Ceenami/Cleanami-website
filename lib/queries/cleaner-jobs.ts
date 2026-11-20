@@ -14,6 +14,7 @@ import { getCleanerJobWindowEnd } from "@/lib/cleaner/planning-window";
 import { CLEANER_HOURLY_RATE } from "@/lib/pricing/staffing-logic";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
 import { getJobDisplay } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
 import { fromZonedTime } from "date-fns-tz";
 import { easternToday } from "@/lib/cleaner/availability-deadline";
 
@@ -58,6 +59,7 @@ export type CleanerJobSummary = {
    */
   serviceType: string;
   cleaningLevel: "standard" | "deep" | null;
+  purpose?: ResidentialPurpose;
   /**
    * 0045 — an admin's manual "this one is a reclean" override. Null on every
    * ordinary job. Carried on the LIST as well as the detail: without it the
@@ -246,6 +248,7 @@ export async function getCleanerUpcomingJobs(
         serviceType: assignment.serviceType,
         jobLabel: assignment.jobLabel,
         cleaningLevel: assignment.addonsSnapshot?.cleaningLevel,
+        addonsSnapshot: assignment.addonsSnapshot,
       }).label,
       displayStatus: [
         "completed_pending_evidence",
@@ -268,6 +271,7 @@ export async function getCleanerUpcomingJobs(
       serviceType: assignment.serviceType ?? "vacation_rental_subscription",
       jobLabel: assignment.jobLabel ?? null,
       cleaningLevel: assignment.addonsSnapshot?.cleaningLevel ?? null,
+      purpose: assignment.addonsSnapshot?.residentialPricing?.input?.purpose,
       petsAllowed: assignment.petsAllowed ?? false,
       arrivalWindow: formatDateTime(checkInTime),
       mustFinishBefore: formatDateTime(assignment.checkOutTime),

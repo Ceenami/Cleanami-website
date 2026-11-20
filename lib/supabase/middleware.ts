@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
 import { isAdminRole, trustedRoleFromClaims } from "@/lib/auth/roles";
 import { bearerTokenFromHeader } from "@/lib/auth/bearer-token";
+import { resolvePostAuthPath, signInReturnPath } from "@/lib/auth-redirects";
 
 const allowedOrigins = [
   // iOS Capacitor default.
@@ -126,52 +127,35 @@ export async function updateSession(request: NextRequest) {
   
 
    const isProtectedCustomerRoute = 
-    pathname.startsWith('/customer');
+    pathname === '/customer' || pathname.startsWith('/customer/');
 
-    const isProtectedAdminRoute = pathname.startsWith('/admin');
+    const isProtectedAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
 
-  const isProtectedCleanerRoute = pathname.startsWith('/cleaner');
+  const isProtectedCleanerRoute = pathname === '/cleaner' || pathname.startsWith('/cleaner/');
   const isCleanerApiRoute =
     pathname === '/api/cleaner' || pathname.startsWith('/api/cleaner/');
 
   const isAdmin = isAdminRole(userRole);
   const isCleaner = userRole === 'cleaner';
+  const redirectWithCookies = (path: string) => {
+    const response = NextResponse.redirect(new URL(path, request.url));
+    for (const cookie of supabaseResponse.cookies.getAll()) response.cookies.set(cookie);
+    return response;
+  };
 
+  if (!user && (isProtectedCustomerRoute || isProtectedAdminRoute || isProtectedCleanerRoute))
+    return redirectWithCookies(signInReturnPath(`${pathname}${request.nextUrl.search}`));
 
-  // 1. Redirect unauthenticated users from protected customer routes
-  if (!user && isProtectedCustomerRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/sign-in";
-    return NextResponse.redirect(url);
-  }
-
-  // 2. Redirect unauthenticated users from protected admin routes
-  if (!user && isProtectedAdminRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/sign-in";
-    return NextResponse.redirect(url);
-  }
 
   if (user && isProtectedAdminRoute && !isAdmin) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/customer/dashboard";
-    return NextResponse.redirect(url);
+    return redirectWithCookies(resolvePostAuthPath(userRole));
   }
 
   // Admins with a linked property profile can use /customer/* (owner portal).
 
-  // 3. Redirect unauthenticated users from protected cleaner routes
-  if (!user && isProtectedCleanerRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/sign-in";
-    return NextResponse.redirect(url);
-  }
-
   // 4. Redirect non-cleaners away from cleaner portal
   if (user && isProtectedCleanerRoute && !isCleaner) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/sign-in";
-    return NextResponse.redirect(url);
+    return redirectWithCookies(resolvePostAuthPath(userRole));
   }
 
   // 5. Block non-cleaners from cleaner API routes

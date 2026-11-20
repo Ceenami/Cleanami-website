@@ -6,7 +6,7 @@ import { signInUser } from "@/lib/actions/auth.actions"
 import { LockIcon, MailIcon } from "lucide-react";
 import { AuthUserForm } from "@/lib/types/auth";
 
-const CredentialsSignInForm = () => {
+const CredentialsSignInForm = ({ next }: { next?: string }) => {
 
   const initialState: AuthUserForm = {
     success: false,
@@ -25,6 +25,7 @@ const CredentialsSignInForm = () => {
 
   return (
     <Form action={action} className="space-y-6">
+      {next && <input type="hidden" name="next" value={next} />}
       <div>
         <label htmlFor="email" className="sr-only">
           Email address

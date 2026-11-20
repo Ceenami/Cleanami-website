@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { notifications, users } from "@/db/schemas";
@@ -45,8 +46,11 @@ export async function notifyAdmins(input: {
    * used by exactly one caller: "the engine could not staff this clean".
    */
   email?: boolean;
+  /** Reuse a durable caller event identity when available. One SMS per fan-out. */
+  eventIdentity?: string;
 }): Promise<number> {
   const url = adminNotificationUrl({ ...input, metadata: { url: input.url } });
+  const smsIdentity = input.eventIdentity ?? `admin-notification:${randomUUID()}`;
   try {
     const admins = await db.query.users.findMany({
       where: inArray(users.role, ["admin", "super_admin"]),
@@ -106,27 +110,34 @@ export async function notifyAdmins(input: {
       if (!input.email) return 0;
     }
 
+    let emailFailed = false;
     if (input.email) {
       // One at a time. `sendAdminAlertEmail` is a network call, not a DB query,
       // but the loop stays sequential so a slow provider cannot open N
       // simultaneous requests per event.
       for (const admin of admins) {
-        if (!admin.email) continue;
+        if (!admin.email) { emailFailed = true; continue; }
         try {
-          await sendAdminAlertEmail({
+          const result = await sendAdminAlertEmail({
             to: admin.email,
             name: admin.name ?? undefined,
             subject: input.title,
             message: input.message,
             url: url ?? undefined,
+            jobId: input.jobId ?? undefined,
+            smsIdentity,
+            smsCategory: input.type,
           });
+          if (result?.success === false) emailFailed = true;
         } catch (err) {
+          emailFailed = true;
           console.error("[notifyAdmins] admin email failed:", err);
         }
       }
     }
 
-    return insertedCount;
+    // A successful inbox insertion must not conceal failure of a requested email.
+    return emailFailed ? 0 : insertedCount;
   } catch (error) {
     console.error("[notifyAdmins]", error);
     return 0;

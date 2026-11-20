@@ -1,4 +1,5 @@
 import "server-only";
+import type { AdminSmsRequest } from "@/lib/notifications/admin-sms";
 
 import { db } from "@/db";
 import {
@@ -23,6 +24,8 @@ export type NotificationMeta = {
   jobId?: string | null;
   /** Address, phone number or user id. Never a message body. */
   recipient?: string | null;
+  /** Explicit admin EVENT marker; bodies/subjects are never SMS input. */
+  adminSms?: AdminSmsRequest;
 };
 
 /**
@@ -58,13 +61,12 @@ function trimError(error: unknown): string | null {
  * for a notification. A call site can be added without a log line and nobody
  * would notice; a channel service cannot.
  *
- * `provider_message_id` is deliberately left null for this phase. Populating it
- * only matters alongside a delivery webhook, and delivery confirmation is a
- * separate, costed decision — the column exists so that decision stays cheap.
+ * Provider acceptance is recorded separately from delivery callbacks.
  */
 export async function recordNotificationAttempt(entry: {
   channel: NotificationChannel;
   status: NotificationSendStatus;
+  providerMessageId?: string | null;
   /** Never a message body, and never anything derived from entry instructions. */
   error?: unknown;
   meta?: NotificationMeta;
@@ -77,6 +79,7 @@ export async function recordNotificationAttempt(entry: {
       userId: entry.meta?.userId ?? null,
       jobId: entry.meta?.jobId ?? null,
       status: entry.status,
+      providerMessageId: entry.providerMessageId ?? null,
       error: trimError(entry.error),
     });
   } catch (err) {

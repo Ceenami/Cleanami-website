@@ -1,4 +1,5 @@
 import "server-only";
+import { cancelFinancialJob } from "./rental-finance.service";
 import { sendExecutionNotice } from "./execution-notices";
 import { db } from "@/db";
 import {
@@ -25,6 +26,8 @@ export async function cancelExecutionJob(
   jobId: string,
   source: "customer" | "admin",
 ): Promise<CancelJobResult> {
+  const financial = await cancelFinancialJob(jobId, source, `${source}-issued-cancellation`);
+  if (financial) return financial;
   const context = await db.transaction(async (tx) => {
     const [job] = await tx
       .select()

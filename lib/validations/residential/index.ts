@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { conditionReviewFields, conditionReviewIssue } from "@/lib/booking/condition-review";
+import { RESIDENTIAL_PURPOSES } from "@/lib/constants/residential-purpose";
 import { ENTRY_METHOD_VALUES } from "@/lib/constants/service-type";
 import {
   ARRIVAL_WINDOW_KEYS,
@@ -35,6 +37,7 @@ function buildResidentialFormSchema(enforceNotice: boolean) { return z
     cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS, {
       message: "Please choose Standard or Deep.",
     }),
+    purpose: z.enum(RESIDENTIAL_PURPOSES).optional(),
     address: z.string().min(5, "Address is required"),
     isAddressInServiceArea: z.boolean().refine((val) => val === true, {
       message: "The selected address must be within our service area.",
@@ -64,13 +67,19 @@ function buildResidentialFormSchema(enforceNotice: boolean) { return z
     entryInstructions: z.string().trim().max(2000).optional(),
     parkingInstructions: z.string().trim().max(2000).optional(),
     specialNotes: z.string().trim().max(2000).optional(),
+    ...conditionReviewFields,
 
     // Rechecked server-side before payment.
     promoCode: z.string().trim().max(64).optional(),
   })
+  .refine(conditionReviewIssue, { message: "Describe the property's condition.", path: ["conditionDescription"] })
   .refine((data) => data.email === data.emailConfirm, {
     message: "Emails don't match",
     path: ["emailConfirm"],
+  })
+  .refine((data) => !data.purpose || data.cleaningLevel === "deep", {
+    message: "Move-In and Move-Out cleans use Deep scope.",
+    path: ["cleaningLevel"],
   })
   .refine(
     (data) => {
@@ -105,6 +114,7 @@ function buildResidentialFormSchema(enforceNotice: boolean) { return z
               bathrooms: data.bathrooms,
               sqft: data.sqft,
               cleaningLevel: data.cleaningLevel,
+              ...(data.purpose ? { purpose: data.purpose } : {}),
               petsAllowed: data.petsAllowed,
               hotTub: data.hotTub,
               inUnitLaundryLoads: data.inUnitLaundryLoads,

@@ -85,10 +85,7 @@ export const Step5Subscription = ({
           ))}
         </p>
 
-        {/* Commitment + cancellation transparency, per the functionality spec:
-            customers must be told before signing up that a term can be
-            cancelled at renewal but not mid-term, and that cleans inside an
-            active term are not skippable or refundable without admin approval. */}
+        {/* The payment step discloses the minimum recorded on that checkout. */}
         <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
           <div className="flex items-start gap-3">
             <Info className="mt-0.5 h-5 w-5 flex-shrink-0 text-gray-500" />
@@ -102,13 +99,13 @@ export const Step5Subscription = ({
                   charged individually, as each turnover happens.
                 </li>
                 <li>
-                  You can cancel when your term comes up for renewal. A
-                  subscription can&apos;t be cancelled part-way through its term.
+                  The minimum cancellation commitment is shown before payment.
+                  Once it ends, you can cancel your subscription from the portal.
                 </li>
                 <li>
-                  Cleans booked inside an active term can&apos;t be skipped or
-                  refunded unless we approve it — if your plans change, just get
-                  in touch and we&apos;ll help.
+                  Individual cleans follow the cancellation policy, including
+                  any applicable late-cancellation charges. Contact us if you
+                  need help changing your schedule.
                 </li>
               </ul>
             </div>

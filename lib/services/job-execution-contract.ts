@@ -1,5 +1,6 @@
 import "server-only";
 import { effectiveChecklist } from "./effective-checklist";
+import { enrollBeforeRequirements } from "./before-requirements.service";
 import { db, type Database } from "@/db";
 import { jobs, properties, jobExecutionContracts } from "@/db/schemas";
 import { eq } from "drizzle-orm";
@@ -93,6 +94,7 @@ export async function insertIssuedJobs(
       await tx
         .insert(jobExecutionContracts)
         .values({ jobId: job.id, protocol: EXECUTION_PROTOCOL, terms });
+      await enrollBeforeRequirements(tx, job.id, terms);
     }
     return inserted;
   });

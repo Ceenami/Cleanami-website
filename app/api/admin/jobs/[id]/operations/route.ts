@@ -20,6 +20,7 @@ import { isChecklistSnapshot } from "@/lib/cleaner/checklist-snapshot";
 import type { ChecklistLogPayload } from "@/lib/cleaner/evidence";
 import { effectiveChecklist } from "@/lib/services/effective-checklist";
 import { getExecutionContract } from "@/lib/services/job-execution-contract";
+import { isBeforeUpload } from "@/lib/evidence/phases";
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -82,7 +83,7 @@ export async function GET(
     const manifest = await db.select().from(evidenceUploadManifest).where(eq(evidenceUploadManifest.jobId, id));
     const verifiedRooms: Record<string, string[]> = {};
     for (const photo of manifest) {
-      if (photo.state === "removed") continue;
+      if (photo.state === "removed" || isBeforeUpload(photo)) continue;
       if (photo.state === "verified") {
         (verifiedRooms[photo.roomKey] ??= []).push(photo.path);
         uploadEvents.push({ kind: "evidence_photo_uploaded", actorId: photo.cleanerId,

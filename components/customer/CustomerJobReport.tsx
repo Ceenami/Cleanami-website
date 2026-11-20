@@ -1,5 +1,8 @@
 "use client";
+import { RentalFinancePanel } from "./RentalFinancePanel";
 
+import { ChecklistViewer } from "@/components/checklists/ChecklistViewer";
+import { BeforeAfterEvidence } from "@/components/checklists/BeforeAfterEvidence";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -47,6 +50,8 @@ export function CustomerJobReport({ jobId }: { jobId: string }) {
   const photos = flattenGalleryPhotos(report.roomGroups);
   return (
     <div className="space-y-6">
+      <RentalFinancePanel jobId={jobId} />
+      <BeforeAfterEvidence jobId={jobId} ownerScope />
       <button
         type="button"
         className="text-sm text-teal-700"
@@ -62,7 +67,7 @@ export function CustomerJobReport({ jobId }: { jobId: string }) {
           </p>
         ))}
         <p>{report.address}</p>
-        <p className="capitalize">{report.status?.replaceAll("_", " ")}</p>
+        <p className="capitalize">{report.statusLabel?.replaceAll("_", " ")}</p>
         <dl className="space-y-2 text-sm">
           <div>
             <dt className="font-medium">Scheduled arrival</dt>
@@ -84,6 +89,7 @@ export function CustomerJobReport({ jobId }: { jobId: string }) {
         </dl>
         <CustomerJobCancelButton
           jobId={jobId}
+          financialPolicy={report.financialPolicy}
           status={report.status}
           checkInTime={report.plannedArrival}
         />
@@ -98,29 +104,7 @@ export function CustomerJobReport({ jobId }: { jobId: string }) {
           />
         )}
       </section>
-      <section className="rounded-lg bg-white p-6 shadow-md">
-        <h2 className="text-lg font-semibold mb-3">
-          Issued cleaning checklist
-        </h2>
-        {report.checklist.length ? (
-          <ul className="space-y-2 text-sm">
-            {report.checklist.map((item) => (
-              <li key={item.id}>
-                <span
-                  className={item.completed ? "text-teal-700" : "text-gray-500"}
-                >
-                  {item.completed ? "Completed" : "Not recorded"}
-                </span>{" "}
-                — {item.task}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-gray-500">
-            No checklist has been recorded for this clean yet.
-          </p>
-        )}
-      </section>
+      <ChecklistViewer endpoint={`/api/jobs/${jobId}/checklist?ownerScope=1`} wrapped />
       {report.publishedNotes.length > 0 && (
         <section className="border-t pt-4">
           <h2 className="font-semibold">Clean report notes</h2>

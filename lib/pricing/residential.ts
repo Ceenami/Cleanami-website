@@ -29,6 +29,8 @@ export const residentialQuoteInputSchema = z.object({
   sqft: z.number().finite().positive(),
   cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS),
   petsAllowed: z.boolean().default(false),
+  // Move purposes are new V2 sales; historical V1 contracts remain unchanged.
+  purpose: z.never().optional(),
 });
 export type ResidentialQuoteInput = z.infer<typeof residentialQuoteInputSchema>;
 
@@ -46,6 +48,7 @@ export type ResidentialV1Terms = {
   nominalLaborCents: number;
   laborOnlyProfitCents: number;
 };
+import type { ConditionReview } from "@/lib/booking/condition-review";
 export type ResidentialV2Terms = Omit<
   ResidentialV1Terms,
   "ruleVersion" | "input" | "teamSize"
@@ -53,6 +56,9 @@ export type ResidentialV2Terms = Omit<
   ruleVersion: typeof V2_RULE_VERSION;
   configRevision: typeof V2_CONFIG_REVISION;
   configHash: typeof V2_CONFIG_HASH;
+  conditionReview?: ConditionReview;
+  /** Pinned provider request decoration; absent on historical checkout attempts. */
+  receiptFieldsVersion?: 1;
   input: ResidentialV2Input;
   teamSize: 1 | 2 | 3;
   operationalHours: number;
@@ -201,6 +207,8 @@ export function residentialV2Identity(
     input.petsAllowed,
     input.hotTub,
     input.inUnitLaundryLoads,
+    // Keep historical/ordinary identities byte-for-byte unchanged.
+    ...(input.purpose ? [input.purpose] : []),
   ]);
 }
 
@@ -294,6 +302,7 @@ export function toPublicResidentialQuote(terms: ResidentialTerms) {
     ruleVersion: terms.ruleVersion,
     inputIdentity: terms.inputIdentity,
     cleaningLevel: terms.input.cleaningLevel,
+    ...(terms.input.purpose ? { purpose: terms.input.purpose } : {}),
     amountCents: terms.amountCents,
     currency: "usd" as const,
     priceDetails: terms.priceDetails,
@@ -353,6 +362,7 @@ export function buildResidentialJobStaffing(
     expectedHours: String(terms.expectedHoursPerCleaner),
     staffing,
     addonsSnapshot: {
+      ...(v2?.conditionReview ? { conditionReview: v2.conditionReview } : {}),
       laundryType: v2?.input.inUnitLaundryLoads ? "in_unit" : "none",
       laundryLoads: v2?.input.inUnitLaundryLoads ?? 0,
       hotTubServiceLevel: v2?.input.hotTub ?? "none",

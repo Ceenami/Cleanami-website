@@ -11,13 +11,14 @@ import {
   Section,
   Text,
 } from "@react-email/components";
+import { getAppBaseUrl } from "@/lib/app-url";
 
 interface ResumeSetupEmailProps {
   resumeUrl: string;
   recipientName?: string;
 }
 
-const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://cleannami.ceenami.com";
+const baseUrl = getAppBaseUrl();
 
 export const ResumeSetupEmail = ({
   resumeUrl,

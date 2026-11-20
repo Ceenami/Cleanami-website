@@ -52,11 +52,13 @@ export const R2YourHome = ({ formData, setFormData, errors }: Props) => {
 
       <ResidentialLevelChoice
         value={formData.cleaningLevel}
+        purpose={formData.purpose}
         pricingVersion={formData.pricingVersion}
-        onChange={(cleaningLevel) =>
+        onChange={(cleaningLevel, purpose) =>
           setFormData((prev) => ({
             ...prev,
             cleaningLevel,
+            purpose,
             arrivalWindow: undefined,
           }))
         }

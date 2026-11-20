@@ -2,8 +2,7 @@
 
 import { markCallBooked, getResumeInfo } from "@/lib/actions/session.actions";
 import { sendResumeEmail } from "@/lib/services/email.service";
-
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://cleannami.ceenami.com";
+import { getAppBaseUrl } from "@/lib/app-url";
 
 interface BookCallResult {
   success: boolean;
@@ -30,7 +29,7 @@ export async function handleCallBooked(): Promise<BookCallResult> {
     }
 
     // Generate resume URL
-    const resumeUrl = `${BASE_URL}?resume=${resumeInfo.sessionId}`;
+    const resumeUrl = `${getAppBaseUrl()}?resume=${encodeURIComponent(resumeInfo.sessionId)}`;
 
     // Send resume email if we have an email address
     if (resumeInfo.email) {

@@ -2,7 +2,7 @@ import "server-only";
 
 import { PricingService } from "@/lib/services/pricing.service";
 import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
-import { PriceDetails, SignupFormData } from "@/lib/validations/bookng-modal";
+import { PriceDetails, SignupFormData, paymentSignupFormSchema } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import {
   applyFirstCleanDiscount,
@@ -21,6 +21,10 @@ import { LAUNDRY_LOADS_REQUIRED_MESSAGE } from "@/lib/validations/laundry-loads"
 import { getStartOfTodayEastern } from "@/lib/time/eastern";
 import { addDays } from "date-fns";
 import Stripe from "stripe";
+import { newSignupMinimumPolicy } from "./subscription-minimum.service";
+import { newSignupTermPolicy } from "./subscription-term.service";
+import { createRentalCheckout, recoverRentalCheckout, rentalCheckoutForm } from "./rental-checkout.service";
+import { newRentalFinancePolicy } from "./payment/rental-finance-settings";
 
 const pricingService = new PricingService();
 
@@ -146,6 +150,9 @@ export async function createPaymentIntentForSignup(
   clientSecret?: string;
   amountInCents?: number;
   promoDiscountCents?: number;
+  minimumCommitmentPolicy?: string;
+  termEndPolicy?: string;
+  financePolicy?: string;
   error?: string;
 }> {
   const stripe = getStripe();
@@ -159,6 +166,19 @@ export async function createPaymentIntentForSignup(
   }
 
   const normalizedFormData = normalizeSignupFormDataForPricing(formData);
+
+  if (typeof normalizedFormData.email !== "string" || !normalizedFormData.email.trim() ||
+      typeof normalizedFormData.address !== "string" || !normalizedFormData.address.trim()) {
+    return { error: "Email and property address are required before payment." };
+  }
+
+  const recovered = await recoverRentalCheckout(stripe, normalizedFormData);
+  if (recovered) return recovered;
+
+  const validPurchase = paymentSignupFormSchema.safeParse(normalizedFormData);
+  if (!validPurchase.success) {
+    return { error: validPurchase.error.issues[0]?.message ?? "Please review the booking details before payment." };
+  }
 
   const quote = await quoteFirstCleanChargeCents(normalizedFormData);
   if (!quote.ok) {
@@ -203,6 +223,9 @@ export async function createPaymentIntentForSignup(
   }
 
   const chargeAmountCents = afterFirstCleanDiscountCents - promoDiscountCents;
+  if (!Number.isSafeInteger(chargeAmountCents) || chargeAmountCents < 50) {
+    return { error: "The first-clean payment must be at least $0.50. Contact CleanNami for help with this quote." };
+  }
 
   // Re-enforce the 7-day first-clean buffer server-side (the client date picker
   // is not trusted). Compare calendar days in US Eastern (ops timezone).
@@ -283,18 +306,20 @@ export async function createPaymentIntentForSignup(
     stripeCustomerId
   );
 
+  const minimumCommitmentPolicy = newSignupMinimumPolicy();
+  const termEndPolicy = newSignupTermPolicy();
+  const financePolicy = newRentalFinancePolicy();
   const metadata: Stripe.MetadataParam = {
+    ...(financePolicy ? { rental_finance_policy: financePolicy } : {}),
+    ...(termEndPolicy ? { subscription_term_end_policy: termEndPolicy } : {}),
+    ...(minimumCommitmentPolicy ? { subscription_minimum_policy: minimumCommitmentPolicy } : {}),
     customer_name: normalizedFormData.name ?? "N/A",
     customer_email: normalizedFormData.email ?? "N/A",
     property_address: normalizedFormData.address ?? "N/A",
     property_details: `${normalizedFormData.bedrooms} bed, ${normalizedFormData.bathrooms} bath, ${normalizedFormData.sqft ?? "N/A"} sqft`,
     laundry_service: `${normalizedFormData.laundryService} (${normalizedFormData.laundryLoads ?? 0} loads)`,
-    // Item 7. This entry exists because the price now depends on it: the
-    // completion step reprices from the submitted form and compares against
-    // `paymentIntent.amount`, so a form that lost `petsAllowed` on the way back
-    // would differ by $10 and REJECT a booking the customer has already paid
-    // for. It is recorded here for traceability; the re-price reads the form.
-    //
+    // Pricing inputs remain traceable in metadata; SQL0066 freezes the complete
+    // accepted scope/price for new payments instead of repricing on completion.
     // `entry_method`, `entry_instructions` and `parking_instructions` are
     // deliberately NOT here. Stripe metadata is retrievable with the API key
     // and visible in the dashboard, none of it affects the price, so there is
@@ -320,7 +345,10 @@ export async function createPaymentIntentForSignup(
     promo_discount_cents: String(promoDiscountCents),
   };
 
-  const paymentIntent = await stripe.paymentIntents.create({
+  return createRentalCheckout(stripe, normalizedFormData, {
+    version: 1, form: rentalCheckoutForm(normalizedFormData), price: serverPriceDetails,
+    minimumPolicy: minimumCommitmentPolicy, termPolicy: termEndPolicy, financePolicy, promoDiscountCents,
+  }, {
     amount: chargeAmountCents,
     currency: "usd",
     customer: stripeCustomer.id,
@@ -330,14 +358,4 @@ export async function createPaymentIntentForSignup(
     setup_future_usage: "off_session",
     metadata,
   });
-
-  if (!paymentIntent.client_secret) {
-    return { error: "Could not initialize payment. Please contact support." };
-  }
-
-  return {
-    clientSecret: paymentIntent.client_secret,
-    amountInCents: chargeAmountCents,
-    promoDiscountCents,
-  };
 }

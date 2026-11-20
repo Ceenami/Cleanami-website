@@ -69,6 +69,7 @@ const stepFields: Record<number, string[]> = {
   1: ["name", "email", "emailConfirm", "phoneNumber"],
   2: [
     "cleaningLevel",
+    "purpose",
     "address",
     "isAddressInServiceArea",
     "sqft",
@@ -76,10 +77,8 @@ const stepFields: Record<number, string[]> = {
     "bathrooms",
   ],
   3: ["cleanDate", "arrivalWindow"],
-  // R4 is entirely optional (items 5 and 6 are optional on both flows), so it
-  // has no required fields — a customer who will let the cleaner in themselves
-  // walks straight through.
-  4: [],
+  // Access stays optional; a selected condition disclosure needs a description.
+  4: ["unusualConditions", "conditionDescription"],
 };
 
 interface Props {
@@ -179,6 +178,7 @@ export const ResidentialForm = ({
         bathrooms: formData.bathrooms,
         sqft: formData.sqft,
         cleaningLevel: formData.cleaningLevel,
+        ...(formData.purpose ? { purpose: formData.purpose } : {}),
         petsAllowed: formData.petsAllowed,
         hotTub: formData.hotTub ?? "none",
         inUnitLaundryLoads: formData.inUnitLaundryLoads ?? 0,
@@ -188,6 +188,7 @@ export const ResidentialForm = ({
       formData.bathrooms,
       formData.sqft,
       formData.cleaningLevel,
+      formData.purpose,
       formData.petsAllowed,
       formData.hotTub,
       formData.inUnitLaundryLoads,
@@ -448,6 +449,7 @@ export const ResidentialForm = ({
         return (
           <R6Confirmation
             cleaningLevel={formData.cleaningLevel}
+            purpose={formData.purpose}
             pricingVersion={formData.pricingVersion}
             hotTub={formData.hotTub}
             inUnitLaundryLoads={formData.inUnitLaundryLoads}

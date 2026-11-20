@@ -28,6 +28,8 @@ export type IssuedChecklistFile = {
 /** Immutable checklist data issued with a job, including any property guide. */
 export type ChecklistSnapshot = {
   version: 1;
+  /** Optional provenance for newly issued rental selections; never backfilled. */
+  origin?: "default" | "customer_custom";
   source: "default" | "property_files";
   defaultVersion:
     | "turnover-v2"
@@ -80,35 +82,7 @@ export function createChecklistSnapshot(
     );
     if (frozen.kind === "v2") {
       const scope = frozen.terms.input;
-      const items = getResidentialCompanyTasks(scope.cleaningLevel);
-      if (scope.cleaningLevel === "deep")
-        items.push(
-          {
-            id: "res-v2-oven-interior",
-            section: "Kitchen",
-            task: "Clean the oven interior (included in Deep).",
-          },
-          {
-            id: "res-v2-fridge-interior",
-            section: "Kitchen",
-            task: "Clean the refrigerator interior (included in Deep).",
-          },
-        );
-      if (scope.hotTub !== "none")
-        items.push({
-          id: `res-v2-spa-${scope.hotTub}`,
-          section: "Hot Tub",
-          task:
-            scope.hotTub === "basic"
-              ? "Complete purchased Basic hot-tub care."
-              : "Complete purchased hot-tub drain, clean and refill.",
-        });
-      if (scope.inUnitLaundryLoads > 0)
-        items.push({
-          id: "res-v2-inunit-laundry",
-          section: "Laundry",
-          task: `Complete ${scope.inUnitLaundryLoads} purchased in-unit laundry load(s). No off-site laundry.`,
-        });
+      const items = residentialV2ChecklistTasks(scope);
       const photos = getRoomPhotoRequirements({
         bedCount: scope.bedrooms,
         bathCount: scope.bathrooms,
@@ -176,6 +150,22 @@ export function createChecklistSnapshot(
     })),
     files: [],
   };
+}
+
+/** Shared company template; viewing a property must not calculate a new price. */
+export function residentialV2ChecklistTasks(scope: {
+  cleaningLevel: ResidentialCleaningLevel; hotTub: "none" | "basic" | "full"; inUnitLaundryLoads: number;
+}): IssuedChecklistItem[] {
+  const items = getResidentialCompanyTasks(scope.cleaningLevel);
+  if (scope.cleaningLevel === "deep") items.push(
+    { id: "res-v2-oven-interior", section: "Kitchen", task: "Clean the oven interior (included in Deep)." },
+    { id: "res-v2-fridge-interior", section: "Kitchen", task: "Clean the refrigerator interior (included in Deep)." },
+  );
+  if (scope.hotTub !== "none") items.push({ id: `res-v2-spa-${scope.hotTub}`, section: "Hot Tub",
+    task: scope.hotTub === "basic" ? "Complete purchased Basic hot-tub care." : "Complete purchased hot-tub drain, clean and refill." });
+  if (scope.inUnitLaundryLoads > 0) items.push({ id: "res-v2-inunit-laundry", section: "Laundry",
+    task: `Complete ${scope.inUnitLaundryLoads} purchased in-unit laundry load(s). No off-site laundry.` });
+  return items;
 }
 
 export function isChecklistSnapshot(

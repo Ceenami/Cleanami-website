@@ -4,6 +4,7 @@ export type LocalEvidencePhoto = {
   jobId: string;
   roomKey: string;
   source?: "camera" | "gallery";
+  phase?: "before" | "after";
   capturedAt: string | null;
   blob: Blob;
   sha256: string;

@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SubscriptionsWithDetails } from "@/lib/queries/subscriptions";
+import { canCancelSubscription } from "@/lib/cancellation/rules";
+import { subscriptionMinimumLabel } from "@/lib/subscriptions/minimum";
 
 type CustomerSubscriptionCancelButtonProps = {
   subscription: SubscriptionsWithDetails["data"][number];
@@ -17,18 +19,17 @@ export function CustomerSubscriptionCancelButton({
 
   if (subscription.status !== "active") return null;
 
-  const start = new Date(subscription.startDate);
-  const firstMonthEnd = new Date(start);
-  firstMonthEnd.setMonth(firstMonthEnd.getMonth() + 1);
-  const inFirstMonth = new Date() < firstMonthEnd;
+  const eligibility = canCancelSubscription(subscription);
+  const inMinimum = !eligibility.allowed;
+  const minimumLabel = subscriptionMinimumLabel(subscription.cancellationMinimum);
 
   async function handleCancel() {
     const confirmed = window.confirm(
-      inFirstMonth
-        ? "Subscriptions cannot be canceled during the first month. Cancel individual cleans from your dashboard instead."
+      inMinimum
+        ? eligibility.reason ?? "Your minimum commitment has not ended."
         : "Cancel this subscription? Upcoming scheduled cleans will be canceled too."
     );
-    if (!confirmed || inFirstMonth) return;
+    if (!confirmed || inMinimum) return;
 
     setLoading(true);
     setError(null);
@@ -57,18 +58,18 @@ export function CustomerSubscriptionCancelButton({
       <button
         type="button"
         onClick={handleCancel}
-        disabled={loading || inFirstMonth}
+        disabled={loading || inMinimum}
         className="text-sm font-medium text-red-600 hover:text-red-800 disabled:cursor-not-allowed disabled:opacity-40"
         title={
-          inFirstMonth
-            ? "First month is a minimum commitment"
+          inMinimum
+            ? minimumLabel
             : "Cancel subscription"
         }
       >
         {loading ? "Canceling…" : "Cancel subscription"}
       </button>
-      {inFirstMonth && (
-        <span className="text-xs text-gray-500">First-month minimum</span>
+      {inMinimum && (
+        <span className="text-xs text-gray-500">{minimumLabel}</span>
       )}
       {error && <span className="text-xs text-red-600">{error}</span>}
     </div>

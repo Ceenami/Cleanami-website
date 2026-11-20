@@ -40,7 +40,8 @@ type AvailabilityResponse = {
   closedMessage?: string | null;
 };
 
-export function AvailabilityPageClient() {
+export function AvailabilityPageClient({ periodStart }: { periodStart?: string }) {
+  const availabilityUrl = `/api/cleaner/availability${periodStart === undefined ? "" : `?periodStart=${encodeURIComponent(periodStart)}`}`;
   const [days, setDays] = useState<AvailabilityDay[]>([]);
   const [period, setPeriod] = useState<{ start: string; end: string } | null>(
     null,
@@ -83,7 +84,7 @@ export function AvailabilityPageClient() {
       setLoading(true);
       setLoadError(null);
       try {
-        const response = await fetch("/api/cleaner/availability");
+        const response = await fetch(availabilityUrl);
         const data = (await response.json()) as AvailabilityResponse & {
           error?: string;
         };
@@ -110,7 +111,7 @@ export function AvailabilityPageClient() {
       }
     }
     load();
-  }, [loadRevision]);
+  }, [loadRevision, availabilityUrl]);
 
   function updateDay(
     date: string,
@@ -153,7 +154,7 @@ export function AvailabilityPageClient() {
     const isOverride = canSaveOverride;
 
     try {
-      const response = await fetch("/api/cleaner/availability", {
+      const response = await fetch(availabilityUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
@@ -203,7 +204,7 @@ export function AvailabilityPageClient() {
       }
 
       {
-        const refresh = await fetch("/api/cleaner/availability");
+        const refresh = await fetch(availabilityUrl);
         const refreshed = (await refresh.json()) as AvailabilityResponse;
         if (!refresh.ok) {
           setLoadError(

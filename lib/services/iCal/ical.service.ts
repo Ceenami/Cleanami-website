@@ -1,5 +1,6 @@
 import "server-only";
 import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
+import { readSubscriptionTerm, withinRecordedTerm } from "@/lib/services/subscription-term.service";
 import { calendarDay, rentalSchedule } from "@/lib/jobs/execution-policy";
 import type { Database } from "@/db";
 import { schema } from "@/db";
@@ -169,6 +170,7 @@ export class ICalService {
       });
       if (!subscription)
         return { success: false, message: "Subscription not found." };
+      if (await readSubscriptionTerm(subscription.id, this.db) && subscription.status !== "active") return { success: false, message: "Recorded subscription term is not active." };
       if (!subscription.property?.iCalUrl)
         return {
           success: false,
@@ -338,6 +340,7 @@ export class ICalService {
 
     const existingRows = await this.db.select({ uid: jobs.calendarEventUid }).from(jobs).where(eq(jobs.propertyId, context.propertyId));
     const existingKeys = new Set(existingRows.map(j => j.uid));
+    const recordedTerm = await readSubscriptionTerm(context.subscriptionId, this.db);
     const allJobsToInsert: NewJob[] = filteredEvents.flatMap((event, index) => {
       if (existingKeys.has(getEventCompositeUid(event))) return [];
       const nextEvent = filteredEvents[index + 1];
@@ -346,6 +349,7 @@ export class ICalService {
         nextEvent,
         property
       );
+      if (recordedTerm && !withinRecordedTerm(recordedTerm, jobStartTime)) return [];
 
       // Calculate details (hours, team size, deep clean status, expected loads)
       const jobDetails = this._calculateJobDetails(

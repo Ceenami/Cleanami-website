@@ -19,6 +19,8 @@ import { freezeRentalCharge } from "@/lib/services/payment/freeze-rental-charge"
 import { authorizeRentalCharge } from "@/lib/services/payment/rental-authorization";
 import { SKIPPED_PAYMENT_INTENT_ID } from "@/lib/billing/customer-billing";
 import { appendJobNote } from "@/lib/jobs/job-notes";
+import { assertSubscriptionServiceAllowed } from "@/lib/services/subscription-term.service";
+import { prepareFinancialJob } from "@/lib/services/payment/rental-finance.service";
 import {
   resolvePromoCodeById,
   recordPromoRedemption,
@@ -79,6 +81,7 @@ export async function POST(req: NextRequest) {
         propertyData: properties,
         stripeCustomerId: customers.stripeCustomerId,
         checkOutTime: jobs.checkOutTime,
+        checkInTime: jobs.checkInTime,
         addonsSnapshot: jobs.addonsSnapshot,
         rentalCharge: jobs.rentalCharge,
         // Existing notes, so the skip-payment branch can append rather than
@@ -135,6 +138,8 @@ export async function POST(req: NextRequest) {
     for (const job of jobsToProcess) {
       const result = await (async () => {
       try {
+        if (job.subscriptionId && job.checkInTime) await assertSubscriptionServiceAllowed(job.subscriptionId, job.checkInTime);
+        if (await prepareFinancialJob(job.jobId)) return { jobId: job.jobId, status: "financial_contract_frozen_collection_after_evidence" };
         let charge = readRentalCharge(job.rentalCharge);
         if (!charge) {
           const pricingInput = rentalJobPricingInput(

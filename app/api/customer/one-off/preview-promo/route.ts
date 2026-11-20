@@ -3,11 +3,13 @@ import { z } from "zod";
 import { customerAuthErrorStatus, getCustomerAuth } from "@/lib/customer-auth";
 import { previewOneOffPromoCode } from "@/lib/services/one-off.service";
 import { RESIDENTIAL_CLEANING_LEVELS } from "@/lib/pricing/residential";
+import { RESIDENTIAL_PURPOSES } from "@/lib/constants/residential-purpose";
 
 const bodySchema = z.object({
   propertyId: z.string().uuid(),
   code: z.string().trim().min(1).max(64),
   cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS).optional(),
+  purpose: z.enum(RESIDENTIAL_PURPOSES).optional(),
   pricingVersion: z.enum(["residential-v1", "residential-v2"]).optional(),
   hotTub: z.enum(["none", "basic", "full"]).optional(),
   inUnitLaundryLoads: z.number().int().min(0).max(2).optional(),

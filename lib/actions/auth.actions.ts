@@ -11,16 +11,15 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getAppBaseUrl } from "@/lib/app-url";
 import { db } from "@/db";
-import { users } from "@/db/schemas";
 import { formatError } from "@/lib/utils";
-import { resolvePostAuthPath } from "@/lib/auth-redirects";
+import { resolveAuthCallbackDestination } from "@/lib/auth-redirects";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import { AuthService } from "@/lib/services/auth/auth.service";
 import { AuthUserForm } from "@/lib/types/auth";
-import { eq } from "drizzle-orm";
 
-function redirectForRole(role: string | undefined) {
-  const destination = resolvePostAuthPath(role);
-  revalidatePath(destination);
+function redirectForRole(role: string | undefined, requestedNext: string | null = null) {
+  const destination = resolveAuthCallbackDestination(role, requestedNext);
+  revalidatePath(destination.split(/[?#]/, 1)[0]);
   return redirect(destination);
 }
 
@@ -217,17 +216,14 @@ export async function signInUser(
     };
   }
 
-  let userRole = result.data?.user_metadata?.role as string | undefined;
-
-  if (result.data?.id) {
-    const dbUser = await db.query.users.findFirst({
-      where: eq(users.supabaseUserId, result.data.id),
-      columns: { role: true },
-    });
-    if (dbUser?.role) {
-      userRole = dbUser.role;
-    }
-  }
-
-  return redirectForRole(userRole || "user");
+  let userRole: string | undefined;
+  try {
+    userRole = result.data?.id ? await resolveRoleFromDatabase(result.data.id, result.data.email) : undefined;
+  } catch { /* Authentication succeeded, but portal access still needs the DB profile. */ }
+  if (!userRole) return {
+    success: false, data: { email: validatedFields.email },
+    error: { message: "Signed in, but your portal profile could not be loaded. Try again or contact CleanNami." },
+  };
+  const requestedNext = formData.get("next");
+  return redirectForRole(userRole, typeof requestedNext === "string" ? requestedNext : null);
 }

@@ -25,6 +25,7 @@ import {
 } from "@/lib/cleaner/checklist-snapshot";
 import { getRoomPhotoRequirements } from "@/lib/cleaner/evidence";
 import type { ResidentialCleaningLevel } from "@/lib/pricing/residential";
+import { rentalChecklistOrigin } from "@/lib/checklists/view";
 
 export async function getPropertyChecklist(propertyId: string) {
   const property = await db.query.properties.findFirst({
@@ -186,15 +187,14 @@ export async function issuePropertyChecklist(
       photoRequirements,
       capabilityRequirements,
     };
+  const publishedItems = state?.published ?? buildRentalTasks(actualProperty, basicRentalDraft(actualProperty));
   return {
     version: 1,
     source: "default",
+    origin: rentalChecklistOrigin(publishedItems, actualProperty),
     defaultVersion: RENTAL_LIBRARY_VERSION,
     propertyRevision: state?.publishedRevision ?? 0,
-    items: (
-      state?.published ??
-      buildRentalTasks(actualProperty, basicRentalDraft(actualProperty))
-    ).map((item) => ({ ...item })),
+    items: publishedItems.map((item) => ({ ...item })),
     files: [],
     photoRequirements,
     capabilityRequirements,

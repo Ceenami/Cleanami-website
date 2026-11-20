@@ -85,7 +85,7 @@ export const SwapRequestsView = () => {
 
       return response.json() as Promise<{
         success: boolean;
-        outcome?: "backup_promoted" | "released_to_pool";
+        outcome?: "backup_promoted" | "released_to_pool" | "awaiting_confirmation";
         replacementCleanerName?: string;
         notifiedCount?: number;
       }>;
@@ -101,6 +101,8 @@ export const SwapRequestsView = () => {
           toast.success(
             `Cleaner released. ${data.notifiedCount ?? 0} cleaner(s) notified — first to accept gets the job.`
           );
+        } else if (data.outcome === "awaiting_confirmation") {
+          toast.success("Working offer sent to the paired backup. Current assignment remains until they confirm.");
         } else {
           toast.success("Swap approved.");
         }

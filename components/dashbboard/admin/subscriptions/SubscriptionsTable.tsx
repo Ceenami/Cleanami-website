@@ -1,6 +1,6 @@
 import { SubscriptionsWithDetails } from "@/lib/queries/subscriptions";
 import { CustomerSubscriptionCancelButton } from "@/components/customer/CustomerSubscriptionCancelButton";
-import { useEffect, useState } from "react";
+import { formatSubscriptionDate, subscriptionStatusLabel } from "@/lib/subscriptions/display";
 
 interface SubscriptionsTableProps {
   subscriptions: SubscriptionsWithDetails['data'];
@@ -21,16 +21,6 @@ const getStatusBadge = (
     }
 }
 
-const SafeClientDate = ({ date }: { date: string | null }) => {
-    const [formattedDate, setFormattedDate] = useState<string | null>(null);
-    useEffect(() => {
-        if (date) {
-            setFormattedDate(new Date(date).toLocaleDateString());
-        }
-    }, [date]);
-    return <>{formattedDate}</>;
-}
-
 export const SubscriptionsTable = ({ subscriptions, onManage, showCustomerActions = false }: SubscriptionsTableProps) => {
   return (
     <tbody className="bg-white divide-y divide-gray-200">
@@ -44,14 +34,17 @@ export const SubscriptionsTable = ({ subscriptions, onManage, showCustomerAction
           </td>
           <td className="px-6 py-4 whitespace-nowrap">
             <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(sub.status)}`}>
-              {sub.status}
+              {subscriptionStatusLabel(sub.status)}
             </span>
           </td>
           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
             {sub.durationMonths} Month Term
           </td>
           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-            <SafeClientDate date={sub.startDate} />
+            {formatSubscriptionDate(sub.startDate)}
+          </td>
+          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+            {formatSubscriptionDate(sub.endDate)}
           </td>
           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
             {showCustomerActions ? (

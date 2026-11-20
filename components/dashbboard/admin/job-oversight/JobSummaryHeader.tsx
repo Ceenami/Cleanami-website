@@ -135,7 +135,7 @@ export function JobSummaryHeader({
         <div className="mt-4 md:mt-0 text-right">
           <span className="text-xs font-medium text-gray-500">STATUS</span>
           <p className={`mt-1 px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full ${STATUS_STYLES[job.status || 'unassigned']}`}>
-            {job.status}
+            {job.statusLabel ?? job.status}
           </p>
           {payment && (
             <div className="mt-2">

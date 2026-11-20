@@ -1,4 +1,5 @@
 import "server-only";
+import { jobFinance } from "./payment/rental-finance.service";
 
 import { db } from "@/db";
 import { jobs } from "@/db/schemas";
@@ -73,6 +74,7 @@ async function loadEligibleJob(jobId: string, customerId: string) {
   if (!job.property.customer) {
     throw new PromoActionError("Clean not found", 404);
   }
+  if (await jobFinance(jobId)) throw new PromoActionError("This clean already has an accepted financial quote. Contact management before changing its promotion.", 409);
 
   const eligible =
     job.checkInTime !== null &&

@@ -94,15 +94,16 @@ export const SubscriptionsPageClient = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Start Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Selected End Date</th>
                 <th className="relative px-6 py-3"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
-            {status === 'pending' ? ( <tbody><tr><td colSpan={5} className="p-4 text-center">Loading...</td></tr></tbody> ) 
-            : status === 'error' ? ( <tbody><tr><td colSpan={5} className="p-4 text-center text-red-500">Error: {error.message}</td></tr></tbody> ) 
+            {status === 'pending' ? ( <tbody><tr><td colSpan={6} className="p-4 text-center">Loading...</td></tr></tbody> )
+            : status === 'error' ? ( <tbody><tr><td colSpan={6} className="p-4 text-center text-red-500">Error: {error.message}</td></tr></tbody> )
             : ( <SubscriptionsTable subscriptions={uniqueSubscriptions} onManage={setSelectedSubscription} showCustomerActions={isCustomerPortal} /> )}
             <tfoot>
               <tr>
-                <td colSpan={5} className="p-4 text-center">
+                <td colSpan={6} className="p-4 text-center">
                   <button onClick={() => fetchNextPage()} disabled={!hasNextPage || isFetchingNextPage} className="px-4 py-2 bg-teal-600 text-white rounded-lg disabled:bg-gray-400">
                     {isFetchingNextPage ? 'Loading...' : hasNextPage ? 'Load More' : 'Nothing more to load'}
                   </button>

@@ -321,6 +321,10 @@ export async function updateProperty(
 ): Promise<{ propertyId: string; updatedBookings?: number; preservedBookings?: number }> {
   const existing = await db.query.properties.findFirst({
     where: eq(properties.id, propertyId),
+    // Date drops PostgreSQL microseconds. Keep the exact database value for CAS.
+    extras: {
+      updatedAtToken: sql<string | null>`${properties.updatedAt}::text`.as('updated_at_token'),
+    },
   });
   if (!existing) {
     throw new Error("Property not found");
@@ -409,7 +413,10 @@ export async function updateProperty(
     const prepared = await preparePropertySchedule(existing, after);
     return savePropertySchedule({ property: existing, patch, prepared, actor: options?.actor ?? 'admin' });
   }
-  const [saved] = await db.update(properties).set(patch).where(and(eq(properties.id, propertyId), eq(properties.updatedAt, existing.updatedAt))).returning({ id: properties.id });
+  const [saved] = await db.update(properties).set(patch).where(and(
+    eq(properties.id, propertyId),
+    sql`${properties.updatedAt}::text is not distinct from ${existing.updatedAtToken}`,
+  )).returning({ id: properties.id });
   if (!saved) throw new ScheduleUpdateError('The property changed while you were editing it. Refresh and save again.');
   return { propertyId };
 }

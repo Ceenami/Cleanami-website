@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import twilio from "twilio";
 import { recordCarrierSmsPreference } from "@/lib/services/cleaner-sms-consent";
 import { normalizeSmsPhone } from "@/lib/sms/consent";
+import { recordAdminCarrierPreference } from "@/lib/services/notifications/admin-sms.service";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
   try {
     if (type === "STOP" || type === "START") {
       await recordCarrierSmsPreference(params.From, type === "STOP", params.MessageSid);
+      await recordAdminCarrierPreference(params.From, type === "STOP", params.MessageSid);
     }
   } catch {
     // Non-2xx lets Twilio retry if the consent database is unavailable.

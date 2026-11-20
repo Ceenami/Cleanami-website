@@ -12,7 +12,7 @@ const bodySchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const json = await request.json();
+    const json = await request.json().catch(() => null);
     const parsed = bodySchema.safeParse(json);
 
     if (!parsed.success) {
@@ -36,6 +36,9 @@ export async function POST(request: NextRequest) {
       clientSecret: result.clientSecret,
       amountInCents: result.amountInCents,
       promoDiscountCents: result.promoDiscountCents ?? 0,
+      minimumCommitmentPolicy: result.minimumCommitmentPolicy,
+      termEndPolicy: result.termEndPolicy,
+      financePolicy: result.financePolicy,
     });
   } catch (error) {
     console.error("[POST /api/payment/create-intent]", error);

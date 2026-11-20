@@ -1,4 +1,7 @@
 import "server-only";
+import { notificationWorkflowCutoff } from "./notifications/workflow-settings";
+import { bookingConditionReview } from "@/lib/booking/condition-review";
+import { createHash } from "node:crypto";
 import { bookingConversion, type BookingConversion } from "@/lib/analytics";
 import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
 import { verifySettledPayment } from "@/lib/services/payment/verify-settled-payment";
@@ -197,6 +200,11 @@ export async function evaluateResidentialBooking(
     return { ok: false, reason: "validation", error: first, fieldErrors };
   }
   const data = parsed.data;
+  const conditionReview = bookingConditionReview(data);
+  if (conditionReview && (!evaluation.ok || evaluation.terms.ruleVersion !== "residential-v2"))
+    return { ok: false, reason: "validation", error: "Condition review requires a current residential booking. Contact CleanNami for an existing payment." };
+  if (evaluation.ok && evaluation.terms.ruleVersion === "residential-v2" && conditionReview)
+    evaluation.terms.conditionReview = conditionReview;
 
   const staffing = calculateJobStaffing({
     bedCount: data.bedrooms,
@@ -494,6 +502,7 @@ export async function createResidentialPaymentIntent(input: {
 
   // Keep immutable booking details in Stripe metadata; never include access data.
   const requestIdentity = residentialPaymentIdentity({
+    conditionReview: bookingConditionReview(form),
     inputIdentity: quote.residentialTerms!.inputIdentity,
     email: form.email!,
     address: form.address!,
@@ -507,6 +516,7 @@ export async function createResidentialPaymentIntent(input: {
     type: "residential_one_time",
     service_type: "residential_one_time",
     cleaning_level: form.cleaningLevel!,
+    ...(form.purpose ? { residential_purpose: form.purpose } : {}),
     residential_rule_version: quote.residentialTerms!.ruleVersion,
     ...(quote.residentialTerms!.ruleVersion === "residential-v2"
       ? {
@@ -515,10 +525,12 @@ export async function createResidentialPaymentIntent(input: {
           residential_scope: JSON.stringify(quote.residentialTerms!.input),
         }
       : {}),
+    ...(bookingConditionReview(form) ? { condition_review_hash: createHash("sha256").update(JSON.stringify(bookingConditionReview(form))).digest("hex") } : {}),
     request_identity: requestIdentity,
     service_label: getJobDisplay({
       serviceType: "residential_one_time",
       cleaningLevel: form.cleaningLevel,
+      purpose: form.purpose,
     }).label,
     customer_name: form.name ?? "N/A",
     customer_email: form.email ?? "N/A",
@@ -550,6 +562,11 @@ export async function createResidentialPaymentIntent(input: {
         {
           amount: chargeAmountCents,
           currency: "usd",
+          // Preserve the original provider request for pre-rollout/uncertain attempts.
+          ...(attempt?.terms.receiptFieldsVersion === 1 ? {
+            description: getJobDisplay({ serviceType: "residential_one_time", cleaningLevel: form.cleaningLevel, purpose: form.purpose }).label,
+            receipt_email: form.email!,
+          } : {}),
           customer: stripeCustomer.id,
           automatic_payment_methods: { enabled: true },
           metadata: {
@@ -699,9 +716,15 @@ export async function completeResidentialBooking(
       !paymentIntent.metadata?.residential_rule_version &&
       !paymentIntent.metadata?.cleaning_level;
     // Legacy intents retain original unlabelled terms regardless of a new form field.
-    if (isPaidLegacy) submitted.cleaningLevel = undefined;
+    if (isPaidLegacy) {
+      submitted.cleaningLevel = undefined;
+      submitted.purpose = undefined;
+    }
+    const submittedReview = bookingConditionReview(submitted);
+    const submittedReviewHash = submittedReview ? createHash("sha256").update(JSON.stringify(submittedReview)).digest("hex") : undefined;
     const expectedPropertyDetails = `${submitted.bedrooms} bed, ${submitted.bathrooms} bath, ${submitted.sqft ?? "N/A"} sqft`;
     if (
+      (paymentIntent.metadata?.condition_review_hash || undefined) !== submittedReviewHash ||
       paymentIntent.metadata?.type !== "residential_one_time" ||
       paymentIntent.metadata?.customer_email?.toLowerCase() !==
         (submitted.email ?? "").toLowerCase() ||
@@ -713,7 +736,8 @@ export async function completeResidentialBooking(
         (submitted.petsAllowed ? "yes" : "no") ||
       paymentIntent.metadata?.property_details !== expectedPropertyDetails ||
       (!isPaidLegacy &&
-        paymentIntent.metadata?.cleaning_level !== submitted.cleaningLevel)
+        (paymentIntent.metadata?.cleaning_level !== submitted.cleaningLevel ||
+          (paymentIntent.metadata?.residential_purpose ?? undefined) !== submitted.purpose))
     ) {
       return {
         success: false,
@@ -796,7 +820,8 @@ export async function completeResidentialBooking(
       throw new Error("Checkout scope differs from the accepted contract");
     if (
       pinnedCheckout &&
-      (pinnedCheckout.terms.inputIdentity !==
+      (JSON.stringify(pinnedCheckout.terms.conditionReview) !== JSON.stringify(submittedReview) ||
+        pinnedCheckout.terms.inputIdentity !==
         quote.residentialTerms?.inputIdentity ||
         pinnedCheckout.terms.configHash !==
           paymentIntent.metadata.residential_config_hash ||
@@ -861,6 +886,7 @@ export async function completeResidentialBooking(
           quote.residentialTerms.ruleVersion ||
         paymentIntent.metadata.request_identity !==
           residentialPaymentIdentity({
+            conditionReview: submittedReview,
             inputIdentity: quote.residentialTerms.inputIdentity,
             email: form.email!,
             address: form.address!,
@@ -1047,8 +1073,9 @@ export async function completeResidentialBooking(
     try {
       await notifyAdmins({
         type: "booking_alert",
-        title: "New one-time residential booking",
-        message: `${form.name} booked a one-time clean at ${form.address} for ${form.cleanDate} (${quote.window.label}). Paid ${formatUsd(amountCents)}.`,
+        email: !!submittedReview,
+        title: submittedReview ? "Residential booking needs condition review" : "New one-time residential booking",
+        message: `${form.name} booked a one-time clean at ${form.address} for ${form.cleanDate} (${quote.window.label}). Paid ${formatUsd(amountCents)}.${submittedReview ? " Unusual conditions reported; review the description in Job Oversight." : ""}`,
         jobId: result.job.id,
         url: `/admin/job-oversight/${result.job.id}`,
       });
@@ -1079,8 +1106,8 @@ export async function completeResidentialBooking(
       }
     }
 
-    // Confirmation email is best-effort.
-    try {
+    // The transactional outbox owns confirmations after its explicit rollout.
+    if (!notificationWorkflowCutoff()) try {
       await sendResidentialBookingConfirmationEmail({
         purchasedScope: residentialCustomerScope(addonsSnapshot),
         to: form.email!,
@@ -1093,6 +1120,7 @@ export async function completeResidentialBooking(
         petFeeApplied: quote.priceDetails.petFee > 0,
         entryMethod: form.entryMethod ?? null,
         cleaningLevel: form.cleaningLevel,
+        purpose: form.purpose,
       });
     } catch (err) {
       console.error("[residential-booking] confirmation email failed:", err);

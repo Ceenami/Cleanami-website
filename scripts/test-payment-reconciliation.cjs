@@ -10,9 +10,10 @@ exports.verify=async function(h){
   await pg.exec(`CREATE TABLE "${t.name}" (${columns.join(',')})`);
  }
  await pg.exec('CREATE UNIQUE INDEX payouts_job_cleaner_key ON payouts(job_id,cleaner_id); CREATE UNIQUE INDEX processed_stripe_events_event_id_key ON processed_stripe_events(event_id)');
- const test=(name,fn)=>h.test('money: '+name,async()=>{const deadline=setTimeout(()=>{throw Error('Money regression stalled: '+name)},15000);try{await pg.exec('TRUNCATE jobs_to_cleaners,cleaners,payouts,processed_stripe_events CASCADE');h.setNow('2030-01-29T12:00Z');await fn();}finally{clearTimeout(deadline);}});
+ await pg.exec(require('node:fs').readFileSync(require('node:path').join(__dirname,'../db/supabase/migrations/0066_money_recovery.sql'),'utf8'));
+ const test=(name,fn)=>h.test('money: '+name,async()=>{const deadline=setTimeout(()=>{throw Error('Money regression stalled: '+name)},15000);try{await pg.exec('TRUNCATE jobs_to_cleaners,cleaners,payouts,processed_stripe_events,stripe_webhook_claims CASCADE');h.setNow('2030-01-29T12:00Z');await fn();}finally{clearTimeout(deadline);}});
  const billing={customerSkipsBilling:c=>c.skipPayment===true,isSkippedPaymentIntent:id=>id==='skipped'};
- const cancellationRules=load('lib/cancellation/rules.ts',{'date-fns':require('date-fns')});
+ const cancellationRules=load('lib/cancellation/rules.ts',{'date-fns':require('date-fns'),'@/lib/subscriptions/minimum':pure('lib/subscriptions/minimum.ts')});
  const snapshots=pure('lib/pricing/residential-v2/contracts.ts');
  async function fixture(options={}){
   const f=await seed(options);
@@ -46,6 +47,7 @@ exports.verify=async function(h){
   const voider=load('lib/services/payment/void-charge.ts',{'@/lib/stripe/get-stripe':{getStripe:()=>p.stripe},'@/lib/billing/customer-billing':billing});
   const mod=load(file,{...emptyImports(file),'@/db':{db},'@/db/schemas':schema,'drizzle-orm':orm,
    './job-execution-contract':{getExecutionContract:async()=>null},'./payment/execution-cancellation':{cancelExecutionJob:async()=>{throw Error('legacy fixture entered issued cancellation');}},
+   '@/lib/booking/condition-review':pure('lib/booking/condition-review.ts'),
    '@/lib/cancellation/rules':cancellationRules,'@/lib/billing/customer-billing':billing,'@/lib/env/messages':{SERVICE_UNAVAILABLE:{stripe:'disabled'}},
    '@/lib/pricing/recurring-pricing-input':pure('lib/pricing/recurring-pricing-input.ts'),'@/lib/services/pricing.service':pricing(config),
    '@/lib/stripe/get-stripe':{getStripe:()=>p.stripe},'@/lib/services/payment/void-charge':voider,'@/lib/pricing/cleaner-pay':pay,
@@ -131,7 +133,7 @@ exports.verify=async function(h){
  function webhook(p){
   let failureEmails=0;
   const reconcile=load('lib/services/payment/reconcile-stripe-payment.ts',{'@/db':{db},'@/db/schemas':schema,'drizzle-orm':orm,'@/lib/jobs/job-notes':pure('lib/jobs/job-notes.ts')});
-  const dedupe=load('lib/services/stripe/event-dedupe.ts',{'@/db':{db},'@/db/schemas':schema});
+  const dedupe=load('lib/services/stripe/event-dedupe.ts',{'@/db':{db},'@/db/schemas':schema,'drizzle-orm':orm,'node:crypto':crypto,'../payment/money-recovery-settings':{assertMoneyRecoveryReady(){}}});
   const file='app/api/stripe/webhook/route.ts';
   const api=load(file,{...emptyImports(file),'next/server':{NextResponse:{json:(body,options={})=>({body,status:options.status??200})}},'@/db':{db},'@/db/schemas':schema,'drizzle-orm':orm,
    '@/lib/cleaner/stripe-account-state':{applyStripeAccountState:async()=>{}},'@/lib/services/stripe/event-dedupe':dedupe,'@/lib/services/email.service':{sendPaymentFailedEmail:async()=>{failureEmails++;}},

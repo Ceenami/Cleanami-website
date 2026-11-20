@@ -1,4 +1,5 @@
 import { addMonths, differenceInHours } from "date-fns";
+import { legacySubscriptionMinimum, subscriptionMinimumLabel, withinSubscriptionMinimum, type SubscriptionMinimum } from "@/lib/subscriptions/minimum";
 
 export const CANCEL_NOTICE_HOURS = 24;
 
@@ -10,6 +11,7 @@ const CANCELABLE_JOB_STATUSES = new Set([
 export type SubscriptionForCancel = {
   startDate: string | Date;
   status: string;
+  cancellationMinimum?: SubscriptionMinimum;
 };
 
 export type JobForCancel = {
@@ -45,7 +47,7 @@ export function isLateCancellation(
   );
 }
 
-export function canCancelSubscription(subscription: SubscriptionForCancel): {
+export function canCancelSubscription(subscription: SubscriptionForCancel, now = new Date()): {
   allowed: boolean;
   reason: string | null;
 } {
@@ -53,11 +55,11 @@ export function canCancelSubscription(subscription: SubscriptionForCancel): {
     return { allowed: false, reason: "Only active subscriptions can be canceled" };
   }
 
-  if (isWithinFirstMonth(subscription)) {
+  const minimum = subscription.cancellationMinimum ?? legacySubscriptionMinimum(subscription.startDate);
+  if (withinSubscriptionMinimum(minimum, now)) {
     return {
       allowed: false,
-      reason:
-        "Your first month is a minimum commitment. You can cancel individual cleans during this period, but not the full subscription yet.",
+      reason: `Your ${subscriptionMinimumLabel(minimum).toLowerCase()} has not ended. You can manage individual cleans from your dashboard.`,
     };
   }
 
@@ -81,7 +83,7 @@ export function canCancelJob(
     };
   }
 
-  if (hoursUntilCheckIn(job.checkInTime) <= 0) {
+  if (new Date(job.checkInTime).getTime() <= Date.now()) {
     return {
       allowed: false,
       late: false,

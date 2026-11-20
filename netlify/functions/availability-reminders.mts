@@ -1,4 +1,4 @@
-// Poll the staged Sunday reminder endpoint. Eastern/DST timing and durable
+// Poll the staged availability reminder endpoint. Eastern/DST timing and durable
 // cleaner/period/stage deduplication are owned by the website service.
 
 export default async () => {
@@ -33,5 +33,6 @@ export default async () => {
   return new Response(body, { status: 200 });
 };
 
-// UTC polling; service gates to Sunday 09:00/17:00/18:00 Eastern, including DST.
+// UTC polling; service gates Friday 18:00 and Sunday 12:00/17:00 Eastern.
+// Missed-stage dispatch waits until 19:00 Eastern when the grace policy is enabled.
 export const config = { schedule: "*/15 * * * *" };

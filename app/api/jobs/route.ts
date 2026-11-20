@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { properties } from "@/db/schemas";
 import { getJobsWithDetails } from "@/lib/queries/jobs";
+import { ASSIGNMENT_ISSUES, type AssignmentIssue } from "@/lib/services/assignment/lifecycle-policy";
 import { toCustomerJobListItem } from "@/lib/customer/job-list";
 import { getDashboardJobDateRange } from "@/lib/queries/dashboard-job-window";
 import {
@@ -50,6 +51,9 @@ export async function GET(request: NextRequest) {
     }
 
     const searchParams = request.nextUrl.searchParams;
+    const assignmentIssue = searchParams.get("assignmentIssue") ?? "all";
+    if (!ASSIGNMENT_ISSUES.includes(assignmentIssue as AssignmentIssue)) return NextResponse.json({ error: "Invalid assignment filter" }, { status: 400 });
+    if (scope.customerId && assignmentIssue !== "all") return NextResponse.json({ error: "Admin access required" }, { status: 403 });
     const isDashboard = searchParams.get("dashboard") === "1";
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(
@@ -105,6 +109,8 @@ export async function GET(request: NextRequest) {
 
     const result = await getJobsWithDetails({
       includeRestockCounts: !scope.customerId,
+      conditionReviewOnly: !scope.customerId && searchParams.get("conditionReview") === "1",
+      assignmentIssue: assignmentIssue as AssignmentIssue,
       page,
       limit,
       status,

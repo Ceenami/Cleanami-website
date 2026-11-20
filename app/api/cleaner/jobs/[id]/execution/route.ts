@@ -8,6 +8,7 @@ import {
   requireCleanerJobAssignment,
 } from "@/lib/cleaner-auth";
 import { executionResponse } from "@/lib/services/job-execution-http";
+import { readBeforeRequirements } from "@/lib/services/before-requirements.service";
 import {
   getExecutionEvidence,
   reserveExecutionUpload,
@@ -15,6 +16,8 @@ import {
   saveExecutionDraft,
   removeExecutionUpload,
   ExecutionError,
+  saveArrivalConditions,
+  startExecutionCleaning,
 } from "@/lib/services/job-execution";
 
 export async function GET(
@@ -43,6 +46,7 @@ export async function GET(
         return {
           protocol: "pre2c-hotfix-v1",
           isSubmitted: !!packet?.finalEvidenceSubmittedAt,
+          beforeRequired: !!(await readBeforeRequirements(id)),
         };
       }
       return getExecutionEvidence(id, auth.cleanerId!);
@@ -64,6 +68,10 @@ export async function POST(
     (await executionResponse(id, async () => {
       const body = await request.json();
       switch (body.operation) {
+        case "start_cleaning":
+          return startExecutionCleaning(id, auth.cleanerId!);
+        case "arrival_conditions":
+          return saveArrivalConditions(id, auth.cleanerId!, body);
         case "reserve":
           return reserveExecutionUpload(id, auth.cleanerId!, body);
         case "acknowledge":

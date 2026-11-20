@@ -9,6 +9,7 @@ process.env.DATABASE_URL =
   "postgres://isolated:isolated@127.0.0.1:1/no_network";
 delete process.env.JOB_EXECUTION_SCHEMA_READY;
 delete process.env.JOB_EXECUTION_ENROLLMENT;
+for (const key of Object.keys(process.env)) if (/^(BEFORE_REQUIRED|SUBSCRIPTION_TERM|AVAILABILITY_GRACE)/.test(key)) delete process.env[key];
 require("tsx/cjs");
 const fs = require("node:fs"),
   path = require("node:path"),
@@ -38,7 +39,7 @@ Module._load = function (name, ...args) {
 const schema = require("../db/schema.ts");
 const pg = new PGlite();
 const db = drizzle(pg, { schema });
-replace("db/index.ts", { db, schema });
+replace("db/index.ts", { db, schema, sequentialQueries: async (...queries) => { const results = []; for (const query of queries) results.push(await query()); return results; } });
 replace("lib/services/gps/geofence.ts", {
   evaluateGeofence: async () => ({
     verdict: "inside",
@@ -203,6 +204,16 @@ async function run() {
         "job_operation_audit",
         "job_schedule_revisions",
         "job_schedule_notices",
+        "phase3a_offer_jobs",
+        "phase3a_assignment_offers",
+        "phase3a_offer_events",
+        "phase3a_coverage_alerts",
+        "phase3a_reconfirmations",
+        "phase3a_lifecycle_actions",
+        "phase3a_priority_plans",
+        "phase3a_priority_events",
+        "phase3a_priority_notices",
+        "phase3a_priority_move_approvals",
       ].includes(t.name)
     )
       continue;
@@ -781,6 +792,9 @@ async function run() {
     db, pg, schema, seed, make, row, contracts, service, settlement, cancellation,
     test, replace, jpeg, media, reserveInput, root, uuid,
   });
+  if (process.argv.includes("--assignment-offers")) await require("./test-assignment-offers.cjs").verify({ db, pg, schema, seed, row, test, replace, root, uuid });
+  if (process.argv.includes("--phase3a-followup")) await require("./test-phase3a-followup.cjs").verify({ db, pg, schema, seed, row, test, replace, root, uuid, contracts, service, jpeg, media, reserveInput });
+  if (process.argv.includes("--required-work")) await require("./test-required-work.cjs").verify({ db, pg, schema, seed, row, test, replace, root, uuid, contracts, service, jpeg, media, reserveInput });
   console.log(
     `${passed} PostgreSQL/service regressions passed. Hosted Auth/Storage/provider/device gates remain separate.`,
   );

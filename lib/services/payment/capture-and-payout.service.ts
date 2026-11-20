@@ -1,4 +1,5 @@
 import "server-only";
+import { isFinancialJob } from "./rental-finance.service";
 import { getExecutionContract } from "../job-execution-contract";
 import { settleExecutionJob } from "./execution-settlement";
 
@@ -61,6 +62,7 @@ export async function captureAndCreatePayouts(
   // The issued protocol owns its own short claims and ledger transactions.
   // Dispatch before acquiring a legacy lock to avoid waiting on ourselves.
   if (await getExecutionContract(jobId)) return settleExecutionJob(jobId);
+  if (await isFinancialJob(jobId)) return { ok: false, httpStatus: 409, body: { error: "Enrolled credit settlement requires its issued execution contract; review before billing" } };
   const afterCommit: Array<() => Promise<void>> = [];
   const outcome = await db.transaction(async (tx) => {
     // Cancellation takes this same row lock. Read terms/status only after it

@@ -10,7 +10,7 @@ import {
 
 export async function createValidatedPaymentIntent(
   formData: SignupFormData | SerializableSignupFormData
-): Promise<{ clientSecret?: string | null; error?: string }> {
+): Promise<{ clientSecret?: string | null; minimumCommitmentPolicy?: string; termEndPolicy?: string; error?: string }> {
   try {
     const normalized =
       "checklistFile" in formData && formData.checklistFile !== undefined
@@ -24,6 +24,8 @@ export async function createValidatedPaymentIntent(
     const result = await createPaymentIntentForSignup(normalized);
     return {
       clientSecret: result.clientSecret ?? null,
+      minimumCommitmentPolicy: result.minimumCommitmentPolicy,
+      termEndPolicy: result.termEndPolicy,
       error: result.error,
     };
   } catch (error) {

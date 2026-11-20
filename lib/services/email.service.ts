@@ -1,3 +1,7 @@
+import "server-only";
+import { randomUUID } from "node:crypto";
+import { enqueueAdminSmsSafely } from "./notifications/admin-sms.service";
+import type { AdminSmsCategory } from "@/lib/notifications/admin-sms";
 import {
   getResend,
   getEmailUnavailableMessage,
@@ -16,8 +20,11 @@ import {
 import {
   entryAccessReminder,
   RESIDENTIAL_CANCELLATION_POLICY,
-  SERVICE_TYPE_LABELS,
+  getJobDisplay,
 } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
+import { cleanerNotificationUrl } from "@/lib/notifications/destination";
+import { getAppBaseUrl } from "@/lib/app-url";
 
 /**
  * `YYYY-MM-DD` is a calendar date, not an instant. Parsing it with `new Date()`
@@ -38,7 +45,7 @@ function formatEasternDateLabel(isoDate: string): string {
   });
 }
 
-type SendResult = { success: boolean; error?: string };
+export type SendResult = { success: boolean; error?: string; providerMessageId?: string; status?: "sent" | "skipped" | "failed" | "unknown" };
 
 /**
  * Generic branded transactional send. No-ops gracefully if Resend is unset.
@@ -58,6 +65,9 @@ export async function sendTransactionalEmail(
   props: TransactionalEmailProps,
   meta?: NotificationMeta,
 ): Promise<SendResult> {
+  // Queue independently of email configuration, provider failure or acceptance.
+  // Existing caller-level intents carry their stable business identity.
+  if (meta?.adminSms) await enqueueAdminSmsSafely(meta.adminSms, meta.jobId ?? null);
   const logMeta: NotificationMeta = {
     trigger: "transactional_email",
     ...meta,
@@ -74,10 +84,10 @@ export async function sendTransactionalEmail(
         error,
         meta: logMeta,
       });
-      return { success: false, error };
+      return { success: false, error, status: "skipped" };
     }
 
-    const { error } = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: EMAIL_FROM,
       to,
       subject,
@@ -91,14 +101,15 @@ export async function sendTransactionalEmail(
         error: error.message,
         meta: logMeta,
       });
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, status: "failed" };
     }
     await recordNotificationAttempt({
       channel: "email",
       status: "sent",
+      providerMessageId: data?.id,
       meta: logMeta,
     });
-    return { success: true };
+    return { success: true, status: "sent", providerMessageId: data?.id };
   } catch (error) {
     console.error("Failed to send transactional email:", error);
     await recordNotificationAttempt({
@@ -109,13 +120,13 @@ export async function sendTransactionalEmail(
     });
     return {
       success: false,
+      status: "unknown",
       error: error instanceof Error ? error.message : "Unknown error",
     };
   }
 }
 
-const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL ?? "https://cleanami.ceenami.com";
+const APP_URL = getAppBaseUrl();
 
 export function sendBookingConfirmationEmail(params: {
   to: string;
@@ -183,8 +194,10 @@ export function sendJobCompletionEmail(params: {
  * path exists. Behind it is `cancelJobAsAdmin()` -> `voidCharge()`.
  */
 export type ResidentialBookingConfirmation = {
+  paymentWaived?: boolean;
   purchasedScope?: string[];
   cleaningLevel?: "standard" | "deep";
+  purpose?: ResidentialPurpose;
   to: string;
   name?: string;
   propertyAddress: string;
@@ -215,11 +228,12 @@ export function buildResidentialBookingConfirmationEmail(
       heading: "Your clean is booked 🎉",
       greeting: params.name ? `Hi ${params.name},` : "Hi there,",
       bodyLines: [
-        `Service: ${SERVICE_TYPE_LABELS.residential_one_time}${params.cleaningLevel ? ` - ${params.cleaningLevel === "deep" ? "Deep" : "Standard"}` : ""}.`,
+        `Service: ${getJobDisplay({ serviceType: "residential_one_time", cleaningLevel: params.cleaningLevel, purpose: params.purpose }).label}.`,
         ...(params.purchasedScope ?? []),
         `Address: ${params.propertyAddress}.`,
         `Date: ${cleanDateLabel}. Arrival: ${params.arrivalWindowLabel}.`,
-        `Paid today: ${params.amount}. Your payment is complete — there is nothing to pay on the day.`,
+        params.paymentWaived ? "Payment was waived for this booking. No charge was taken."
+          : `Paid today: ${params.amount}. Your payment is complete — there is nothing to pay on the day.`,
         params.petsAllowed
           ? params.petFeeApplied
             ? "Pets: yes. A $10 pet fee is included in the total above."
@@ -252,11 +266,14 @@ export function sendResidentialBookingConfirmationEmail(
  * `email` flag for why this is not the default.
  */
 export function sendAdminAlertEmail(params: {
+  jobId?: string;
   to: string;
   name?: string;
   subject: string;
   message: string;
   url?: string;
+  smsIdentity?: string;
+  smsCategory?: AdminSmsCategory;
 }): Promise<SendResult> {
   return sendTransactionalEmail(
     params.to,
@@ -269,7 +286,7 @@ export function sendAdminAlertEmail(params: {
       ctaLabel: params.url ? "Open in the dashboard" : undefined,
       ctaUrl: params.url ? `${APP_URL}${params.url}` : undefined,
     },
-    { trigger: "admin_alert" },
+    { trigger: "admin_alert", jobId: params.jobId, adminSms: { identity: params.smsIdentity ?? `admin-alert:${randomUUID()}`, category: params.smsCategory ?? "admin_notice", destination: params.url } },
   );
 }
 
@@ -326,7 +343,13 @@ export function sendCleanerAssignmentEmail(params: {
   propertyAddress: string;
   jobDate: string;
   serviceLabel?: string;
+  jobId?: string;
+  url?: string;
 }): Promise<SendResult> {
+  const destination = cleanerNotificationUrl({
+    type: "assignment", jobId: params.jobId,
+    metadata: { url: params.url ?? (params.jobId ? `/cleaner/jobs/${params.jobId}` : "/cleaner/jobs") },
+  }) ?? "/cleaner/jobs";
   return sendTransactionalEmail(
     params.to,
     "You've been assigned a new clean",
@@ -339,7 +362,7 @@ export function sendCleanerAssignmentEmail(params: {
         `Scheduled for ${params.jobDate}.`,
       ],
       ctaLabel: "View job",
-      ctaUrl: `${APP_URL}/cleaner/jobs`,
+      ctaUrl: `${getAppBaseUrl()}${destination}`,
     },
     { trigger: "cleaner_assignment" },
   );

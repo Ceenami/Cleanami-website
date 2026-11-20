@@ -86,6 +86,7 @@ export const jobs = pgTable(
        * end alone).
        */
       arrivalWindow?: string | null;
+      conditionReview?: import("@/lib/booking/condition-review").ConditionReview;
       /** Phase 2C: new residential terms in existing JSON; no historic backfill. */
       cleaningLevel?: "standard" | "deep";
       residentialPricing?: ReturnType<

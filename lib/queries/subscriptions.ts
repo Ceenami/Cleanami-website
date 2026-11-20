@@ -3,6 +3,8 @@ import 'server-only';
 import { db } from '@/db';
 import { subscriptions, properties, customers, jobs } from '@/db/schemas';
 import { eq, sql, and } from 'drizzle-orm';
+import { withSubscriptionMinimums } from '@/lib/services/subscription-minimum.service';
+import { withSubscriptionTerms } from '@/lib/services/subscription-term.service';
 import {
   PaginationParams,
   SearchParams,
@@ -106,7 +108,7 @@ export async function getSubscriptionsWithDetails({
     .limit(limit)
     .offset(offset);
 
-  return buildPaginatedResponse(data, page, limit);
+  return buildPaginatedResponse(await withSubscriptionTerms(await withSubscriptionMinimums(data)), page, limit);
 }
 
 export type SubscriptionsWithDetails = Awaited<ReturnType<typeof getSubscriptionsWithDetails>>;

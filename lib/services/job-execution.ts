@@ -1,4 +1,7 @@
 import "server-only";
+import { beforeEvidenceEnabled, beforeEvidenceSchemaReady } from "./before-evidence-settings";
+import { isBeforeUpload } from "@/lib/evidence/phases";
+import { readBeforeRequirements, beforeRequirementsStatus } from "./before-requirements.service";
 import { createHash } from "node:crypto";
 import { db, type Database } from "@/db";
 import {
@@ -12,6 +15,9 @@ import {
   jobsToCleaners,
   reliabilityEvents,
   evidenceDrafts,
+  evidenceUploadPhases,
+  jobArrivalConditions,
+  beforeRequirements,
 } from "@/db/schemas";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -53,6 +59,7 @@ export const deviceSchema = z.object({
   accuracy: z.number().nonnegative().nullable().optional(),
 });
 const reservationSchema = z.object({
+  phase: z.enum(["before", "after"]).default("after"),
   uploadId: z.uuid(),
   roomKey: z.string(),
   source: z.enum(["camera", "gallery"]).default("camera"),
@@ -361,7 +368,9 @@ export async function reserveExecutionUpload(
         .from(evidenceUploadManifest)
         .where(eq(evidenceUploadManifest.uploadId, input.uploadId));
       if (old) {
+        const [tag] = beforeEvidenceSchemaReady() ? await tx.select().from(evidenceUploadPhases).where(eq(evidenceUploadPhases.uploadId, old.uploadId)) : [];
         if (
+          (isBeforeUpload(old, tag?.phase) ? "before" : "after") !== input.phase ||
           old.jobId !== jobId ||
           old.cleanerId !== cleanerId ||
           old.roomKey !== input.roomKey ||
@@ -377,12 +386,19 @@ export async function reserveExecutionUpload(
           );
         return old;
       }
+      const beforeContract = await readBeforeRequirements(jobId, tx);
+      if (input.phase === "before" && !beforeEvidenceEnabled() && !beforeContract) throw new ExecutionError("Before photos are not enabled for this workflow", 503);
+      if (input.phase === "before" && beforeContract?.startedAt) throw new ExecutionError("Cleaning has started; Before photos are locked");
+      if (input.phase === "before" && beforeContract && !beforeContract.rooms.some(room => room.roomKey === input.roomKey)) throw new ExecutionError("This is not an arrival-evidence room", 400);
+      if (input.phase === "after" && beforeContract && !beforeContract.startedAt && !beforeContract.exceptionAt) throw new ExecutionError("Complete required Before photos and Start cleaning before adding After photos");
+      if (input.phase === "before" && (job.status !== "in-progress" || packet.gpsCheckOutTimestamp))
+        throw new ExecutionError("New Before photos must be reserved before departure; existing reservations can be retried");
       const ext = {
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",
       }[input.mime];
-      const path = `${cleanerId}/${jobId}/issued/${input.uploadId}.${ext}`;
+      const path = `${cleanerId}/${jobId}/${input.phase === "before" ? "issued-before" : "issued"}/${input.uploadId}.${ext}`;
       const [created] = await tx
         .insert(evidenceUploadManifest)
         .values({
@@ -393,6 +409,7 @@ export async function reserveExecutionUpload(
           path,
         })
         .returning();
+      if (beforeEvidenceSchemaReady()) await tx.insert(evidenceUploadPhases).values({ uploadId: created.uploadId, phase: input.phase });
       return created;
     },
   );
@@ -557,10 +574,13 @@ export async function saveExecutionDraft(
         "Progress changed on another device. Reload before saving; your local photos are retained",
       );
     const roomPhotos: Record<string, string[]> = {};
-    for (const upload of verified)
+    // Arrival evidence never satisfies completion-photo or payment requirements.
+    for (const upload of verified.filter(u => !isBeforeUpload(u)))
       (roomPhotos[upload.roomKey] ??= []).push(upload.path);
     const now = new Date();
     if (finalize) {
+      const beforeContract = await readBeforeRequirements(jobId, tx);
+      if (beforeContract && !beforeContract.startedAt && !beforeContract.exceptionAt) throw new ExecutionError("Required Before evidence needs Start cleaning or an audited admin exception");
       if (!packet?.gpsCheckInTimestamp || !packet.gpsCheckOutTimestamp)
         throw new ExecutionError(
           "Record physical departure before final submission",
@@ -581,7 +601,7 @@ export async function saveExecutionDraft(
       await tx
         .update(evidencePackets)
         .set({
-          photoUrls: verified.map((u) => u.path),
+          photoUrls: verified.filter(u => !isBeforeUpload(u)).map((u) => u.path),
           checklistLog: { items, roomPhotos },
           cleanerNotes: input.notes,
           isChecklistComplete: true,
@@ -632,6 +652,9 @@ export async function removeExecutionUpload(
   z.uuid().parse(uploadId);
   return locked(jobId, cleanerId, async (tx, job, packet) => {
     writable(job, packet);
+    const gate = await readBeforeRequirements(jobId, tx);
+    const [existingUpload] = await tx.select().from(evidenceUploadManifest).where(eq(evidenceUploadManifest.uploadId, uploadId));
+    if (gate?.startedAt && existingUpload && isBeforeUpload(existingUpload)) throw new ExecutionError("Before evidence used to start cleaning cannot be removed");
     const result = await tx
       .update(evidenceUploadManifest)
       .set({ state: "removed" })
@@ -693,11 +716,12 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
       path: u.path,
       state: u.state,
       source: u.source,
+      phase: isBeforeUpload(u) ? "before" as const : "after" as const,
       capturedAt: u.capturedAt?.toISOString() ?? null,
       url,
       mine: u.cleanerId === cleanerId,
     });
-    if (u.state === "verified") {
+    if (u.state === "verified" && !isBeforeUpload(u)) {
       (roomPhotos[u.roomKey] ??= []).push(u.path);
       (roomPhotoPreviews[u.roomKey] ??= []).push(url ?? "");
     }
@@ -717,6 +741,11 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
         : (file.sourceUrl ?? ""),
     });
   return {
+    beforeEvidenceAvailable: beforeEvidenceEnabled() || !!(await readBeforeRequirements(jobId)),
+    beforeRequirements: await beforeRequirementsStatus(jobId),
+    arrivalConditions: beforeEvidenceSchemaReady()
+      ? (await db.select({ notes: jobArrivalConditions.notes, revision: jobArrivalConditions.revision }).from(jobArrivalConditions).where(eq(jobArrivalConditions.jobId, jobId)))[0] ?? { notes: "", revision: 0 }
+      : null,
     protocol: contract.protocol,
     queueOwner: cleanerId,
     jobId,
@@ -739,4 +768,39 @@ export async function getExecutionEvidence(jobId: string, cleanerId: string) {
       packet?.finalEvidenceSubmittedAt?.toISOString() ?? null,
     isSubmitted: !!packet?.finalEvidenceSubmittedAt,
   };
+}
+
+/** Private arrival notes, separate from final evidence and customer-published notes. */
+export async function saveArrivalConditions(jobId: string, cleanerId: string, raw: unknown) {
+  if (!beforeEvidenceEnabled() && !(await readBeforeRequirements(jobId))) throw new ExecutionError("Arrival evidence is not enabled", 503);
+  const input = z.object({ revision: z.number().int().nonnegative(), notes: z.string().trim().max(4000) }).parse(raw);
+  return locked(jobId, cleanerId, async (tx, job, packet) => {
+    writable(job, packet);
+    if (job.status !== "in-progress" || !packet?.gpsCheckInTimestamp || packet.gpsCheckOutTimestamp)
+      throw new ExecutionError("Record arrival conditions before departure");
+    const [current] = await tx.select().from(jobArrivalConditions).where(eq(jobArrivalConditions.jobId, jobId));
+    if ((current?.revision ?? 0) !== input.revision) throw new ExecutionError("Arrival notes changed. Refresh before saving.");
+    const value = { jobId, revision: input.revision + 1, notes: input.notes, updatedBy: cleanerId, updatedAt: new Date() };
+    await tx.insert(jobArrivalConditions).values(value).onConflictDoUpdate({ target: jobArrivalConditions.jobId, set: value });
+    await audit(tx, jobId, cleanerId, "arrival_conditions", String(value.revision));
+    return { success: true, revision: value.revision };
+  });
+}
+
+export async function startExecutionCleaning(jobId: string, cleanerId: string) {
+  return locked(jobId, cleanerId, async (tx, job, packet) => {
+    writable(job, packet);
+    const gate = await readBeforeRequirements(jobId, tx);
+    if (!gate) throw new ExecutionError("This job does not use the required Before workflow");
+    if (gate.startedAt) return { success: true, alreadyRecorded: true, startedAt: gate.startedAt.toISOString() };
+    if (!packet?.gpsCheckInTimestamp || packet.gpsCheckOutTimestamp) throw new ExecutionError("Start cleaning during the recorded visit");
+    const status = await beforeRequirementsStatus(jobId, tx);
+    if (status!.pending || (!gate.exceptionAt && status!.missing.length)) throw new ExecutionError(`Finish required Before uploads: ${status!.missing.join(", ") || "pending uploads"}`);
+    const photos = await tx.select().from(evidenceUploadManifest).where(eq(evidenceUploadManifest.jobId, jobId));
+    const evidence = photos.filter(photo => photo.state === "verified" && isBeforeUpload(photo)).map(photo => photo.uploadId).sort();
+    const now = new Date();
+    await tx.update(beforeRequirements).set({ startedAt: now, startedBy: cleanerId, evidence }).where(eq(beforeRequirements.jobId, jobId));
+    await audit(tx, jobId, cleanerId, "start_cleaning", "first");
+    return { success: true, startedAt: now.toISOString() };
+  });
 }

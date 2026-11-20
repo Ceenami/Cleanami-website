@@ -5,7 +5,8 @@ import {
 } from "@/lib/validations/laundry-loads";
 import { ENTRY_METHOD_VALUES, SERVICE_TYPES } from "@/lib/constants/service-type";
 
-export const signupFormSchema = z
+function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true) {
+  return z
   .object({
     name: z.string().min(2, "Name is required"),
     email: z.email(),
@@ -86,7 +87,7 @@ export const signupFormSchema = z
   })
   .refine(
     (data) =>
-      data.useDefaultChecklist === true ||
+      !requireChecklist || data.useDefaultChecklist === true ||
       (data.checklistFile !== undefined && data.checklistFile.length > 0) ||
       (data.checklistSheetUrl !== undefined && data.checklistSheetUrl.length > 0),
     {
@@ -98,6 +99,7 @@ export const signupFormSchema = z
     (data) => {
       // Mandatory 7-day setup buffer before the first clean. Calendar-day
       // comparison so a same-day pick of "today + 7" is accepted.
+      if (!enforceNotice) return true; // Only for a verified, frozen paid checkout.
       const earliest = new Date();
       earliest.setHours(0, 0, 0, 0);
       earliest.setDate(earliest.getDate() + 7);
@@ -129,6 +131,19 @@ export const signupFormSchema = z
       path: ["laundryLoads"],
     }
   );
+}
+
+export const signupFormSchema = createSignupFormSchema(true);
+export const paidSignupFormSchema = createSignupFormSchema(false);
+
+// The JSON payment request cannot carry a custom checklist File. That file is
+// validated during onboarding; all other fresh purchase fields must already be
+// persistable before the card can be confirmed. Notice uses the server's Eastern
+// check, and accepted checkout recovery precedes this fresh-purchase validation.
+export const paymentSignupFormSchema = createSignupFormSchema(false, false).safeExtend({
+  sqft: z.number().int("Please enter a whole number of square feet").positive(),
+  subscriptionMonths: z.number().int("Please select a whole number of months").min(1).max(6),
+});
 
 export type SignupFormData = Partial<z.infer<typeof signupFormSchema>>;
 

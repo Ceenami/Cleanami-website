@@ -16,7 +16,7 @@ export async function verifySettledPayment(
     ? await stripe.charges.retrieve(intent.latest_charge)
     : intent.latest_charge;
   if (!charge || charge.currency !== "usd" || charge.amount !== expectedCents ||
-      charge.amount_refunded !== 0 || charge.refunded || !charge.paid || !charge.captured)
+      charge.amount_refunded !== 0 || charge.refunded || charge.disputed || !charge.paid || !charge.captured)
     throw new Error("Missing, refunded or mismatched charge requires review. No new booking or payout was created.");
   const refunds = await stripe.refunds.list({ payment_intent: intent.id, limit: 100 });
   if (refunds.has_more || refunds.data.some(r => r.status !== "failed" && r.status !== "canceled"))

@@ -1,3 +1,5 @@
+import { safePortalReturnPath } from "@/lib/auth-redirects";
+
 type NotificationDestination = {
   type: string;
   jobId?: string | null;
@@ -8,22 +10,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Only local portal paths may become notification links. */
 function portalUrl(value: unknown, portal: "admin" | "cleaner"): string | null {
-  if (typeof value !== "string" || /[\\\s\u0000-\u001f\u007f]/.test(value))
-    return null;
-  try {
-    const url = new URL(value, "https://notification.invalid");
-    if (
-      !value.startsWith(`/${portal}/`) ||
-      url.origin !== "https://notification.invalid"
-    )
-      return null;
-    // Reject encoded path separators and traversal, including normalized ../ paths.
-    if (url.pathname !== value.split(/[?#]/, 1)[0] || /%/i.test(url.pathname))
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
+  const path = safePortalReturnPath(value);
+  return path?.startsWith(`/${portal}/`) ? path : null;
 }
 
 export function adminNotificationUrl(

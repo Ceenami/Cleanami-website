@@ -17,7 +17,7 @@ const { PGlite } = require("@electric-sql/pglite"), { drizzle } = require("drizz
 const { PgTable, PgDialect, getTableConfig, isPgEnum } = require("drizzle-orm/pg-core");
 const { is, SQL, eq, and } = require("drizzle-orm");
 const schema = require("../db/schema.ts"), pg = new PGlite(), database = drizzle(pg, { schema });
-let inboxFails = false, pushFails = false, smsFails = false, claimable = new Set();
+let inboxFails = false, pushFails = false, smsFails = false, adminEmailFails = false, claimable = new Set();
 const attempts = [], pushes = [], sms = [], emails = [];
 const db = new Proxy(database, {
   get(target, key) {
@@ -33,8 +33,8 @@ replace("db/index.ts", { db, schema });
 replace("lib/services/urgent-replacement.service.ts", { getClaimableUrgentJobIds: async ids => new Set(ids.filter(id => claimable.has(id))) });
 replace("lib/services/notifications/notification-log.ts", { recordNotificationAttempt: async entry => attempts.push(entry) });
 replace("lib/services/push.service.ts", { sendPushToCleaner: async (id, payload) => { pushes.push({ id, payload }); if (pushFails) throw Error("Synthetic push failure"); return 1; } });
-replace("lib/services/sms.service.ts", { sendSms: async (phone, message, meta) => { sms.push({ phone, message, meta }); if (smsFails) throw Error("Synthetic SMS failure"); return true; } });
-replace("lib/services/email.service.ts", { sendAdminAlertEmail: async input => emails.push(input) });
+replace("lib/services/sms.service.ts", { sendSmsOutcome: async (phone, message, meta) => { sms.push({ phone, message, meta }); if (smsFails) { attempts.push({channel:"sms",status:"failed"}); return {status:"failed",reason:"provider"}; } return {status:"sent"}; } });
+replace("lib/services/email.service.ts", { sendAdminAlertEmail: async input => { emails.push(input); return { success: !adminEmailFails }; } });
 replace("lib/services/job-execution-contract.ts", { getExecutionContract: async () => null });
 replace("lib/queries/cleaner-swap.ts", { expireStaleSwapRequests: async () => 0 });
 replace("lib/services/notifications/availability-reminders.ts", { sendStagedAvailabilityReminders: async () => ({ reminded: 0 }) });
@@ -206,6 +206,7 @@ async function run() {
       "@/lib/services/assignment/team-roles": {},
       "@/lib/services/notifications/notify": { notifyCleaner },
       "@/lib/services/assignment/eligibility": {},
+      "@/lib/services/assignment/offers.service": { isOfferJob: async () => false },
       "@/lib/services/swap/swap-candidates": { getSwapCandidates: async () => ({ candidates: [{ cleanerId: a.id, fullName: a.fullName }] }) },
       "@/lib/services/urgent-replacement.service": {},
     });
@@ -272,6 +273,13 @@ async function run() {
     inboxFails = true; const e = emails.length;
     assert.equal(await notifyAdmins({ type: "assignment", title: "Critical", message: "Fixture", jobId: j.id, email: true }), 0);
     inboxFails = false; assert.equal(emails.length, e + 2); assert.equal(emails.at(-1).url, `/admin/job-oversight/${j.id}`);
+  });
+  await test("requested admin email rejection cannot be masked by successful inbox insertion", async () => {
+    adminEmailFails = true;
+    try {
+      assert.equal(await notifyAdmins({ type: "assignment", title: "Email rejected fixture", message: "Fixture", jobId: j.id, email: true }), 0);
+      assert.ok((await db.select().from(schema.notifications).where(eq(schema.notifications.title, "Email rejected fixture"))).length > 0);
+    } finally { adminEmailFails = false; }
   });
   await clearInbox();
   const now = new Date("2035-10-29T12:00Z"), start = new Date(+now + 30 * 60000);
@@ -355,6 +363,10 @@ async function run() {
   process.env.NEXT_PUBLIC_APP_URL = "https://notification.example.invalid";
   const actualEmail = loadUi("lib/services/email.service.ts", {
     ...channelMocks,
+    "node:crypto": { randomUUID: uuid },
+    "./notifications/admin-sms.service": { enqueueAdminSmsSafely: async () => ({ state: "disabled" }) },
+    "@/lib/notifications/destination": require("../lib/notifications/destination.ts"),
+    "@/lib/app-url": require("../lib/app-url.ts"),
     "@/lib/resend": { EMAIL_FROM: "fixture@example.invalid", getEmailUnavailableMessage: () => "Unconfigured", getResend: () => emailMode === "missing" ? null : { emails: { send: async input => {
       providerEmails.push(input);
       if (emailMode === "throw") throw Error("Email offline");

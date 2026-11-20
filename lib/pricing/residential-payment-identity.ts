@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 /** Server request identity covers terms even when two selections cost the same. */
 export function residentialPaymentIdentity(input: {
+  conditionReview?: import("@/lib/booking/condition-review").ConditionReview;
   inputIdentity: string;
   email: string;
   address: string;
@@ -22,6 +23,7 @@ export function residentialPaymentIdentity(input: {
         input.amountCents,
         input.promoCode?.trim().toUpperCase() ?? "",
         input.promoDiscountCents,
+        ...(input.conditionReview ? [input.conditionReview] : []),
       ]),
     )
     .digest("hex");

@@ -6,6 +6,7 @@ import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
 import { sendStagedAvailabilityReminders } from "./availability-reminders";
 import { and, eq, gt, lte, ne, sql } from "drizzle-orm";
+import { acceptedEtaOffer, isLifecycleJob } from "@/lib/services/assignment/lifecycle-read.service";
 
 /** Window ahead of the scheduled start in which the T-60 reminder fires. */
 const JOB_REMINDER_LEAD_MINUTES = 60;
@@ -52,6 +53,8 @@ export async function sendUpcomingJobReminders(
   const failures: unknown[] = [];
 
   for (const job of upcoming) {
+    // Newly enrolled M5 jobs use durable, version-bound ETA intents in the offer worker.
+    if (await isLifecycleJob(job.id)) { skipped++; continue; }
     // Working cleaners only — a shadow backup does not need a T-60 ETA prompt.
     const assignments = await db.query.jobsToCleaners.findMany({
       where: and(eq(jobsToCleaners.jobId, job.id), ne(jobsToCleaners.role, "backup")),
@@ -60,6 +63,8 @@ export async function sendUpcomingJobReminders(
     let sentForJob = false;
     for (const cleanerId of new Set(assignments.map((a) => a.cleanerId))) {
       try {
+        const acceptedOffer = await acceptedEtaOffer(job.id, cleanerId);
+        if (acceptedOffer === null) continue;
         const userId = await getCleanerUserId(cleanerId);
         if (!userId) continue;
         // Scoped to rows this function itself created (`notifyCleaner` stamps
@@ -72,6 +77,7 @@ export async function sendUpcomingJobReminders(
             eq(notifications.type, "job_reminder"),
             eq(notifications.jobId, job.id),
             eq(notifications.userId, userId),
+            acceptedOffer ? sql`${notifications.metadata}->>'offerId' = ${acceptedOffer.id}` : undefined,
             sql`${notifications.metadata}->>'source' = 'notify'`,
             // An old reminder must not suppress the reminder for a revised start.
             // Untagged pre-upgrade reminders remain valid until a schedule changes.
@@ -94,7 +100,7 @@ export async function sendUpcomingJobReminders(
           jobId: job.id,
           url: `/cleaner/jobs/${job.id}`,
           sms: true, // time-critical (spec §4 "Log ETA now" nudge)
-          metadata: { scheduleStart: job.checkInTime!.toISOString() },
+          metadata: { scheduleStart: job.checkInTime!.toISOString(), ...(acceptedOffer ? { offerId: acceptedOffer.id } : {}) },
         });
         sentForJob = true;
       } catch (error) {

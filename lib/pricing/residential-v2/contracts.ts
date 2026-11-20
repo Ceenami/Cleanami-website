@@ -184,6 +184,7 @@ export function readResidentialSnapshot(addons: unknown):
     terms.input.petsAllowed,
     terms.input.hotTub,
     terms.input.inUnitLaundryLoads,
+    ...(terms.input.purpose ? [terms.input.purpose] : []),
   ]);
   if (
     terms.inputIdentity !== identity ||

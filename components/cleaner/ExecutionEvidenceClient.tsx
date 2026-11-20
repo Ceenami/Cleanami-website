@@ -37,6 +37,9 @@ import {
 } from "@/lib/cleaner/execution-queue";
 
 export type ExecutionForm = {
+  beforeRequirements?: { rooms: { roomKey: string; label: string; minPhotos: number; saved: number }[]; missing: string[]; pending: boolean; startedAt: string | null; exception: boolean } | null;
+  beforeEvidenceAvailable?: boolean;
+  arrivalConditions?: { notes: string; revision: number } | null;
   protocol: string;
   queueOwner: string;
   jobId: string;
@@ -61,6 +64,7 @@ export type ExecutionForm = {
     path: string;
     state: string;
     source?: "camera" | "gallery";
+    phase?: "before" | "after";
     url: string | null;
     mine: boolean;
   }[];
@@ -97,6 +101,8 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
   const path = `/api/cleaner/jobs/${jobId}/execution`;
   const [form, setForm] = useState<ExecutionForm | null>(null);
   const [photos, setPhotos] = useState<LocalEvidencePhoto[]>([]);
+  const [phase, setPhase] = useState<"before" | "after">("after");
+  const [arrivalNotes, setArrivalNotes] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [progress, setProgress] = useState<Record<string, string>>({});
@@ -117,6 +123,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
   };
   async function load(preserveEdits = false) {
     const data = await executionJson<ExecutionForm>(path);
+    if (!preserveEdits) setArrivalNotes(data.arrivalConditions?.notes ?? "");
     if (data.protocol !== "pre2c-hotfix-v1")
       throw Error("This job uses the existing evidence form");
     const keepEdits =
@@ -135,6 +142,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
           }
         : data,
     );
+    if (data.beforeRequirements && !data.beforeRequirements.startedAt && !data.beforeRequirements.exception) setPhase("before");
     if (!keepEdits)
       setSavedDraft(JSON.stringify([data.checklistItems, data.cleanerNotes, data.explanations]));
     if (keepEdits && data.revision !== form.revision)
@@ -254,6 +262,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         jobId,
         roomKey: room,
         source: "camera",
+        phase,
         capturedAt,
         blob,
         sha256: await photoHash(blob), selectedAt: new Date().toISOString(),
@@ -277,6 +286,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
           jobId,
           roomKey,
           source: "gallery",
+          phase,
           capturedAt: null,
           blob,
           sha256: await photoHash(blob),
@@ -310,6 +320,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
           operation: "reserve",
           uploadId: photo.uploadId,
           roomKey: photo.roomKey,
+          phase: photo.phase ?? "after",
           source: photo.source ?? "camera",
           capturedAt: photo.capturedAt,
           byteSize: photo.blob.size,
@@ -350,7 +361,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
     // Preserve unsaved checklist edits while refreshing server photo membership.
     const data = await executionJson<ExecutionForm>(path);
     setForm((current) =>
-      current ? { ...current, photos: data.photos } : data,
+      current ? { ...current, photos: data.photos, beforeRequirements: data.beforeRequirements } : data,
     );
     setPhotos(await localPhotos(form.queueOwner, jobId));
   }
@@ -385,7 +396,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
         {error || "Loading saved evidence..."}
       </div>
     );
-  const verified = form.photos.filter((p) => p.state === "verified");
+  const verified = form.photos.filter((p) => p.state === "verified" && p.phase !== "before");
   const required = form.roomRequirements.reduce(
     (sum, r) => sum + r.minPhotos,
     0,
@@ -409,6 +420,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
     (p) => p.state !== "verified",
   ).length;
   const ready =
+    (!form.beforeRequirements || !!form.beforeRequirements.startedAt || form.beforeRequirements.exception) &&
     form.arrivalRecorded &&
     form.departureRecorded &&
     requiredSaved === required &&
@@ -472,6 +484,15 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                 : "Check-in needed"}
         </span>
       </header>
+      {form.beforeRequirements && !form.isSubmitted && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+          <h2 className="font-semibold">{form.beforeRequirements.startedAt ? "Cleaning started" : "Before you start cleaning"}</h2>
+          <p className="text-sm text-slate-600">{form.beforeRequirements.startedAt ? "Required arrival evidence is saved and locked." : form.beforeRequirements.exception ? "An admin exception is recorded. Your physical arrival is still required." : "Record arrival, then upload the required Before photos for each room. Start cleaning when the uploads are saved."}</p>
+          {!form.beforeRequirements.startedAt && <button type="button" className={primaryClass}
+            disabled={busy || !form.arrivalRecorded || form.departureRecorded || form.beforeRequirements.pending || (!form.beforeRequirements.exception && form.beforeRequirements.missing.length > 0) || photos.some(photo => photo.phase === "before")}
+            onClick={() => void run(async () => { await executionJson(path, { operation: "start_cleaning" }); await load(true); setPhase("after"); setMessage("Cleaning start recorded. Before photos are locked."); })}>Start cleaning</button>}
+        </section>
+      )}
       {error && (
         <div
           role="alert"
@@ -573,13 +594,31 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                     <h2 id="photos-heading" className="text-lg font-semibold">
                       Room photos
                     </h2>
+                    {form.beforeEvidenceAvailable && <div className="mt-3 space-y-3">
+                      <label className="block text-sm font-medium">Photo stage
+                        <select value={phase} disabled={busy || room !== null} onChange={e => setPhase(e.target.value as "before" | "after")} className="ml-3 rounded-lg border p-2">
+                          <option value="before">Before cleaning</option><option value="after" disabled={!!form.beforeRequirements && !form.beforeRequirements.startedAt && !form.beforeRequirements.exception}>After cleaning</option>
+                        </select>
+                      </label>
+                      <p className="text-sm text-slate-600">Before photos record arrival conditions. They do not count toward the required completion photos.</p>
+                      {phase === "before" && <div className="text-sm"><label className="block">Arrival-condition notes (assigned team and management only)
+                        <textarea maxLength={4000} value={arrivalNotes} disabled={busy || !form.arrivalRecorded || form.departureRecorded || form.isSubmitted}
+                          onChange={e => setArrivalNotes(e.target.value)} className="mt-2 block w-full rounded-lg border p-2" /></label>
+                        <button type="button" className={cn(secondaryClass, "mt-2")} disabled={busy || !form.arrivalRecorded || form.departureRecorded || form.isSubmitted}
+                          onClick={() => void run(async () => {
+                            const result = await executionJson<{ revision: number }>(path, { operation: "arrival_conditions", notes: arrivalNotes, revision: form.arrivalConditions?.revision ?? 0 });
+                            setForm(current => current ? { ...current, arrivalConditions: { notes: arrivalNotes, revision: result.revision } } : current);
+                            setMessage("Arrival-condition notes saved.");
+                          })}>Save arrival notes</button>
+                      </div>}
+                    </div>}
                     <p className="mt-1 text-sm leading-6 text-slate-600">
                       {form.departureRecorded
                         ? "Choose existing photos or upload the photos saved on this device."
                         : "Take a photo or choose existing photos for each room."}
                     </p>
                     <p className="mt-3 text-sm font-medium text-brand">
-                      {requiredSaved} of {required} required photos saved to job
+                      {requiredSaved} of {required} required After photos saved to job
                     </p>
                   </div>
                   {room && (
@@ -627,19 +666,21 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                     </div>
                   )}
                   <div className="divide-y divide-slate-100">
-                    {form.roomRequirements.map((r) => {
-                      const saved = verified.filter(
-                        (p) => p.roomKey === r.roomKey,
+                    {form.roomRequirements.filter(r => phase === "after" || !form.beforeRequirements || form.beforeRequirements.rooms.some(room => room.roomKey === r.roomKey)).map((r) => {
+                      const saved = form.photos.filter(
+                        (p) => p.state === "verified" && p.roomKey === r.roomKey && (p.phase ?? "after") === phase,
                       ).length;
                       const queued = photos.filter(
-                        (p) => p.roomKey === r.roomKey,
+                        (p) => p.roomKey === r.roomKey && (p.phase ?? "after") === phase,
                       );
                       const serverPhotos = form.photos.filter(
                         (p) =>
                           p.roomKey === r.roomKey &&
+                          (p.phase ?? "after") === phase &&
                           !queued.some((q) => q.uploadId === p.uploadId),
                       );
-                      const met = saved >= r.minPhotos;
+                      const minimum = phase === "before" ? form.beforeRequirements?.rooms.find(room => room.roomKey === r.roomKey)?.minPhotos ?? 0 : r.minPhotos;
+                      const met = saved >= minimum;
                       return (
                         <section
                           key={r.roomKey}
@@ -650,8 +691,8 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                             <div>
                               <h3 className="font-semibold">{r.label}</h3>
                               <p className="mt-1 text-xs text-slate-500">
-                                {r.minPhotos
-                                  ? `${r.minPhotos} photo${r.minPhotos === 1 ? "" : "s"} required`
+                                {minimum
+                                  ? `${minimum} photo${minimum === 1 ? "" : "s"} required`
                                   : "Optional photos"}
                                 {queued.length
                                   ? ` | ${queued.length} on this device`
@@ -673,10 +714,10 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                                 />
                               ) : null}
                               {saved} saved
-                              {r.minPhotos ? ` / ${r.minPhotos}` : ""}
+                              {minimum ? ` / ${minimum}` : ""}
                             </span>
                           </div>
-                          {form.arrivalRecorded && (
+                          {form.arrivalRecorded && !(phase === "before" && (form.departureRecorded || form.beforeRequirements?.startedAt)) && !(phase === "after" && form.beforeRequirements && !form.beforeRequirements.startedAt && !form.beforeRequirements.exception) && (
                             <div
                               className={cn(
                                 "grid gap-2 sm:flex sm:flex-wrap",
@@ -734,7 +775,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                               </label>
                             </div>
                           )}
-                          {!form.isSubmitted && serverPhotos.filter(p => p.state === "verified").length < r.minPhotos && (
+                          {phase === "after" && !form.isSubmitted && serverPhotos.filter(p => p.state === "verified").length < r.minPhotos && (
                             <label className="mt-4 block text-xs text-slate-600">
                               Missing-photo explanation (saved progress; photo minimums still apply)
                               <textarea maxLength={1000} disabled={busy}
@@ -781,7 +822,7 @@ export function ExecutionEvidenceClient({ jobId }: { jobId: string }) {
                                       ? "Selected photo"
                                       : "Camera photo"}
                                   </p>
-                                  {p.mine && (
+                                  {p.mine && !(phase === "before" && form.beforeRequirements?.startedAt) && (
                                     <button
                                       type="button"
                                       disabled={busy || !!room}

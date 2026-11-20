@@ -1,4 +1,5 @@
 import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
+import { RESIDENTIAL_PURPOSE_LABELS } from "@/lib/constants/residential-purpose";
 
 /** Purchased-scope allowlist. Never serialize the pricing snapshot to customers. */
 export function residentialCustomerScope(addons: unknown): string[] {
@@ -10,6 +11,7 @@ export function residentialCustomerScope(addons: unknown): string[] {
   if (frozen.kind !== "v2") return [];
   const input = frozen.terms.input;
   return [
+    ...(input.purpose ? [`${RESIDENTIAL_PURPOSE_LABELS[input.purpose]} (Deep scope).`] : []),
     ...(input.cleaningLevel === "deep"
       ? ["Interior oven and refrigerator included."]
       : []),

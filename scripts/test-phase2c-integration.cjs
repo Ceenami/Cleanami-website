@@ -108,5 +108,6 @@ exports.verify=async function(ctx){
   assert.equal(response.status,200,JSON.stringify(await response.json()));
  });
  await require('./test-residential-v2-services.cjs').verify(ctx);
+ if(process.argv.includes('--residential-purposes'))await require('./test-residential-purposes.cjs').verify(ctx);
 };
 if(require.main===module){const result=require('node:child_process').spawnSync(process.execPath,[path.join(__dirname,'test-job-execution.cjs'),'--with-schedule-upgrade','--phase2c'],{stdio:'inherit',env:process.env,windowsHide:true});process.exitCode=result.status??1;}

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Decimal as D } from "./decimal";
 import { V2_RULES, type V2Rules } from "./rules";
+import { RESIDENTIAL_PURPOSES } from "@/lib/constants/residential-purpose";
 
 // Resource/arithmetic bounds, not a customer layout allowlist. Manual analysis
 // covers every workbook row; no unbounded numeric payload enters the model.
@@ -13,8 +14,13 @@ export const residentialV2InputSchema = z
     petsAllowed: z.boolean(),
     hotTub: z.enum(["none", "basic", "full"]),
     inUnitLaundryLoads: z.number().int().min(0).max(10000),
+    purpose: z.enum(RESIDENTIAL_PURPOSES).optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => !v.purpose || v.cleaningLevel === "deep", {
+    message: "Move-In and Move-Out cleans use Deep scope.",
+    path: ["cleaningLevel"],
+  });
 export type ResidentialV2Input = z.infer<typeof residentialV2InputSchema>;
 
 export function validateV2Rules(input: V2Rules): Readonly<V2Rules> {

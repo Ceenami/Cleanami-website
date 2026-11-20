@@ -9,6 +9,7 @@ import { jobOperationsWarning } from "@/lib/jobs/operations-status";
 import { scheduleWarnings } from "@/lib/jobs/schedule-warnings";
 import { recordedAssignmentSource } from "@/lib/jobs/assignment-audit";
 import type { AdminJobOperations } from "@/lib/jobs/admin-job-summary";
+import { readOfferCoverage, offerSchemaReady } from "./assignment/offers.service";
 
 /** Admin callers only. Customer routes continue to serialize their explicit allowlists. */
 export async function loadAdminJobOperations(
@@ -108,6 +109,17 @@ export async function loadAdminJobOperations(
         })
       : [];
   const conflicts = scheduleWarnings(neighbors);
+  const offerWarnings = new Map<string, string[]>();
+  if (offerSchemaReady()) for (const job of rows) {
+    if (!["assigned", "unassigned"].includes(job.status ?? "")) continue;
+    const coverage = await readOfferCoverage(job.id);
+    if (coverage && "complete" in coverage) {
+      const warnings = [...coverage.issues, ...coverage.lifecycleWarnings];
+      if (!coverage.complete) warnings.unshift("Coverage Incomplete");
+      if (coverage.offers.some(o => ["failed", "claimed"].includes(o.dispatch_state))) warnings.push("Assignment notification needs review");
+      offerWarnings.set(job.id, warnings);
+    }
+  }
   return new Map(
     rows.map((job) => {
       const packet = job.evidencePacket;
@@ -117,7 +129,7 @@ export async function loadAdminJobOperations(
       const cap = isChecklistSnapshot(job.checklistSnapshot)
         ? job.checklistSnapshot.capabilityRequirements
         : null;
-      const warnings = [...(conflicts.get(job.id) ?? [])];
+      const warnings = [...(conflicts.get(job.id) ?? []), ...(offerWarnings.get(job.id) ?? [])];
       const arrivalWarning = jobOperationsWarning({
         ...job,
         checkedIn: !!packet?.gpsCheckInTimestamp,

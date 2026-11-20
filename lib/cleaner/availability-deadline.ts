@@ -1,6 +1,13 @@
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 const TZ = "America/New_York";
 export const PLANNING_PERIOD_DAYS = 14;
+export const availabilityGraceEnabled = () => process.env.AVAILABILITY_GRACE_ENABLED === "true";
+/** Grace affects availability submission only; never reliability or pay. */
+export function availabilitySubmissionPhase(monday: string, now = new Date()) {
+  const deadline = getSubmissionDeadline(monday);
+  const graceUntil = new Date(+deadline + 3600000);
+  return { deadline, graceUntil, grace: now >= deadline && now < graceUntil, catchUp: now >= graceUntil };
+}
 export type AvailabilityPeriod = {
   start: string;
   end: string;
@@ -67,7 +74,7 @@ export function isWithinSundaySubmissionWindow(
 ) {
   return (
     now >= fromZonedTime(`${shiftCalendarDate(monday, -1)}T00:00:00`, TZ) &&
-    now < getSubmissionDeadline(monday)
+    now < (availabilityGraceEnabled() ? availabilitySubmissionPhase(monday, now).graceUntil : getSubmissionDeadline(monday))
   );
 }
 export function getDeadlineStatus(
@@ -79,9 +86,9 @@ export function getDeadlineStatus(
     deadline = getSubmissionDeadline(monday);
   return {
     pastDeadline: now >= deadline,
-    canSubmitRegular: true,
+    canSubmitRegular: !availabilityGraceEnabled() || now < availabilitySubmissionPhase(monday, now).graceUntil,
     canEditPreferences: true,
-    closedReason: null,
+    closedReason: availabilityGraceEnabled() && availabilitySubmissionPhase(monday, now).catchUp ? "past_sunday_deadline" : null,
     submissionSunday: shiftCalendarDate(monday, -1),
     nextSubmissionSunday:
       now >= fromZonedTime(`${sunday}T18:00:00`, TZ)
@@ -105,6 +112,30 @@ export function getAvailabilityWindow(now = new Date()): AvailabilityWindow {
 }
 export function getTwoWeekPeriod(now = new Date()) {
   return getAvailabilityWindow(now).period;
+}
+/** Reminders plan the next Monday, including when sent before Sunday. */
+export function getUpcomingAvailabilityWindow(
+  now = new Date(),
+): AvailabilityWindow {
+  const monday = shiftCalendarDate(findOperationalPeriodMonday(now), 7);
+  return {
+    period: buildPeriodFromMonday(monday),
+    deadline: getDeadlineStatus(monday, now),
+    displayMode: "submit",
+  };
+}
+/** Explicit reminder links may select only the current or upcoming fortnight. */
+export function resolveAvailabilityWindow(
+  periodStart?: string | null,
+  now = new Date(),
+): AvailabilityWindow {
+  const current = getAvailabilityWindow(now);
+  if (periodStart == null || periodStart === current.period.start) return current;
+  const upcoming = getUpcomingAvailabilityWindow(now);
+  if (periodStart === upcoming.period.start) return upcoming;
+  throw new RangeError(
+    "Availability period is no longer current; reopen availability.",
+  );
 }
 export function getMissedPeriodForOverride(
   now = new Date(),

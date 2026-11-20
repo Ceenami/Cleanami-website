@@ -11,10 +11,13 @@ import {
 import { and, eq, gte, lte, inArray, ne, sql } from "drizzle-orm";
 import {
   getAvailabilityWindow,
+  resolveAvailabilityWindow,
   formatDayLabel,
   dateAvailabilityLocked,
   easternToday,
   type AvailabilityPeriod,
+  availabilityGraceEnabled,
+  availabilitySubmissionPhase,
 } from "@/lib/cleaner/availability-deadline";
 import {
   assertAvailabilityChange,
@@ -58,8 +61,11 @@ export async function countCleanerAvailabilityInPeriod(
     );
   return rows.length;
 }
-export async function getCleanerAvailability(cleanerId: string) {
-  const window = getAvailabilityWindow();
+export async function getCleanerAvailability(
+  cleanerId: string,
+  periodStart?: string | null,
+) {
+  const window = resolveAvailabilityWindow(periodStart);
   const rows = await db
     .select()
     .from(availabilityDays)
@@ -94,8 +100,17 @@ export async function getCleanerAvailability(cleanerId: string) {
       ),
     );
   const assignedDates = new Set(assigned.map((r) => r.date));
+  const gracePolicy = availabilityGraceEnabled();
+  const phase = availabilitySubmissionPhase(window.period.start);
+  const [acknowledgement] = gracePolicy ? await db.select().from(cleanerAvailabilitySubmissions).where(and(eq(cleanerAvailabilitySubmissions.cleanerId, cleanerId), eq(cleanerAvailabilitySubmissions.periodStart, window.period.start))) : [];
+  const catchUp = gracePolicy && phase.catchUp && !acknowledgement;
+  const message = gracePolicy
+    ? "Sunday deadline: 6 PM ET, with grace until 7 PM. After grace, one catch-up submission is available per 14-day block. Assigned coverage stays protected. Availability timing does not affect reliability or pay."
+    : "Weeks lock Sunday at 6 PM ET. Locked dates permit positive additions only; assigned coverage cannot be removed.";
   return {
     ...window,
+    ...(gracePolicy ? { displayMode: catchUp ? "override" as const : "submit" as const,
+      deadline: { ...window.deadline, canSubmitRegular: !phase.catchUp || !!acknowledgement } } : {}),
     days: window.period.dates.map((date) => {
       const row = rows.find((r) => r.date === date),
         old = legacy.find((r) => r.date === date);
@@ -110,16 +125,15 @@ export async function getCleanerAvailability(cleanerId: string) {
         acknowledged: !!row,
         locked:
           assignedDates.has(date) ||
-          (dateAvailabilityLocked(date) &&
+          (dateAvailabilityLocked(date) && !(gracePolicy && (phase.grace || catchUp)) &&
             !(row?.reopenedUntil && row.reopenedUntil > new Date())),
         assigned: assignedDates.has(date),
         late: row?.late ?? false,
       };
     }),
-    closedMessage:
-      "Weeks lock Sunday at 6 PM ET. Locked dates permit positive additions only; assigned coverage cannot be removed.",
-    canLateOverride: false,
-    overrideMessage: null,
+    closedMessage: message,
+    canLateOverride: catchUp,
+    overrideMessage: catchUp ? "This is your one catch-up submission for this 14-day block. Later edits retain the normal weekly locks and positive-addition rules." : null,
   };
 }
 export async function saveCleanerAvailability(
@@ -129,6 +143,7 @@ export async function saveCleanerAvailability(
     actorId?: string;
     period?: AvailabilityPeriod;
     additionsOnly?: boolean;
+    lateCatchUp?: boolean;
     /** Set only by the authenticated admin edit route. Does not acknowledge a fortnight. */
     adminEditReason?: string;
   },
@@ -145,6 +160,13 @@ export async function saveCleanerAvailability(
   )
     throw new Error("Submit exactly the fourteen displayed dates");
   await db.transaction(async (tx) => {
+    const gracePolicy = availabilityGraceEnabled();
+    const phase = availabilitySubmissionPhase(period.start, now);
+    // One serial acknowledgement is the durable allowance; a rolled-back save consumes nothing.
+    if (gracePolicy) await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`availability:${cleanerId}:${period.start}`},0))`);
+    const [ack] = gracePolicy ? await tx.select().from(cleanerAvailabilitySubmissions).where(and(eq(cleanerAvailabilitySubmissions.cleanerId, cleanerId), eq(cleanerAvailabilitySubmissions.periodStart, period.start))) : [];
+    const catchUp = gracePolicy && phase.catchUp && !ack && !options?.adminEditReason && !options?.additionsOnly;
+    if (gracePolicy && options?.lateCatchUp && (!phase.catchUp || ack)) throw new Error("The catch-up allowance is unavailable or already used. Reload availability for ordinary edits.");
     for (const day of [...days].sort((a, b) => a.date.localeCompare(b.date)))
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`cleaner:${cleanerId}:${day.date}`},0))`,
@@ -204,16 +226,18 @@ export async function saveCleanerAvailability(
         throw new Error(
           "Positive additions cannot remove existing availability or pool opt-ins",
         );
-      const { late } = assertAvailabilityChange({
+      const change = assertAvailabilityChange({
         date: day.date,
         before,
         after,
         assigned: assignments.length > 0,
         reopened:
           !!options?.adminEditReason ||
+          (gracePolicy && (phase.grace || catchUp)) ||
           (!!row?.reopenedUntil && row.reopenedUntil > now),
         now,
       });
+      const late = gracePolicy && phase.grace ? false : change.late;
       if (day.date < easternToday(now)) continue;
       await tx
         .insert(availabilityDays)
@@ -252,7 +276,7 @@ export async function saveCleanerAvailability(
           endTime: "16:00:00",
           onCallEligible: day.onCallEligible,
           openPoolEligible: day.openPoolEligible,
-          isGracePeriod: late,
+          isGracePeriod: gracePolicy ? phase.grace : late,
           submissionStatus: late ? "late_accepted" : "on_time",
           submittedAt: now,
         });
@@ -284,7 +308,7 @@ export async function saveCleanerAvailability(
         cleanerId,
         periodStart: period.start,
         periodEnd: period.end,
-        submissionMode: dateAvailabilityLocked(period.start, now)
+        submissionMode: gracePolicy ? (phase.catchUp && !ack ? "override" : "full") : dateAvailabilityLocked(period.start, now)
           ? "override"
           : "full",
         firstSubmittedAt: now,
@@ -303,8 +327,9 @@ export async function saveCleanerAvailability(
 export async function saveCleanerAvailabilityPreferences(
   cleanerId: string,
   preferences: AvailabilityPreferenceInput[],
+  periodStart?: string | null,
 ) {
-  const current = await getCleanerAvailability(cleanerId);
+  const current = await getCleanerAvailability(cleanerId, periodStart);
   const dates = new Set(preferences.map((p) => p.date));
   if (
     dates.size !== preferences.length ||
@@ -337,6 +362,7 @@ export async function saveCleanerAvailabilityPreferences(
           revision,
         }),
       ),
+    { period: resolveAvailabilityWindow(periodStart).period },
   );
 }
 export async function saveCleanerLateOverrideAvailability(
@@ -344,5 +370,5 @@ export async function saveCleanerLateOverrideAvailability(
   days: AvailabilityDayInput[],
   period: AvailabilityPeriod,
 ) {
-  return saveCleanerAvailability(cleanerId, days, { period });
+  return saveCleanerAvailability(cleanerId, days, { period, lateCatchUp: availabilityGraceEnabled() });
 }

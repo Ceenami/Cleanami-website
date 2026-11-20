@@ -1,4 +1,6 @@
 import "server-only";
+import { notificationWorkflowCutoff } from "./notifications/workflow-settings";
+import { readConditionReview } from "@/lib/booking/condition-review";
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -11,6 +13,9 @@ import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts"
 import type Stripe from "stripe";
 
 type Attempt = typeof attempts.$inferSelect;
+function assertReceiptVersion(terms: ResidentialV2Terms) {
+  if (terms.receiptFieldsVersion !== undefined && terms.receiptFieldsVersion !== 1) throw new Error("Unsupported checkout receipt version");
+}
 export class ResidentialCheckoutReviewRequired extends Error {}
 export const residentialCheckoutSlot = (
   source: "public" | "portal",
@@ -29,6 +34,8 @@ export async function loadReusableResidentialCheckout(slotKey: string) {
     orderBy: [desc(attempts.generation)],
   });
   if (!attempt) return null;
+  assertReceiptVersion(attempt.terms);
+  readConditionReview(attempt.terms);
   const saved = await db.query.jobs.findFirst({
     where: eq(jobs.residentialCheckoutAttemptId, attempt.id),
   });
@@ -56,6 +63,7 @@ export async function prepareResidentialCheckout(input: {
   terms: ResidentialV2Terms;
   amountChargedCents: number;
 }): Promise<Attempt> {
+  readConditionReview(input.terms);
   if (
     input.terms.ruleVersion !== "residential-v2" ||
     (input.amountChargedCents !== 0 &&
@@ -93,12 +101,16 @@ export async function prepareResidentialCheckout(input: {
           throw new ResidentialCheckoutReviewRequired(
             "Payment has already started for a different scope. Review the existing booking or contact CleanNami before changing it.",
           );
+        assertReceiptVersion(current.terms);
         return current;
       }
     }
+    const pinnedTerms = { ...input.terms };
+    delete pinnedTerms.receiptFieldsVersion;
+    if (notificationWorkflowCutoff()) pinnedTerms.receiptFieldsVersion = 1;
     const [attempt] = await tx
       .insert(attempts)
-      .values({ ...input, generation: (current?.generation ?? 0) + 1 })
+      .values({ ...input, terms: pinnedTerms, generation: (current?.generation ?? 0) + 1 })
       .returning();
     if (!attempt) throw new Error("Checkout attempt was not saved");
     return attempt;
@@ -110,6 +122,7 @@ export async function getOrCreateResidentialCheckoutPayment(
   stripe: Stripe,
   create: (idempotencyKey: string) => Promise<Stripe.PaymentIntent>,
 ) {
+  assertReceiptVersion(attempt.terms);
   // Provider idempotency retention is finite. An uncertain old create with no
   // bound PI needs reconciliation, never a fresh charge after key expiry.
   if (
@@ -159,6 +172,7 @@ export async function verifyResidentialCheckoutAttempt(
   });
   if (!attempt || attempt.paymentIntentId !== paymentIntentId)
     throw new Error("Checkout terms/payment binding not found");
+  readConditionReview(attempt.terms);
   if (attempt.terms.ruleVersion !== "residential-v2")
     throw new Error("Corrupt checkout version");
   readResidentialSnapshot(

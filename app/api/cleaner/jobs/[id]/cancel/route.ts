@@ -7,6 +7,7 @@ import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { recomputeReliabilityScore } from "@/lib/services/reliability/reliability.service";
 import { triggerUrgentReplacement } from "@/lib/services/urgent-replacement.service";
 import { and, eq } from "drizzle-orm";
+import { isOfferJob } from "@/lib/services/assignment/offers.service";
 
 /** Existing notice tiers retained; a call-out never invents a photo/pay waiver. */
 export async function POST(
@@ -23,6 +24,7 @@ export async function POST(
   if (!z.uuid().safeParse(jobId).success)
     return NextResponse.json({ error: "Invalid job" }, { status: 400 });
   try {
+    if (await isOfferJob(jobId)) return NextResponse.json({ error: "Use Cannot Fulfill on your current assignment offer, or contact admin for an already-confirmed assignment." }, { status: 409 });
     const removed = await db.transaction(async (tx) => {
       const [job] = await tx
         .select()

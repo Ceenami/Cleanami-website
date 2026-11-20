@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { isSafeRedirectPath } from "@/lib/auth-redirects";
+import { resolveAuthCallbackDestination, signInReturnPath } from "@/lib/auth-redirects";
+import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
@@ -23,31 +24,44 @@ export async function GET(request: Request) {
   const code = searchParams.get("code");
 
   const requestedNext = searchParams.get("next");
-  const next =
-    requestedNext && isSafeRedirectPath(requestedNext)
-      ? requestedNext
-      : "/customer/dashboard";
-
-  const supabase = await createClient();
-
-  if (tokenHash && type) {
-    const { error } = await supabase.auth.verifyOtp({
-      type,
-      token_hash: tokenHash,
-    });
-
-    if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+  try {
+    const supabase = await createClient();
+    async function destinationAfterVerification() {
+      // Keep the existing OTP and PKCE password recovery route independent of
+      // portal navigation and of DB profile availability.
+      if (type === "recovery" || (code && requestedNext === "/reset-password"))
+        return NextResponse.redirect(`${origin}/reset-password`);
+      const { data } = await supabase.auth.getClaims();
+      const claims = data?.claims as Record<string, unknown> | undefined;
+      if (typeof claims?.sub !== "string") return null;
+      const role = await resolveRoleFromDatabase(claims.sub, typeof claims.email === "string" ? claims.email : undefined);
+      if (!role) return null;
+      return NextResponse.redirect(`${origin}${resolveAuthCallbackDestination(role, requestedNext)}`);
     }
-  } else if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+    if (tokenHash && type) {
+      const { error } = await supabase.auth.verifyOtp({
+        type,
+        token_hash: tokenHash,
+      });
+
+      if (!error) {
+        const response = await destinationAfterVerification();
+        if (response) return response;
+      }
+    } else if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+      if (!error) {
+        const response = await destinationAfterVerification();
+        if (response) return response;
+      }
     }
+  } catch {
+    // A provider outage must not drop a legitimate portal return destination.
   }
 
   return NextResponse.redirect(
-    `${origin}/sign-in?error=${encodeURIComponent("Could not verify your login link. Request a new one from /sign-in.")}`
+    `${origin}${signInReturnPath(requestedNext, "Could not verify your login link. Request a new one from /sign-in.")}`
   );
 }

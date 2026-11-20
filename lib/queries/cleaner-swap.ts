@@ -15,6 +15,7 @@ import {
   triggerUrgentReplacement,
 } from "@/lib/services/urgent-replacement.service";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { isOfferJob, offerPairedPromotion } from "@/lib/services/assignment/offers.service";
 
 const SWAP_LIMIT = 3;
 const SWAP_LIMIT_WINDOW_DAYS = 60;
@@ -343,6 +344,8 @@ export async function acceptSwapOffer(
     return { success: false, message: "This swap is no longer available." };
   }
 
+  if (await isOfferJob(swap.jobId)) return { success: false, message: "Use the current versioned assignment offer to confirm a replacement role." };
+
   if (swap.originalCleanerId === cleanerId) {
     return { success: false, message: "You cannot take over your own swap." };
   }
@@ -465,7 +468,7 @@ export async function acceptSwapOffer(
       title: "Swap accepted",
       message: `You took over ${address} on ${when} from ${firstName(originalName)}.`,
       jobId: swap.jobId,
-      url: "/cleaner/jobs",
+      url: `/cleaner/jobs/${swap.jobId}`,
     });
 
     await notifyCleaner({
@@ -492,6 +495,7 @@ export async function acceptSwapOffer(
 }
 
 export type ApproveSwapResult =
+  | { success: true; outcome: "awaiting_confirmation" }
   | {
       success: true;
       outcome: "backup_promoted";
@@ -551,6 +555,10 @@ export async function approveCleanerSwapRequest(
   }
 
   const originalCleanerId = swap.originalCleanerId;
+  if (await isOfferJob(job.id)) {
+    try { await offerPairedPromotion(job.id, originalCleanerId, actorId, swap.id); return { success: true, outcome: "awaiting_confirmation" }; }
+    catch { return { success: false, message: "No confirmed qualified paired backup. Current coverage is retained; review the coverage panel." }; }
+  }
   const assignment = job.cleaners.find(
     (c) => c.cleanerId === originalCleanerId,
   );
@@ -657,7 +665,7 @@ export async function approveCleanerSwapRequest(
         title: "You are now on this job",
         message: `${originalName}'s swap was approved. You have moved from backup onto ${address}.`,
         jobId: swap.jobId,
-        url: "/cleaner/jobs",
+        url: `/cleaner/jobs/${swap.jobId}`,
       });
 
       await notifyCleaner({
@@ -748,7 +756,7 @@ export async function denyCleanerSwapRequest(
     title: "Swap denied",
     message: `Your swap request for ${address} was denied. You remain assigned to this job.`,
     jobId: swap.jobId,
-    url: "/cleaner/jobs",
+    url: `/cleaner/jobs/${swap.jobId}`,
   });
 
   return { success: true };
@@ -793,7 +801,7 @@ export async function expireStaleSwapRequests(
       title: "Swap not covered",
       message: `Nobody accepted your swap for ${address} before the 24-hour cut-off. You are still assigned — contact an admin if you cannot make it.`,
       jobId: swap.jobId,
-      url: "/cleaner/jobs",
+      url: `/cleaner/jobs/${swap.jobId}`,
       sms: true,
     });
 

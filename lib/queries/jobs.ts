@@ -1,5 +1,8 @@
 // lib/queries/jobs.ts
 import "server-only";
+import { financialCancellationKinds } from "@/lib/services/payment/rental-finance-labels";
+import { financeContract } from "@/lib/services/payment/rental-credit";
+import { jobFinance } from "@/lib/services/payment/rental-finance.service";
 import { effectiveChecklist } from "@/lib/services/effective-checklist";
 import { db } from "@/db";
 import {
@@ -14,6 +17,8 @@ import {
 } from "@/db/schemas";
 import { getJobDisplay } from "@/lib/constants/service-type";
 import { loadAdminJobOperations } from "@/lib/services/admin-job-operations";
+import { assignmentIssueFilter } from "@/lib/services/assignment/lifecycle-read.service";
+import type { AssignmentIssue } from "@/lib/services/assignment/lifecycle-policy";
 import { loadJobRestockCounts } from "@/lib/queries/admin-restocking";
 import { eq, sql, and, gte, lte, asc, desc } from "drizzle-orm";
 import { EVIDENCE_BUCKET, createSignedUrls } from "@/lib/storage/signed-url";
@@ -44,6 +49,8 @@ type JobServiceType = "vacation_rental_subscription" | "residential_one_time";
 
 interface GetJobsParams extends PaginationParams, SearchParams {
   includeRestockCounts?: boolean;
+  conditionReviewOnly?: boolean;
+  assignmentIssue?: AssignmentIssue;
   status?: JobStatus | "all";
   startDate?: Date;
   endDate?: Date;
@@ -57,6 +64,8 @@ interface GetJobsParams extends PaginationParams, SearchParams {
 
 export async function getJobsWithDetails({
   includeRestockCounts = false,
+  conditionReviewOnly = false,
+  assignmentIssue = "all",
   page = 1,
   limit = 10,
   status = "all",
@@ -80,6 +89,8 @@ export async function getJobsWithDetails({
     // creation, so a filtered list stays truthful even if a property is
     // later reclassified — and it needs no join, which is the reason the column
     // is denormalised in the first place.
+    conditionReviewOnly && !customerId ? sql`${jobs.addonsSnapshot} ? 'conditionReview'` : undefined,
+    !customerId ? assignmentIssueFilter(assignmentIssue) : undefined,
     serviceType !== "all" ? eq(jobs.serviceType, serviceType) : undefined,
   ].filter(Boolean);
 
@@ -103,6 +114,7 @@ export async function getJobsWithDetails({
       cleaningLevel: sql<
         string | null
       >`${jobs.addonsSnapshot} ->> 'cleaningLevel'`.as("cleaning_level"),
+      purpose: sql<import("@/lib/constants/residential-purpose").ResidentialPurpose | null>`${jobs.addonsSnapshot} -> 'residentialPricing' -> 'input' ->> 'purpose'`.as("residential_purpose"),
       // The arrival-window KEY only, not the whole snapshot. On a residential
       // job check_out_time is the finish deadline (window end PLUS expected
       // hours), so the window cannot be reconstructed from the two timestamps;
@@ -113,6 +125,7 @@ export async function getJobsWithDetails({
       // Needed so the customer portal knows whether this clean is still open
       // for a promo-code change (only before pre-authorize has run/failed).
       paymentIntentId: jobs.paymentIntentId,
+      conditionReviewRequired: sql<boolean>`${jobs.addonsSnapshot} ? 'conditionReview'`.as("condition_review_required"),
       paymentStatus: jobs.paymentStatus,
       promoCodeId: jobs.promoCodeId,
       appliedPromoCode: promoCodes.code,
@@ -211,9 +224,12 @@ export async function getJobsWithDetails({
     customerId ? [] : filteredData.map((job) => job.id),
   );
   const restockCounts = await loadJobRestockCounts(includeRestockCounts && !customerId ? filteredData.map(job => job.id) : []);
+  const cancellationKinds = await financialCancellationKinds(filteredData.map(job => job.id));
   return buildPaginatedResponse(
     filteredData.map((job) => ({
       ...job,
+      cancellationKind: cancellationKinds.get(job.id) ?? null,
+      statusLabel: cancellationKinds.get(job.id) === "late_customer" ? "Late Canceled" : job.status,
       operations: operations.get(job.id) ?? null,
       ...(includeRestockCounts && !customerId ? { openRestockCount: restockCounts.get(job.id) ?? 0 } : {}),
     })),
@@ -374,8 +390,15 @@ export async function getJobDetails(jobId: string) {
       : undefined,
   );
 
+  const cancellationKinds = await financialCancellationKinds([jobId]);
+  const financialContract = await financeContract(job.subscriptionId);
+  const financialQuote = financialContract ? await jobFinance(jobId) : null;
   return {
     ...job,
+    cancellationKind: cancellationKinds.get(jobId) ?? null,
+    financialPolicy: financialContract?.policy ?? null,
+    financialQuoteFrozen: !!financialQuote,
+    statusLabel: cancellationKinds.get(jobId) === "late_customer" ? "Late Canceled" : job.status,
     evidencePacket,
     totalPayout: totalPayout.toFixed(2),
     hasEvidencePacket: !!job.evidencePacket,

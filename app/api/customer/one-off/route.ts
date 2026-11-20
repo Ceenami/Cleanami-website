@@ -3,19 +3,24 @@ import { z } from "zod";
 import { customerAuthErrorStatus, getCustomerAuth } from "@/lib/customer-auth";
 import { bookOneOffClean } from "@/lib/services/one-off.service";
 import { RESIDENTIAL_CLEANING_LEVELS } from "@/lib/pricing/residential";
+import { RESIDENTIAL_PURPOSES } from "@/lib/constants/residential-purpose";
+
+import { conditionReviewFields, conditionReviewIssue } from "@/lib/booking/condition-review";
 
 const bodySchema = z.object({
+  ...conditionReviewFields,
   propertyId: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   promoCode: z.string().trim().max(64).optional(),
   /** Required for a residential property; ignored for a rental. */
   arrivalWindow: z.string().trim().max(32).optional(),
   cleaningLevel: z.enum(RESIDENTIAL_CLEANING_LEVELS).optional(),
+  purpose: z.enum(RESIDENTIAL_PURPOSES).optional(),
   quoteIdentity: z.string().max(512).optional(),
   pricingVersion: z.enum(["residential-v1", "residential-v2"]).optional(),
   hotTub: z.enum(["none", "basic", "full"]).optional(),
   inUnitLaundryLoads: z.number().int().min(0).max(2).optional(),
-});
+}).refine(conditionReviewIssue, { message: "Describe the property's condition.", path: ["conditionDescription"] });
 
 export async function POST(request: Request) {
   // Wrapped end to end. `bookOneOffClean` returns structured failures, but its

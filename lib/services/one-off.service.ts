@@ -1,4 +1,6 @@
 import "server-only";
+import { bookingConditionReview, conditionReviewIssue } from "@/lib/booking/condition-review";
+import { notifyAdmins } from "@/lib/queries/admin-notifications";
 import type Stripe from "stripe";
 import { bookingConversion, type BookingConversion } from "@/lib/analytics";
 import { insertIssuedJobs } from "@/lib/services/job-execution-contract";
@@ -12,6 +14,7 @@ import { buildJobStaffingUpdate } from "@/lib/pricing/apply-job-staffing";
 import { loadHotTubTimeAdditions } from "@/lib/pricing/hot-tub-time";
 import { getStripe } from "@/lib/stripe/get-stripe";
 import { voidCharge } from "@/lib/services/payment/void-charge";
+import { verifySettledPayment } from "@/lib/services/payment/verify-settled-payment";
 import {
   CUSTOM_QUOTE_EXISTING_PROPERTY_MESSAGE,
   LAUNDRY_LOADS_INCOMPLETE_MESSAGE,
@@ -48,6 +51,7 @@ import {
 } from "@/lib/scheduling/arrival-windows";
 import { RESIDENTIAL_NO_WINDOW_MESSAGE } from "@/lib/scheduling/residential-notice";
 import { getJobDisplay } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
 import { residentialPaymentIdentity } from "@/lib/pricing/residential-payment-identity";
 import {
   prepareResidentialCheckout,
@@ -70,6 +74,9 @@ export type BookOneOffInput = {
   /** Residential arrival window. */
   arrivalWindow?: string;
   cleaningLevel?: ResidentialCleaningLevel;
+  purpose?: ResidentialPurpose;
+  unusualConditions?: boolean;
+  conditionDescription?: string;
   quoteIdentity?: string;
   pricingVersion?: "residential-v1" | "residential-v2";
   hotTub?: "none" | "basic" | "full";
@@ -103,7 +110,7 @@ async function priceOneOffCents(
   cleaningLevel?: ResidentialCleaningLevel,
   scope?: Pick<
     BookOneOffInput,
-    "pricingVersion" | "hotTub" | "inUnitLaundryLoads"
+    "pricingVersion" | "hotTub" | "inUnitLaundryLoads" | "purpose"
   >,
   acceptedCheckout?: Awaited<
     ReturnType<typeof loadReusableResidentialCheckout>
@@ -123,6 +130,7 @@ async function priceOneOffCents(
     if (
       acceptedCheckout &&
       (cleaningLevel !== acceptedCheckout.terms.input.cleaningLevel ||
+        scope?.purpose !== acceptedCheckout.terms.input.purpose ||
         (scope?.hotTub ?? "none") !== acceptedCheckout.terms.input.hotTub ||
         (scope?.inUnitLaundryLoads ?? 0) !==
           acceptedCheckout.terms.input.inUnitLaundryLoads ||
@@ -147,6 +155,7 @@ async function priceOneOffCents(
           sqft: property.sqFt,
           petsAllowed: property.petsAllowed,
           cleaningLevel,
+          ...(scope?.purpose !== undefined ? { purpose: scope.purpose } : {}),
           pricingVersion: scope?.pricingVersion,
           hotTub: scope?.hotTub ?? "none",
           inUnitLaundryLoads: scope?.inUnitLaundryLoads ?? 0,
@@ -159,6 +168,8 @@ async function priceOneOffCents(
         }
       : { ok: false, error: evaluation.error };
   }
+  if (scope?.purpose)
+    return { ok: false, error: "Move-In and Move-Out cleans require a residential booking." };
   const pricing = new PricingService();
   const priceDetails = await pricing.calculatePrice({
     bedrooms: property.bedCount,
@@ -246,7 +257,7 @@ export async function previewOneOffPromoCode(
   cleaningLevel?: ResidentialCleaningLevel,
   scope?: Pick<
     BookOneOffInput,
-    "pricingVersion" | "hotTub" | "inUnitLaundryLoads"
+    "pricingVersion" | "hotTub" | "inUnitLaundryLoads" | "purpose"
   >,
 ): Promise<OneOffPromoPreview> {
   const property = await loadOwnedProperty(customerId, propertyId);
@@ -291,6 +302,10 @@ export async function bookOneOffClean(
 ): Promise<BookOneOffResult> {
   const property = await loadOwnedProperty(customerId, input.propertyId);
   if (!property) return { success: false, error: "Property not found." };
+  if (!conditionReviewIssue(input)) return { success: false, error: "Describe the property's condition." };
+  const conditionReview = bookingConditionReview(input);
+  if (conditionReview && property.serviceType !== "residential_one_time")
+    return { success: false, error: "Condition review is for residential bookings." };
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
     return { success: false, error: "Please choose a valid date." };
@@ -357,6 +372,8 @@ export async function bookOneOffClean(
         ]),
       )
     : null;
+  if (acceptedCheckout && JSON.stringify(acceptedCheckout.terms.conditionReview) !== JSON.stringify(conditionReview))
+    return { success: false, status: 409, error: "Condition details changed after payment started. Review the existing booking before retrying." };
   const priced = await priceOneOffCents(
     property,
     input.cleaningLevel,
@@ -364,6 +381,11 @@ export async function bookOneOffClean(
     acceptedCheckout,
   );
   if (!priced.ok) return { success: false, error: priced.error };
+  if (conditionReview) {
+    if (priced.residentialTerms?.ruleVersion !== "residential-v2")
+      return { success: false, error: "Condition review requires a current residential booking." };
+    priced.residentialTerms.conditionReview = conditionReview;
+  }
   const amountCents = priced.amountCents;
   if (priced.residentialTerms) {
     if (input.quoteIdentity !== priced.residentialTerms.inputIdentity) {
@@ -607,6 +629,7 @@ export async function bookOneOffClean(
   if (priced.residentialTerms?.ruleVersion === "residential-v2") {
     try {
       const requestIdentity = residentialPaymentIdentity({
+        conditionReview,
         inputIdentity: priced.residentialTerms.inputIdentity,
         email: customer?.email ?? "",
         address: property.address,
@@ -646,6 +669,10 @@ export async function bookOneOffClean(
           {
             amount: chargeAmountCents,
             currency: "usd",
+            ...(checkoutAttempt?.terms.receiptFieldsVersion === 1 ? {
+              description: getJobDisplay({ serviceType: property.serviceType, cleaningLevel: input.cleaningLevel, purpose: input.purpose }).label,
+              ...(customer.email ? { receipt_email: customer.email } : {}),
+            } : {}),
             customer: customer.stripeCustomerId!,
             payment_method: paymentMethodId!,
             off_session: true,
@@ -663,6 +690,9 @@ export async function bookOneOffClean(
               ...(priced.residentialTerms
                 ? {
                     cleaning_level: priced.residentialTerms.input.cleaningLevel,
+                    ...(priced.residentialTerms.input.purpose
+                      ? { residential_purpose: priced.residentialTerms.input.purpose }
+                      : {}),
                     residential_rule_version:
                       priced.residentialTerms.ruleVersion,
                     ...(priced.residentialTerms.ruleVersion === "residential-v2"
@@ -680,6 +710,7 @@ export async function bookOneOffClean(
                     service_label: getJobDisplay({
                       serviceType: property.serviceType,
                       cleaningLevel: input.cleaningLevel,
+                      purpose: input.purpose,
                     }).label,
                   }
                 : {}),
@@ -737,17 +768,8 @@ export async function bookOneOffClean(
   // Do not reuse an intent that has already entered the refund flow.
   if (paymentIntentId) {
     try {
-      const refunds = await stripe!.refunds.list({
-        payment_intent: paymentIntentId,
-        limit: 1,
-      });
-      if (refunds.data.some((refund) => refund.status !== "failed")) {
-        return {
-          success: false,
-          error:
-            "Your earlier payment is being refunded, so this clean was not booked. Please try again after the refund is confirmed, or contact CleanNami.",
-        };
-      }
+      const intent = await stripe!.paymentIntents.retrieve(paymentIntentId);
+      await verifySettledPayment(stripe!, intent, chargeAmountCents);
     } catch (err) {
       console.error("[bookOneOffClean] refund-state lookup failed", err);
       return {
@@ -896,6 +918,12 @@ export async function bookOneOffClean(
         "We took payment but could not save your booking, so the charge has been refunded. Please try again, or contact CleanNami if you do not see the refund.",
     };
   }
+
+  if (conditionReview) await notifyAdmins({
+    type: "booking_alert", title: "Residential booking needs condition review",
+    message: "Unusual conditions reported on a paid residential booking. Review the description in Job Oversight.",
+    jobId: job.id, url: `/admin/job-oversight/${job.id}`, email: true,
+  });
 
   // Promo bookkeeping must not undo a completed booking.
   if (checkoutAttempt) {

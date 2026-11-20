@@ -1,6 +1,7 @@
 import Link from "next/link";
 import CredentialsSignInForm from "./credentials-signin-form";
 import localFont from "next/font/local";
+import { safePortalReturnPath } from "@/lib/auth-redirects";
 
 const myFont = localFont({
       src: [
@@ -17,12 +18,13 @@ const myFont = localFont({
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; reset?: string }>;
+  searchParams: Promise<{ error?: string; reset?: string; next?: string | string[] }>;
 }) {
   // `/auth/callback` and `/auth/confirm` bounce failures back here with
   // `?error=`; without rendering it the user just saw the sign-in form again
   // and no explanation of why their link did not work.
-  const { error, reset } = await searchParams;
+  const { error, reset, next } = await searchParams;
+  const requestedNext = safePortalReturnPath(next);
 
   return (
     <div className="relative z-10 w-full max-w-md p-8 bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20">
@@ -45,7 +47,7 @@ export default async function Page({
           </div>
         )}
 
-        <CredentialsSignInForm />
+        <CredentialsSignInForm next={requestedNext ?? undefined} />
 
         <p className="mt-6 text-center text-sm">
           <Link

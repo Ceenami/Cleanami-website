@@ -3,15 +3,22 @@
 import type { ResidentialCleaningLevel } from "@/lib/pricing/residential";
 import { RESIDENTIAL_LEVEL_DESCRIPTIONS } from "@/lib/constants/service-type";
 import { RadioCard } from "../RadioCard";
+import {
+  type ResidentialPurpose,
+  RESIDENTIAL_PURPOSES,
+  RESIDENTIAL_PURPOSE_LABELS,
+} from "@/lib/constants/residential-purpose";
 
 export function ResidentialLevelChoice({
   value,
+  purpose,
   onChange,
   disabled = false,
   pricingVersion,
 }: {
   value?: ResidentialCleaningLevel;
-  onChange: (level: ResidentialCleaningLevel) => void;
+  purpose?: ResidentialPurpose;
+  onChange: (level: ResidentialCleaningLevel, purpose?: ResidentialPurpose) => void;
   disabled?: boolean;
   pricingVersion?: "residential-v1" | "residential-v2";
 }) {
@@ -27,7 +34,7 @@ export function ResidentialLevelChoice({
             id={`residential-level-${level}`}
             name="cleaningLevel"
             value={level}
-            checked={value === level}
+            checked={!purpose && value === level}
             title={level === "standard" ? "Standard Clean" : "Deep Clean"}
             description={
               RESIDENTIAL_LEVEL_DESCRIPTIONS[level] +
@@ -36,6 +43,18 @@ export function ResidentialLevelChoice({
                 : "")
             }
             onChange={() => onChange(level)}
+          />
+        ))}
+        {pricingVersion !== "residential-v1" && RESIDENTIAL_PURPOSES.map((selection) => (
+          <RadioCard
+            key={selection}
+            id={`residential-purpose-${selection}`}
+            name="cleaningLevel"
+            value={selection}
+            checked={purpose === selection}
+            title={RESIDENTIAL_PURPOSE_LABELS[selection]}
+            description="Uses our Deep Clean price, timing and checklist. Unusual conditions and restoration work require separate review."
+            onChange={() => onChange("deep", selection)}
           />
         ))}
       </div>

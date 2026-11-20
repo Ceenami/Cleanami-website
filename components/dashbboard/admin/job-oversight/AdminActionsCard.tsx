@@ -432,7 +432,7 @@ export function AdminActionsCard({
         <div className="pt-2 border-t">
           <button
             onClick={handleCancelJob}
-            disabled={isDisabled}
+            disabled={isDisabled || !!job.addonsSnapshot?.conditionReview}
             className="w-full flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg
@@ -448,7 +448,7 @@ export function AdminActionsCard({
                 d="M6 18L18 6M6 6l12 12"
               />
             </svg>
-            Cancel Job
+            {job.addonsSnapshot?.conditionReview ? 'Use Condition Review to reject' : 'Cancel Job'}
           </button>
         </div>
       </div>

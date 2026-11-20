@@ -23,6 +23,7 @@ import {
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { toEasternDateString } from "@/lib/time/eastern";
+import { isOfferJob, offerPairedPromotion, dispatchJobOffers } from "./assignment/offers.service";
 
 const URGENT_NEARBY_NOTIFY_LIMIT = 5;
 const CALL_OUT_PENALTY = 15;
@@ -423,6 +424,18 @@ export async function triggerUrgentReplacement(
 
   const primaryCleanerId = primary?.cleanerId ?? options!.vacatedCleanerId!;
   const primaryName = primary?.cleaner?.fullName ?? "Cleaner";
+  if (await isOfferJob(jobId)) {
+    // Reserve the slot while awaiting fresh working acceptance. Never silently promote standby.
+    await db.transaction(async tx => {
+      await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for("update");
+      await tx.execute(sql`update phase3a_assignment_offers set state='revoked',revoked_at=now(),reason='replacement_requested' where job_id=${jobId}::uuid and cleaner_id=${primaryCleanerId}::uuid and role in ('primary','laundry_lead') and state in ('pending','accepted')`);
+    });
+    if (options?.recordPenalty !== false) await recordCallOut(primaryCleanerId, jobId);
+    let notifiedCount = 0;
+    try { await offerPairedPromotion(jobId, primaryCleanerId, "urgent-replacement-service"); notifiedCount = 1; }
+    catch { await dispatchJobOffers(jobId); }
+    return { outcome: "awaiting_accept", notifiedCount };
+  }
   const backup = job.cleaners.find((a) => a.role === "backup");
   const now = new Date();
   const expiresAt =
@@ -660,6 +673,7 @@ export async function acceptUrgentJob(
 ): Promise<
   { success: true; urgentBonus: boolean } | { success: false; message: string }
 > {
+  if (await isOfferJob(jobId)) return { success: false, message: "Use the current versioned assignment offer to confirm this role." };
   const eligibility = await canCleanerAcceptUrgentJob(cleanerId, jobId);
   if (!eligibility.eligible) {
     return { success: false, message: eligibility.reason ?? "Not eligible" };

@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { cleaners, jobs, payouts, processedStripeEvents } from "@/db/schemas";
+import { cleaners, jobs, payouts } from "@/db/schemas";
 import { applyStripeAccountState } from "@/lib/cleaner/stripe-account-state";
-import { markStripeEventProcessed } from "@/lib/services/stripe/event-dedupe";
+import { claimStripeWebhook, finishStripeWebhook, failStripeWebhook } from "@/lib/services/stripe/event-dedupe";
 import { sendPaymentFailedEmail } from "@/lib/services/email.service";
 import { recordDisputeAndHoldPayouts } from "@/lib/services/payment/dispute.service";
 import { notifyAdminsOfJobAlert } from "@/lib/queries/cleaner-notifications";
 import { stripe } from "@/lib/stripe/config";
 import { reconcileStripePayment } from "@/lib/services/payment/reconcile-stripe-payment";
-import { eq } from "drizzle-orm";
+import { reconcileRentalFinancialPayment } from "@/lib/services/payment/rental-finance-reconciliation";
+import { eq, and } from "drizzle-orm";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -16,21 +17,17 @@ export const runtime = "nodejs";
 /** Append a line to the notes of the job linked to a PaymentIntent. */
 async function appendJobNoteByPaymentIntent(
   paymentIntentId: string | null,
-  note: string
+  note: string,
+  eventId: string
 ): Promise<void> {
   if (!paymentIntentId) return;
-  const job = await db.query.jobs.findFirst({
-    where: eq(jobs.paymentIntentId, paymentIntentId),
-    columns: { id: true, notes: true },
+  await db.transaction(async tx => {
+    const [job] = await tx.select({ id: jobs.id, notes: jobs.notes }).from(jobs)
+      .where(eq(jobs.paymentIntentId, paymentIntentId)).for("update");
+    const marker = `[Stripe event ${eventId}]`;
+    if (!job || job.notes?.includes(marker)) return;
+    await tx.update(jobs).set({ notes: `${job.notes ? `${job.notes}\n` : ""}${marker} ${note}`, updatedAt: new Date() }).where(eq(jobs.id, job.id));
   });
-  if (!job) return;
-  await db
-    .update(jobs)
-    .set({
-      notes: job.notes ? `${job.notes}\n${note}` : note,
-      updatedAt: new Date(),
-    })
-    .where(eq(jobs.id, job.id));
 }
 
 const objectId = (value: string | { id: string } | null) =>
@@ -38,6 +35,7 @@ const objectId = (value: string | { id: string } | null) =>
 
 async function reconcilePayment(paymentIntentId: string | null, event: Stripe.Event) {
   if (!paymentIntentId) return;
+  if (await reconcileRentalFinancialPayment(stripe, paymentIntentId, event.id)) return;
   const result = await reconcileStripePayment(stripe, paymentIntentId, event);
   if (result?.becameFailed) await notifyPaymentFailed(paymentIntentId, result.failureReason);
 }
@@ -145,12 +143,14 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         typeof dispute.payment_intent === "string"
           ? dispute.payment_intent
           : null;
+      if (pi && await reconcileRentalFinancialPayment(stripe, pi, event.id, true)) break;
       // Record the dispute (feeds reserve escalation) and, on open, hold the
       // job's pending payouts + alert admin (spec §5/§20.4 claw-back policy).
       await recordDisputeAndHoldPayouts(dispute, pi, type);
       await appendJobNoteByPaymentIntent(
         pi,
-        `[Stripe] Dispute ${type.split(".").pop()}: status=${dispute.status}, reason=${dispute.reason} (${new Date().toISOString()})`
+        `[Stripe] Dispute ${type.split(".").pop()}: status=${dispute.status}, reason=${dispute.reason} (${new Date(event.created * 1000).toISOString()})`,
+        event.id
       );
       break;
     }
@@ -160,7 +160,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       await db
         .update(payouts)
         .set({ status: "released", updatedAt: new Date() })
-        .where(eq(payouts.stripePayoutId, transfer.id));
+        .where(and(eq(payouts.stripePayoutId, transfer.id), eq(payouts.status, "pending")));
       break;
     }
 
@@ -205,20 +205,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  // Dedupe: claim the event id first. A replay (Stripe may deliver twice) is
-  // acknowledged without reprocessing.
-  const firstTime = await markStripeEventProcessed(event.id, event.type);
-  if (!firstTime) {
-    return NextResponse.json({ received: true, duplicate: true });
-  }
-
+  let token: string | undefined;
   try {
+    const claim = await claimStripeWebhook(event);
+    if (claim.state === "completed") return NextResponse.json({ received: true, duplicate: true });
+    if (claim.state === "busy") return NextResponse.json({ error: "Webhook processing in progress; retry" }, { status: 503 });
+    token = claim.token;
     await handleEvent(event);
+    await finishStripeWebhook(event.id, token);
   } catch (err) {
-    // Release the claim so Stripe's retry can reprocess this event.
-    await db
-      .delete(processedStripeEvents)
-      .where(eq(processedStripeEvents.eventId, event.id));
+    if (token) {
+      try { await failStripeWebhook(event.id, token); }
+      catch (claimError) { console.error("[stripe webhook] claim recovery deferred to lease expiry", claimError); }
+    }
     console.error(`[stripe webhook] handler failed for ${event.type}`, err);
     return NextResponse.json(
       { error: "Webhook handler failed" },

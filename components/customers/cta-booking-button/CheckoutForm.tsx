@@ -4,23 +4,28 @@ import { LoadingFallback } from '@/components/LoadingFallback';
 
 interface Props {
   onPaymentSuccess: (paymentIntentId: string) => void;
+  consentText?: string;
+  beforeConfirm?: () => Promise<void>;
 }
 
-export const CheckoutForm = ({ onPaymentSuccess }: Props) => {
+export const CheckoutForm = ({ onPaymentSuccess, consentText, beforeConfirm }: Props) => {
   const stripe = useStripe();
   const elements = useElements();
 
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [consented, setConsented] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!stripe || !elements) {
+    if (!stripe || !elements || (consentText && !consented)) {
       return;
     }
 
     setIsLoading(true);
+    try { await beforeConfirm?.(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not record payment agreement"); setIsLoading(false); return; }
 
     const { error, paymentIntent } = await stripe.confirmPayment({
       elements,
@@ -48,8 +53,9 @@ export const CheckoutForm = ({ onPaymentSuccess }: Props) => {
     <form id="payment-form" onSubmit={handleSubmit}>
       <Suspense fallback={<LoadingFallback message="Preparing Stripe" />}>
       <PaymentElement id="payment-element" options={{ layout: "tabs" }} />
+      {consentText && <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={consented} onChange={event => setConsented(event.target.checked)} required /><span>{consentText}</span></label>}
         <button 
-        disabled={isLoading || !stripe || !elements} 
+        disabled={isLoading || !stripe || !elements || (!!consentText && !consented)}
         id="submit"
         className="w-full mt-6 py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-brand hover:bg-brand/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >

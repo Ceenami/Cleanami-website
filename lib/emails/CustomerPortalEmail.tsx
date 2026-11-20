@@ -11,6 +11,7 @@ import {
   Section,
   Text,
 } from "@react-email/components";
+import { getAppBaseUrl } from "@/lib/app-url";
 
 interface CustomerPortalEmailProps {
   loginUrl: string;
@@ -18,7 +19,7 @@ interface CustomerPortalEmailProps {
   isNewUser?: boolean;
 }
 
-const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://cleannami.ceenami.com";
+const baseUrl = getAppBaseUrl();
 
 export const CustomerPortalEmail = ({
   loginUrl,

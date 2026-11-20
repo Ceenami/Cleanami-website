@@ -211,7 +211,7 @@ export const PropertyDetailesRightColumn = ({
 
         {checklistFiles.length === 0 ? (
           <p className="p-4 text-sm text-gray-500">
-            No checklist uploaded for this property yet.
+            No additional checklist documents uploaded. See the current property checklist below.
           </p>
         ) : (
           <>

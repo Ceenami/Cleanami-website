@@ -1,10 +1,11 @@
 import "server-only";
+import { getAppBaseUrl } from "@/lib/app-url";
 
 import { db } from "@/db";
 import { cleaners, notifications } from "@/db/schemas";
 import { getCleanerUserId } from "@/lib/queries/cleaner-notifications";
 import { sendPushToCleaner } from "@/lib/services/push.service";
-import { sendSms } from "@/lib/services/sms.service";
+import { sendSmsOutcome, type SmsOutcome } from "@/lib/services/sms.service";
 import { eq } from "drizzle-orm";
 import { recordNotificationAttempt } from "@/lib/services/notifications/notification-log";
 import { cleanerNotificationUrl } from "@/lib/notifications/destination";
@@ -37,9 +38,10 @@ export async function notifyCleaner(input: {
   url?: string;
   sms?: boolean;
   metadata?: Record<string, string>;
-}): Promise<void> {
+}): Promise<{ sms: SmsOutcome | null }> {
   const url = cleanerNotificationUrl({ ...input, metadata: { ...input.metadata, url: input.url } });
   const failures: unknown[] = [];
+  let smsOutcome: SmsOutcome | null = null;
   let userId: string | null = null;
   try {
     userId = await getCleanerUserId(input.cleanerId);
@@ -93,7 +95,8 @@ export async function notifyCleaner(input: {
         body: input.message,
         url: url ?? "/cleaner/jobs",
       },
-      { trigger: input.type, jobId: input.jobId ?? null }
+      { trigger: input.type, jobId: input.jobId ?? null },
+      { throwOnFailure: true },
     );
   } catch (error) {
     failures.push(error);
@@ -110,12 +113,17 @@ export async function notifyCleaner(input: {
         where: eq(cleaners.id, input.cleanerId),
         columns: { phone: true },
       });
-      await sendSms(cleaner?.phone, `${input.title}: ${input.message}`, {
+      const link = url ? `${getAppBaseUrl()}${url}` : null;
+      const message = `${input.title}: ${input.message}${link ? ` View: ${link}` : ""}`;
+      smsOutcome = await sendSmsOutcome(cleaner?.phone, message, {
         cleanerId: input.cleanerId,
         trigger: input.type,
         userId,
         jobId: input.jobId ?? null,
       });
+      if (smsOutcome.status === "failed" || smsOutcome.status === "unknown") {
+        failures.push(new Error(`SMS ${smsOutcome.status}; inspect channel log before retrying`));
+      }
     } catch (error) {
       failures.push(error);
       await recordNotificationAttempt({
@@ -126,4 +134,5 @@ export async function notifyCleaner(input: {
   }
   // Attempt every channel, while preserving failure visibility for dispatch callers.
   if (failures.length) throw new AggregateError(failures, "Notification dispatch failed");
+  return { sms: smsOutcome };
 }

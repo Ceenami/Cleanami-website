@@ -17,10 +17,15 @@ import { PropertyChecklistCard } from "./PropertyChecklistCard";
 import { CleanerCard } from "./CleanerCard";
 import { IssuesCard } from "./IssuesCard";
 import { AdminActionsCard, type AdminConfirmAction } from "./AdminActionsCard";
+import { RentalFinancePanel } from "@/components/customer/RentalFinancePanel";
 import { EvidenceReviewModal } from "./modals/EvidenceReviewModal";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { useRealtimeCleanerCard } from "@/hooks/useRealtimeCleanerCard";
+import { ConditionReviewPanel } from "./ConditionReviewPanel";
 import { JobOperations } from "@/components/operations/JobOperations";
+import { AssignmentOffers } from "@/components/cleaner/AssignmentOffers";
+import { BeforeAfterEvidence } from "@/components/checklists/BeforeAfterEvidence";
+import { BeforeEvidenceException } from "./BeforeEvidenceException";
 import { RestockRequestsPanel } from "@/components/dashbboard/admin/restocking/RestockRequestsPanel";
 
 export function JobDetailsClient({
@@ -155,6 +160,7 @@ export function JobDetailsClient({
         </button>
 
         <JobSummaryHeader job={job} isAdmin={isAdmin} />
+        {isAdmin && <RentalFinancePanel jobId={jobId} admin />}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
@@ -171,7 +177,11 @@ export function JobDetailsClient({
             <EvidenceReviewSection evidencePacket={job.evidencePacket} />
             {/* Internal workflow trail — not customer-facing. */}
             {isAdmin && <JobHistorySection jobId={jobId} />}
+            {isAdmin && <ConditionReviewPanel jobId={jobId} />}
             {isAdmin && <JobOperations jobId={jobId} />}
+            {isAdmin && <AssignmentOffers jobId={jobId} admin />}
+            {isAdmin && <BeforeAfterEvidence jobId={jobId} />}
+            {isAdmin && <BeforeEvidenceException jobId={jobId} />}
           </div>
 
           {/* Sidebar */}

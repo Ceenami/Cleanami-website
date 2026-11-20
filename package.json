@@ -9,7 +9,21 @@
     "lint": "eslint",
     "test:execution": "node scripts/test-job-execution.cjs && node scripts/test-execution-timezones.cjs && node scripts/test-execution-transfer.cjs",
     "test:property-schedule": "node scripts/test-property-schedule.cjs",
-    "test:notifications": "node scripts/test-notifications.cjs"
+    "test:notifications": "node scripts/test-notifications.cjs",
+    "test:availability-reminders": "node scripts/test-availability-reminders.cjs",
+    "test:residential-purposes": "node scripts/test-residential-purposes.cjs",
+    "test:condition-review": "node scripts/test-condition-review.cjs",
+    "test:checklist-viewers": "node scripts/test-checklist-viewers.cjs",
+    "test:notification-return": "node scripts/test-notification-return.cjs",
+    "test:assignment-offers": "node scripts/test-assignment-offers.cjs",
+    "test:assignment-lifecycle": "node scripts/test-assignment-lifecycle.cjs",
+    "test:property-priority": "node scripts/test-property-priority.cjs",
+    "test:phase3a-followup": "node scripts/test-phase3a-followup.cjs",
+    "test:subscription-minimum": "node scripts/test-subscription-minimum.cjs",
+    "test:required-work": "node scripts/test-required-work.cjs",
+    "test:prepaid-credit-fees": "node scripts/test-prepaid-credit-fees.cjs",
+    "test:admin-sms": "node scripts/test-admin-sms.cjs",
+    "test:assignment-completion": "node scripts/test-assignment-completion.cjs"
   },
   "dependencies": {
     "@react-email/components": "^1.0.2",

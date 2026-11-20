@@ -1,12 +1,14 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { RESIDENTIAL_PURPOSES } from "@/lib/constants/residential-purpose";
 import { customerAuthErrorStatus, getCustomerAuth } from "@/lib/customer-auth";
 import { quoteResidentialOneOff } from "@/lib/services/one-off.service";
 const schema = z
   .object({
     propertyId: z.string().uuid(),
     cleaningLevel: z.enum(["standard", "deep"]),
+    purpose: z.enum(RESIDENTIAL_PURPOSES).optional(),
     pricingVersion: z.enum(["residential-v1", "residential-v2"]).optional(),
     hotTub: z.enum(["none", "basic", "full"]),
     inUnitLaundryLoads: z.number().int().min(0).max(2),

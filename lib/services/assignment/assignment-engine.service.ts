@@ -6,13 +6,10 @@ import {
   jobs,
   jobsToCleaners,
   properties,
-  propertyCleaners,
   propertyExclusions,
   assignmentRuns,
   availability,
 } from "@/db/schemas";
-import type { PropertyCleanerTier } from "@/db/schemas";
-import { getAvailableCleanersForProperty } from "@/lib/queries/cleaners-proximity";
 import { notifyCleaner } from "@/lib/services/notifications/notify";
 import { sendCleanerAssignmentEmail } from "@/lib/services/email.service";
 import { hasScheduleConflict } from "@/lib/services/assignment/schedule-conflict";
@@ -26,6 +23,12 @@ import {
 import { appendJobNote } from "@/lib/jobs/job-notes";
 import { assignmentReasons, selectCompleteTeam } from "./policy";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { buildCandidates, type Candidate, type ResidentialFilter } from "./candidates.service";
+export { buildCandidates } from "./candidates.service";
+import { pairQualifiedBackups } from "./offer-policy";
+import { offerEnrollmentEnabled, enrollOfferJob, createBackupOffer, dispatchJobOffers, isOfferJob } from "./offers.service";
+import { canAssignPriorityFallback, planPropertyPriority } from "./priority.service";
+import { priorityEnrollmentEnabled } from "./priority-settings";
 
 class AssignmentCommitError extends Error {
   constructor(
@@ -91,14 +94,18 @@ async function notifyAssignedPrimary(
         : SERVICE_TYPE_LABELS.vacation_rental_subscription);
     const petLine = property?.petsAllowed ? ` ${PETS_CLEANER_NOTE}` : "";
 
-    await notifyCleaner({
-      cleanerId,
-      type: "assignment",
-      title: "New job assigned",
-      message: `You've been assigned a ${kind} at ${address} on ${jobDate}.${petLine}`,
-      jobId,
-      url: "/cleaner/jobs",
-    });
+    try {
+      await notifyCleaner({
+        cleanerId,
+        type: "assignment",
+        title: "New job assigned",
+        message: `You've been assigned a ${kind} at ${address} on ${jobDate}.${petLine}`,
+        jobId,
+        url: `/cleaner/jobs/${jobId}`,
+      });
+    } catch (error) {
+      console.error("[assignment-engine] cleaner channels failed; attempting email independently", error);
+    }
 
     if (cleaner?.email) {
       await sendCleanerAssignmentEmail({
@@ -106,6 +113,7 @@ async function notifyAssignedPrimary(
         name: cleaner.fullName,
         propertyAddress: address,
         jobDate,
+        jobId,
         serviceLabel: kind,
       });
     }
@@ -121,47 +129,6 @@ async function notifyAssignedPrimary(
  * assigned team.
  */
 const RELIABILITY_MIN_ELIGIBLE = 80;
-
-/** Missing score defaults to 100 (a brand-new cleaner with no events). */
-function scoreOf(reliabilityScore: string | null): number {
-  const n = parseFloat(reliabilityScore ?? "100");
-  return Number.isFinite(n) ? n : 100;
-}
-
-const TIER_PRIORITY: Record<PropertyCleanerTier, number> = {
-  main_primary: 0,
-  secondary_primary: 1,
-  preferred_backup: 2,
-  on_call: 3,
-};
-
-type Candidate = {
-  cleanerId: string;
-  score: number;
-  /** roster candidates come first (respect the property hierarchy). */
-  source: "roster" | "proximity";
-  tier?: PropertyCleanerTier;
-  /** Hot-tub-capable flag, used by the required-skills gate. */
-  hotTubCapable: boolean;
-  /** Laundry-lead eligible — preferred for the off-site Laundry Lead role. */
-  laundryLeadCapable: boolean;
-  /** Read for residential jobs only; defaults true on every row. */
-  residentialQualified: boolean;
-  /** Applied only when the job's property allows pets. */
-  petComfortable: boolean;
-};
-
-/**
- * Narrows the candidate pool for residential jobs only.
- *
- * Returns null for a vacation-rental job, and that is load-bearing: no new code
- * path may change how a subscription-shaped job behaves. Null is not "a filter
- * that happens to pass everything" — it is no filter at all, which is what lets
- * the VR pool be compared cleaner-for-cleaner before and after.
- */
-type ResidentialFilter = {
-  requirePetComfortable: boolean;
-} | null;
 
 /**
  * Whether this job requires a hot-tub-capable cleaner. The iCal service writes
@@ -181,6 +148,7 @@ export type AssignmentOutcome =
       status: "assigned";
       primaryCleanerId: string;
       backupCleanerId: string | null;
+      backupCleanerIds?: string[];
     }
   | { jobId: string; status: "skipped"; reason: string };
 
@@ -191,109 +159,12 @@ export type AssignmentSummary = {
   outcomes: AssignmentOutcome[];
 };
 
-/** Property hierarchy roster, tier-then-sortOrder ordered, eligibility resolved. */
-async function getPropertyRosterCandidates(
-  propertyId: string,
-): Promise<Candidate[]> {
-  const roster = await db
-    .select({
-      cleanerId: propertyCleaners.cleanerId,
-      tier: propertyCleaners.tier,
-      sortOrder: propertyCleaners.sortOrder,
-      reliabilityScore: cleaners.reliabilityScore,
-      eligibleForAssignments: cleaners.eligibleForAssignments,
-      hasHotTubCert: cleaners.hasHotTubCert,
-      hasLaundryLeadCert: cleaners.hasLaundryLeadCert,
-      residentialQualified: cleaners.residentialQualified,
-      petComfortable: cleaners.petComfortable,
-    })
-    .from(propertyCleaners)
-    .innerJoin(cleaners, eq(propertyCleaners.cleanerId, cleaners.id))
-    .where(eq(propertyCleaners.propertyId, propertyId));
-
-  return roster
-    .sort((a, b) => {
-      const ta = TIER_PRIORITY[a.tier as PropertyCleanerTier];
-      const tb = TIER_PRIORITY[b.tier as PropertyCleanerTier];
-      if (ta !== tb) return ta - tb;
-      return a.sortOrder - b.sortOrder;
-    })
-    .map((r) => ({
-      cleanerId: r.cleanerId,
-      score: scoreOf(r.reliabilityScore),
-      source: "roster" as const,
-      tier: r.tier as PropertyCleanerTier,
-      hotTubCapable: r.hasHotTubCert ?? false,
-      laundryLeadCapable: r.hasLaundryLeadCert ?? false,
-      // Both columns are NOT NULL defaulting true — opt-out, not opt-in.
-      // Defaulting false would ship residential with an empty assignable pool,
-      // which reads as a broken engine rather than a policy. The `?? true`
-      // covers a row read before 0041 is applied.
-      residentialQualified: r.residentialQualified ?? true,
-      petComfortable: r.petComfortable ?? true,
-    }));
-}
-
-/**
- * Build the ordered candidate list for a job: the property hierarchy first,
- * then the proximity/reliability ranked pool for anyone not already listed.
- *
- * Exported so the assignment verifier can build both pools and compare them
- * cleaner-for-cleaner. Asserting through assignJob's outcome would only show
- * that *some* cleaner was picked, not that the ordering is unchanged.
- */
-export async function buildCandidates(
-  propertyId: string,
-  residentialFilter: ResidentialFilter = null,
-): Promise<Candidate[]> {
-  const rosterCandidates = await getPropertyRosterCandidates(propertyId);
-  const seen = new Set(rosterCandidates.map((c) => c.cleanerId));
-
-  let proximity: Candidate[] = [];
-  try {
-    const ranked = await getAvailableCleanersForProperty(propertyId, {
-      includeOnJob: false,
-    });
-    proximity = ranked
-      .filter((c) => !seen.has(c.id))
-      .map((c) => ({
-        cleanerId: c.id,
-        score: scoreOf(c.reliabilityScore),
-        source: "proximity" as const,
-        hotTubCapable: c.hasHotTubCert,
-        laundryLeadCapable: c.hasLaundryLeadCert,
-        residentialQualified: c.residentialQualified,
-        petComfortable: c.petComfortable,
-      }));
-  } catch (err) {
-    // Property not geocoded / no coords — roster-only assignment still works.
-    console.warn(
-      `[assignment-engine] proximity ranking failed for property ${propertyId}:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
-
-  const pool = [...rosterCandidates, ...proximity];
-
-  // Residential jobs have no property roster, so rosterCandidates is empty and
-  // the proximity pool supplies everyone. Expected, not a bug to work around.
-  if (!residentialFilter) return pool;
-
-  // The residential ordering, mapped onto what exists rather than rebuilt:
-  // available/active is isCleanerAssignmentEligible, service area and distance
-  // belong to the proximity ranker, reliability is the engine's gate and the
-  // distance tie-break. Only these two flags are new.
-  //
-  // Experience is deliberately not a comparator: the ranker is shared with
-  // vacation rental, so adding one would reorder the VR pool.
-  return pool;
-}
-
 /** Assign one job. Idempotent: safe to re-run (re-selects primary/backup). */
 export async function assignJob(job: {
   id: string;
   propertyId: string | null;
   checkInTime: Date | null;
+  checkOutTime?: Date | null;
   /** Used to size this job's window when checking for schedule clashes. */
   expectedHours?: string | number | null;
   /** Residential qualification does not narrow a rental job's pool. */
@@ -318,6 +189,16 @@ export async function assignJob(job: {
       status: "skipped",
       reason: "missing property or check-in time",
     };
+  }
+
+  const priorityPlan = await planPropertyPriority(job.id);
+  if (priorityPlan) return { jobId: job.id, status: "skipped", reason: "property_priority_replacement_pending" };
+  if (await isOfferJob(job.id)) {
+    // Priority review may enroll an empty target before a move proves impossible.
+    // Ordinary fallback can still cover it; never overwrite a membership, offer or plan.
+    const emptyPriorityTarget = await canAssignPriorityFallback(job.id);
+    if (!emptyPriorityTarget)
+      return { jobId: job.id, status: "skipped", reason: "versioned_job_needs_coverage_review" };
   }
 
   // Pets read from the job's snapshot, not live from the property: the snapshot
@@ -423,6 +304,10 @@ export async function assignJob(job: {
     if (c.score < RELIABILITY_MIN_ELIGIBLE)
       audit.reasons.push("reliability_below_80");
     if (audit.reasons.length) continue;
+    if (offerEnrollmentEnabled()) {
+      try { await db.execute(sql`select phase3a_assert_candidate(${job.id}::uuid,${c.cleanerId}::uuid,null::uuid,'primary')`); }
+      catch { audit.reasons.push("offer_eligibility_or_standby_conflict"); continue; }
+    }
     if (
       await hasScheduleConflict({
         cleanerId: c.cleanerId,
@@ -473,6 +358,15 @@ export async function assignJob(job: {
   // unless promoted in). May be absent on a thin pool.
   const backup =
     pool.find((c) => !team.some((t) => t.cleanerId === c.cleanerId)) ?? null;
+  const versioned = offerEnrollmentEnabled();
+  const pairedBackups = versioned ? pairQualifiedBackups(team, pool, (candidate, worker) => {
+    const replacement = team.map(member => member.cleanerId === worker.cleanerId ? candidate : member);
+    return (!(jobRequiresHotTub(job.addonsSnapshot) || job.checklistSnapshot?.capabilityRequirements?.hotTub) || !worker.hotTubCapable || candidate.hotTubCapable) &&
+      (!isOffSite || (worker.cleanerId !== laundryLead?.cleanerId || candidate.laundryLeadCapable)) &&
+      (!(jobRequiresHotTub(job.addonsSnapshot) || job.checklistSnapshot?.capabilityRequirements?.hotTub) || replacement.some(c => c.hotTubCapable));
+  }) : [];
+  const backupIds = new Set(versioned ? pairedBackups.map(p => p.backup.cleanerId) : backup ? [backup.cleanerId] : []);
+  const firstBackupId = [...backupIds][0] ?? null;
 
   try {
     await db.transaction(async (tx) => {
@@ -480,12 +374,18 @@ export async function assignJob(job: {
         sql`select set_config('cleannami.assignment_source','automatic',true)`,
       );
       const [claimed] = await tx
-        .select({ status: jobs.status })
+        .select()
         .from(jobs)
         .where(eq(jobs.id, job.id))
         .for("update");
       if (claimed?.status !== "unassigned")
         throw new Error("Job already claimed; reload assignments");
+      if (versioned && (claimed.propertyId !== job.propertyId || claimed.checkInTime?.getTime() !== job.checkInTime?.getTime() || (job.checkOutTime !== undefined && claimed.checkOutTime?.getTime() !== job.checkOutTime?.getTime()) || String(claimed.expectedHours) !== String(job.expectedHours) || JSON.stringify(claimed.addonsSnapshot) !== JSON.stringify(job.addonsSnapshot) || JSON.stringify(claimed.checklistSnapshot) !== JSON.stringify(job.checklistSnapshot)))
+        throw new Error("Assignment inputs changed; reload before issuing offers");
+      if (versioned && priorityEnrollmentEnabled() && await isOfferJob(job.id, tx)) {
+        if (!await canAssignPriorityFallback(job.id, tx)) throw new Error("Priority coverage changed; reload before fallback");
+      }
+      if (versioned) await enrollOfferJob(tx, job.id);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`property:${job.propertyId}`},0))`,
       );
@@ -493,7 +393,7 @@ export async function assignJob(job: {
       const date = job.checkInTime!.toLocaleDateString("en-CA", {
         timeZone: "America/New_York",
       });
-      for (const member of [...team].sort((a, b) =>
+      for (const member of [...team, ...pairedBackups.map(p => p.backup)].sort((a, b) =>
         a.cleanerId.localeCompare(b.cleanerId),
       ))
         await tx.execute(
@@ -519,7 +419,12 @@ export async function assignJob(job: {
         });
       }
 
-      if (backup) {
+      if (versioned) {
+        for (const pair of pairedBackups) {
+          await tx.insert(jobsToCleaners).values({ jobId: job.id, cleanerId: pair.backup.cleanerId, role: "backup" });
+          await createBackupOffer(tx, job.id, pair.backup.cleanerId, pair.worker.cleanerId);
+        }
+      } else if (backup) {
         await tx.insert(jobsToCleaners).values({
           jobId: job.id,
           cleanerId: backup.cleanerId,
@@ -534,9 +439,9 @@ export async function assignJob(job: {
       for (const audit of candidateAudit) {
         audit.selected =
           team.some((c) => c.cleanerId === audit.cleanerId) ||
-          backup?.cleanerId === audit.cleanerId;
+          backupIds.has(audit.cleanerId);
         audit.selectedRole =
-          backup?.cleanerId === audit.cleanerId
+          backupIds.has(audit.cleanerId)
             ? "backup"
             : team.some((c) => c.cleanerId === audit.cleanerId)
               ? laundryLead?.cleanerId === audit.cleanerId
@@ -554,7 +459,8 @@ export async function assignJob(job: {
           policyVersion: "phase2c-v1",
           candidatesTruncated: candidateAudit.length > 500,
           workingCleanerIds: team.map((c) => c.cleanerId),
-          backupCleanerId: backup?.cleanerId ?? null,
+          backupCleanerId: firstBackupId,
+          pairedBackups: versioned ? pairedBackups.map(p => ({ workerId: p.worker.cleanerId, backupId: p.backup.cleanerId })) : undefined,
         },
         candidates: candidateAudit.slice(0, 500),
       });
@@ -571,7 +477,7 @@ export async function assignJob(job: {
       {
         scheduledAt: job.checkInTime.toISOString(),
         proposedWorkingCleanerIds: team.map((member) => member.cleanerId),
-        proposedBackupCleanerId: backup?.cleanerId ?? null,
+        proposedBackupCleanerId: firstBackupId,
       },
     );
   }
@@ -581,7 +487,8 @@ export async function assignJob(job: {
   // connection, which answers the first and silently drops the rest.
   // It has been invisible because a team of 1 fans out to nothing; residential
   // large homes and off-site VR jobs staff two. Same shape as.
-  for (const member of team) {
+  if (versioned) await dispatchJobOffers(job.id);
+  for (const member of versioned ? [] : team) {
     await notifyAssignedPrimary(
       job.id,
       member.cleanerId,
@@ -596,7 +503,8 @@ export async function assignJob(job: {
     jobId: job.id,
     status: "assigned",
     primaryCleanerId: leader.cleanerId,
-    backupCleanerId: backup?.cleanerId ?? null,
+    backupCleanerId: firstBackupId,
+    backupCleanerIds: versioned ? [...backupIds] : undefined,
   };
 }
 
@@ -618,6 +526,7 @@ export async function runAssignmentEngine(): Promise<AssignmentSummary> {
       id: true,
       propertyId: true,
       checkInTime: true,
+      checkOutTime: true,
       expectedHours: true,
       addonsSnapshot: true,
       checklistSnapshot: true,

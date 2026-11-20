@@ -3,9 +3,11 @@
 import { CheckCircle, Mail, ShieldCheck } from "lucide-react";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 import { getJobDisplay } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
 
 interface Props {
   cleaningLevel?: "standard" | "deep";
+  purpose?: ResidentialPurpose;
   pricingVersion?: "residential-v1" | "residential-v2";
   hotTub?: "none" | "basic" | "full";
   inUnitLaundryLoads?: number;
@@ -28,6 +30,7 @@ interface Props {
  */
 export const R6Confirmation = ({
   cleaningLevel,
+  purpose,
   pricingVersion,
   hotTub,
   inUnitLaundryLoads,
@@ -57,6 +60,7 @@ export const R6Confirmation = ({
             getJobDisplay({
               serviceType: "residential_one_time",
               cleaningLevel,
+              purpose,
             }).label
           }
         </p>

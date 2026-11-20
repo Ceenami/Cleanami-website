@@ -34,6 +34,7 @@ export async function recalculateJobRoles(jobId: string): Promise<void> {
 export async function recalculateJobRolesInTransaction(
   tx: AssignmentTransaction,
   jobId: string,
+  options: { preserveLaundryLead?: boolean } = {},
 ): Promise<void> {
   const job = await tx.query.jobs.findFirst({
     where: eq(jobs.id, jobId),
@@ -78,7 +79,9 @@ export async function recalculateJobRolesInTransaction(
         capabilityRequirements?: { laundryLead: boolean };
       } | null
     )?.capabilityRequirements?.laundryLead;
-  const laundryLead = isOffSite ? team.find((m) => m.hasLaundryLeadCert) : null;
+  const laundryLead = isOffSite
+    ? (options.preserveLaundryLead ? team.find(m => m.role === "laundry_lead" && m.hasLaundryLeadCert) : null) ?? team.find(m => m.hasLaundryLeadCert)
+    : null;
 
   if (isOffSite && !laundryLead) throw new Error("team_missing_laundry_lead");
   const now = new Date();

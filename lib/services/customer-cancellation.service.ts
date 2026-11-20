@@ -1,5 +1,10 @@
 import "server-only";
+import { cancelFinancialJob } from "./payment/rental-finance.service";
+import { readConditionReview } from "@/lib/booking/condition-review";
 import { getExecutionContract } from "./job-execution-contract";
+import { withSubscriptionMinimums } from "./subscription-minimum.service";
+import { readSubscriptionTerm } from "./subscription-term.service";
+import { toEasternDateString } from "@/lib/time/eastern";
 import { cancelExecutionJob } from "./payment/execution-cancellation";
 
 import { db } from "@/db";
@@ -272,6 +277,9 @@ export async function cancelJobForCustomer(
     throw new Error("Forbidden");
   }
 
+  const financial = await cancelFinancialJob(jobId, "customer", customerId);
+  if (financial) return financial;
+
   const issuedExecution = await getExecutionContract(jobId);
   if (issuedExecution && job.status === "canceled") return cancelExecutionJob(jobId, "customer");
   if (job.status === "canceled") return alreadyCanceled(job.id);
@@ -291,6 +299,10 @@ export async function cancelJobForCustomer(
 }
 
 export async function cancelJobAsAdmin(jobId: string): Promise<CancelJobResult> {
+  const flagged = await db.query.jobs.findFirst({ where: eq(jobs.id, jobId), columns: { addonsSnapshot: true } });
+  if (readConditionReview(flagged?.addonsSnapshot)) throw new Error("Use Condition Review to record a rejection reason and full refund.");
+  const financial = await cancelFinancialJob(jobId, "admin", "admin-cancellation");
+  if (financial) return financial;
   if (await getExecutionContract(jobId)) return cancelExecutionJob(jobId, "admin");
   const job = await loadJobContext(jobId);
 
@@ -330,6 +342,8 @@ async function finalizeJobCancellation(
   subscriptionMonths: number,
 ): Promise<CancelJobResult> {
   let dispatched = false;
+  const financial = await cancelFinancialJob(job.id, source, `${source}-subscription-cancellation`);
+  if (financial) return financial;
   if (await getExecutionContract(job.id)) return cancelExecutionJob(job.id, source);
   // Persist outside the cancellation transaction. An ambiguous provider result
   // must not roll back the charge basis and reprice a later retry.
@@ -568,7 +582,8 @@ export async function cancelSubscriptionForCustomer(
     throw new Error("Forbidden");
   }
 
-  const eligibility = canCancelSubscription(subscription);
+  const [contractedSubscription] = await withSubscriptionMinimums([subscription]);
+  const eligibility = canCancelSubscription(contractedSubscription);
   if (!eligibility.allowed) {
     throw new Error(eligibility.reason ?? "Cannot cancel subscription");
   }
@@ -759,6 +774,8 @@ export async function resumeSubscriptionAsAdmin(
   if (subscription.status !== "paused") {
     throw new Error("Only a paused subscription can be resumed");
   }
+  const recordedTerm = await readSubscriptionTerm(subscriptionId);
+  if (recordedTerm && recordedTerm.endDate < toEasternDateString(new Date())) throw new Error("This term has ended. Arrange an explicit extension before resuming service.");
 
   await db
     .update(subscriptions)

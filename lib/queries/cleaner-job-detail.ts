@@ -1,4 +1,5 @@
 import "server-only";
+import { financialCancellationKinds } from "@/lib/services/payment/rental-finance-labels";
 import type { RoomPhotosMap } from "@/lib/cleaner/evidence";
 import { effectiveChecklist } from "@/lib/services/effective-checklist";
 import { getExecutionEvidence } from "@/lib/services/job-execution";
@@ -30,6 +31,7 @@ import type { CleanerJobRole } from "@/lib/queries/cleaner-jobs";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
 import { getEntryMethod, getJobDisplay } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
 
 function mapRole(role: string, isTeamLeader: boolean): CleanerJobRole {
   if (role === "laundry_lead") return "laundryLead";
@@ -107,6 +109,7 @@ export type CleanerJobDetail = {
     defaultCheckOutTime: string | null;
   } | null;
   status: string;
+  statusLabel?: string;
   propertyAddress: string | null;
   arrivalWindow: string | null;
   mustFinishBefore: string | null;
@@ -123,6 +126,7 @@ export type CleanerJobDetail = {
   /** 0041. Drives the badge and every label below. */
   serviceType: string;
   cleaningLevel: "standard" | "deep" | null;
+  purpose?: ResidentialPurpose;
   /**
    * 0045 — an admin's manual "this one is a reclean" override, which takes the
    * badge over the service type. Null on every ordinary job. The TIME labels
@@ -264,8 +268,10 @@ export async function getCleanerJobDetail(
             : null,
       });
 
+  const cancellationKinds = await financialCancellationKinds([job.id]);
   return {
     jobId: job.id,
+    statusLabel: cancellationKinds.get(job.id) === "late_customer" ? "Late Canceled" : job.status ?? "assigned",
     executionProtocol: executionContract?.protocol ?? null,
     cleanerId,
     assignmentRole: assignment.role,
@@ -273,6 +279,7 @@ export async function getCleanerJobDetail(
       serviceType: job.serviceType,
       jobLabel: job.jobLabel,
       cleaningLevel: job.addonsSnapshot?.cleaningLevel,
+      addonsSnapshot: job.addonsSnapshot,
     }).label,
     scheduledAt: job.checkInTime?.toISOString() ?? null,
     canWork:
@@ -299,6 +306,7 @@ export async function getCleanerJobDetail(
     petsAllowed: property?.petsAllowed ?? false,
     serviceType: job.serviceType ?? "vacation_rental_subscription",
     cleaningLevel: job.addonsSnapshot?.cleaningLevel ?? null,
+    purpose: job.addonsSnapshot?.residentialPricing?.input?.purpose,
     jobLabel: job.jobLabel ?? null,
     arrivalWindowLabel:
       job.serviceType === "residential_one_time"

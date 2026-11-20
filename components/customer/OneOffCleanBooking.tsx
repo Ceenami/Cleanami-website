@@ -9,6 +9,7 @@ import {
   RESIDENTIAL_NO_WINDOW_MESSAGE,
 } from "@/lib/scheduling/residential-notice";
 import { getArrivalWindow } from "@/lib/scheduling/arrival-windows";
+import { ConditionReviewFields } from "@/components/customers/cta-booking-button/residential/ConditionReviewFields";
 import { ResidentialLevelChoice } from "@/components/customers/cta-booking-button/residential/ResidentialLevelChoice";
 import type { ResidentialAddonSelection } from "@/components/customers/cta-booking-button/residential/ResidentialAddons";
 import type {
@@ -17,8 +18,10 @@ import type {
 } from "@/lib/pricing/residential";
 import {
   SERVICE_TYPE_LABELS,
+  getJobDisplay,
   type ServiceType,
 } from "@/lib/constants/service-type";
+import type { ResidentialPurpose } from "@/lib/constants/residential-purpose";
 
 type PropertyItem = {
   id: string;
@@ -51,6 +54,8 @@ export function OneOffCleanBooking({
     ResidentialCleaningLevel | undefined
   >();
   const promoSequence = useRef(0);
+  const [purpose, setPurpose] = useState<ResidentialPurpose>();
+  const [condition, setCondition] = useState<{ unusualConditions: boolean; conditionDescription?: string }>({ unusualConditions: false });
   const [addons, setAddons] = useState<ResidentialAddonSelection>({
     hotTub: "none",
     inUnitLaundryLoads: 0,
@@ -93,6 +98,7 @@ export function OneOffCleanBooking({
     cleaningLevel,
     addons.hotTub,
     addons.inUnitLaundryLoads,
+    purpose,
   ]);
   const residentialQuote =
     initialResidentialQuote?.ruleVersion === "residential-v2"
@@ -117,6 +123,7 @@ export function OneOffCleanBooking({
       body: JSON.stringify({
         propertyId,
         cleaningLevel,
+        ...(purpose ? { purpose } : {}),
         pricingVersion: "residential-v2",
         ...addons,
       }),
@@ -153,6 +160,7 @@ export function OneOffCleanBooking({
     initialResidentialQuote?.ruleVersion,
     propertyId,
     cleaningLevel,
+    purpose,
     addons,
   ]);
   const arrivalWindowKeys = residentialQuote?.arrivalWindowKeys;
@@ -260,7 +268,7 @@ export function OneOffCleanBooking({
     date &&
     !submitting &&
     !promoChecking &&
-    (!isResidential || (arrivalWindow && residentialQuote)),
+    (!isResidential || (arrivalWindow && residentialQuote && (!condition.unusualConditions || condition.conditionDescription?.trim()))),
   );
   // What the button will actually charge.
   const chargeDollars =
@@ -295,6 +303,7 @@ export function OneOffCleanBooking({
           ...(isResidential
             ? {
                 cleaningLevel,
+                ...(purpose ? { purpose } : {}),
                 pricingVersion: residentialQuote?.ruleVersion,
                 ...addons,
               }
@@ -343,10 +352,11 @@ export function OneOffCleanBooking({
         body: JSON.stringify({
           propertyId,
           date,
-          ...(isResidential && arrivalWindow ? { arrivalWindow } : {}),
+          ...(isResidential && arrivalWindow ? { arrivalWindow, ...condition } : {}),
           ...(isResidential
             ? {
                 cleaningLevel,
+                ...(purpose ? { purpose } : {}),
                 quoteIdentity: residentialQuote?.inputIdentity,
                 pricingVersion: residentialQuote?.ruleVersion,
                 ...addons,
@@ -362,7 +372,7 @@ export function OneOffCleanBooking({
         amountCents: data.amountCents,
         promoCode: data.promoCode,
         serviceLabel: isResidential
-          ? `One-Time House Clean - ${cleaningLevel === "deep" ? "Deep" : "Standard"}`
+          ? getJobDisplay({ serviceType: "residential_one_time", cleaningLevel, purpose }).label
           : "Vacation Rental Turnover",
       });
       clearPromo();
@@ -389,7 +399,9 @@ export function OneOffCleanBooking({
             setDate("");
             setArrivalWindow("");
             setCleaningLevel(undefined);
+            setPurpose(undefined);
             setAddons({ hotTub: "none", inUnitLaundryLoads: 0 });
+            setCondition({ unusualConditions: false });
             // The quote was priced against the previous property.
             clearPromo();
           }}
@@ -409,19 +421,23 @@ export function OneOffCleanBooking({
       {isResidential && (
         <ResidentialLevelChoice
           value={cleaningLevel}
+          purpose={purpose}
           pricingVersion={
             initialResidentialQuote?.ruleVersion ??
             selected?.residentialOptions[0]?.ruleVersion
           }
           disabled={submitting}
-          onChange={(level) => {
+          onChange={(level, selection) => {
             setCleaningLevel(level);
+            setPurpose(selection);
             setArrivalWindow("");
             setError(null);
             clearPromo();
           }}
         />
       )}
+
+      {isResidential && <ConditionReviewFields selected={condition.unusualConditions} description={condition.conditionDescription} onChange={setCondition} disabled={submitting} />}
 
       {/* A home big enough to need more time than any window allows cannot be
           scheduled online at all, and the refusal is the client's own wording —

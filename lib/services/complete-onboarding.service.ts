@@ -1,4 +1,5 @@
 import "server-only";
+import { recordRentalFunding } from "./payment/rental-credit";
 
 import { getDbOrNull } from "@/db";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -9,7 +10,7 @@ import {
   checklistFiles,
   jobs,
 } from "@/db/schema";
-import { SignupFormData, signupFormSchema } from "@/lib/validations/bookng-modal";
+import { SignupFormData, signupFormSchema, paidSignupFormSchema } from "@/lib/validations/bookng-modal";
 import { ICalService } from "@/lib/services/iCal/ical.service";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
@@ -25,6 +26,11 @@ import {
 } from "@/lib/constants/checklist-files";
 import { applyFirstCleanDiscount } from "@/lib/pricing/first-clean-discount";
 import { recordPromoRedemptionByCode } from "@/lib/services/promo-code.service";
+import { recordSubscriptionMinimum } from "./subscription-minimum.service";
+import { recordSubscriptionTerm } from "./subscription-term.service";
+import { THIRTY_DAY_MINIMUM, thirtyDayMinimumEndDate } from "@/lib/subscriptions/minimum";
+import { verifySettledPayment } from "./payment/verify-settled-payment";
+import { loadPaidRentalCheckout } from "./rental-checkout.service";
 
 const pricingService = new PricingService();
 
@@ -143,9 +149,12 @@ export async function completeOnboardingForPayment(
       };
     }
 
-    const validatedData = signupFormSchema.parse(formData);
-
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const checkout = await loadPaidRentalCheckout(paymentIntent, formData);
+    const validatedData = (checkout ? paidSignupFormSchema : signupFormSchema).parse(checkout ? {
+      ...formData, ...checkout.terms.form,
+      firstCleanDate: new Date(checkout.terms.form.firstCleanDate as string),
+    } : formData);
     const stripeCustomerId =
       typeof paymentIntent.customer === "string" ? paymentIntent.customer : null;
 
@@ -211,7 +220,18 @@ export async function completeOnboardingForPayment(
       };
     }
 
-    const expectedPrice = await pricingService.calculatePrice(
+    // A succeeded intent can already be partially/fully refunded or awaiting
+    // a refund. Do not turn that payment into a new prepaid subscription.
+    try {
+      await verifySettledPayment(stripe, paymentIntent);
+    } catch {
+      return {
+        success: false,
+        error: "This payment needs review or has entered refund processing. Contact CleanNami before paying again.",
+      };
+    }
+
+    const expectedPrice = checkout?.terms.price ?? await pricingService.calculatePrice(
       normalizeSignupFormDataForPricing(validatedData)
     );
     const expectedAmountInCents = Math.round(expectedPrice.totalPerClean * 100);
@@ -243,7 +263,7 @@ export async function completeOnboardingForPayment(
       metadataCents("promo_discount_cents"),
       expectedAfterFirstClean
     );
-    const expectedChargeCents = expectedAfterFirstClean - promoDiscountCents;
+    const expectedChargeCents = checkout?.providerParams.amount ?? (expectedAfterFirstClean - promoDiscountCents);
 
     if (paymentIntent.amount !== expectedChargeCents) {
       return {
@@ -370,6 +390,13 @@ export async function completeOnboardingForPayment(
       const startDate = new Date(firstCleanDate);
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + subscriptionMonths);
+      const issuedStartDay = firstCleanDate.toISOString().split("T")[0];
+      let issuedEndDay = endDate.toISOString().split("T")[0];
+      if (paymentIntent.metadata?.subscription_minimum_policy === THIRTY_DAY_MINIMUM) {
+        // A short February term must not end before its disclosed minimum.
+        const minimumEndDay = thirtyDayMinimumEndDate(issuedStartDay);
+        if (issuedEndDay < minimumEndDay) issuedEndDay = minimumEndDay;
+      }
 
       const [subscription] = await tx
         .insert(subscriptions)
@@ -381,11 +408,14 @@ export async function completeOnboardingForPayment(
           firstCleanPaymentId: paymentIntentId,
           isFirstCleanPrepaid: true,
           status: "active",
-          startDate: firstCleanDate.toISOString().split("T")[0],
-          endDate: endDate.toISOString().split("T")[0],
+          startDate: issuedStartDay,
+          endDate: issuedEndDay,
         })
         .returning();
 
+      await recordSubscriptionMinimum(tx, subscription, paymentIntent.metadata?.subscription_minimum_policy);
+      await recordSubscriptionTerm(tx, subscription, paymentIntent.metadata?.subscription_term_end_policy);
+      await recordRentalFunding(tx, subscription, paymentIntent, checkout?.terms);
       return { customer, property, subscription };
     });
 
@@ -489,7 +519,7 @@ export async function completeOnboardingForPayment(
           ],
         });
 
-        if (firstJob) {
+        if (firstJob && !paymentIntent.metadata?.rental_finance_policy) {
           await db
             .update(jobs)
             .set({

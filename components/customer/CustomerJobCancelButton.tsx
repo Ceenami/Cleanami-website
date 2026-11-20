@@ -7,12 +7,14 @@ type CustomerJobCancelButtonProps = {
   jobId: string;
   status: string | null;
   checkInTime: string | null;
+  financialPolicy?: string | null;
 };
 
 export function CustomerJobCancelButton({
   jobId,
   status,
   checkInTime,
+  financialPolicy,
 }: CustomerJobCancelButtonProps) {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
@@ -28,7 +30,7 @@ export function CustomerJobCancelButton({
 
   async function handleCancel() {
     const confirmed = window.confirm(
-      "Cancel this clean? If a cleaner is already assigned and it is less than 24 hours before check-in, you may still be charged and the cleaner will be paid.",
+      financialPolicy ? "Cancel this clean? Less than 24 hours before start, the full scheduled-price late fee is charged separately and accepted working cleaners are paid. At least 24 hours before start, there is no late fee. Unused first-clean credit is preserved." : "Cancel this clean? If a cleaner is already assigned and it is less than 24 hours before check-in, you may still be charged and the cleaner will be paid.",
     );
     if (!confirmed) return;
 
@@ -46,6 +48,8 @@ export function CustomerJobCancelButton({
       }
       setMessage(data.message ?? "Clean canceled");
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      await queryClient.invalidateQueries({ queryKey: ["rental-finance", jobId] });
+      await queryClient.invalidateQueries({ queryKey: ["prepayment"] });
       await queryClient.invalidateQueries({ queryKey: ["jobs", "stats"] });
       await queryClient.invalidateQueries({
         queryKey: ["customer-job-report", jobId],
