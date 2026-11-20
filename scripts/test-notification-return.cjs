@@ -126,6 +126,33 @@ async function run() {
     authenticate(cleaner); databaseAvailable = false; assert.equal((await signInDestination(period)).success, false); databaseAvailable = true;
     assert.equal(await signInDestination(period), period);
   });
+  await test('failed portal lookup logs only bounded DB codes and reasons, never credentials, SQL or account data', async () => {
+    authenticate(admin);
+    const originalFindFirst = db.query.users.findFirst, originalWarn = console.warn;
+    const savedUrl = process.env.DATABASE_URL;
+    const secretUrl = 'postgres://synthetic:do-not-log@127.0.0.1:1/isolated';
+    process.env.DATABASE_URL = secretUrl;
+    try {
+      for (const [code, message, expectedCode, reason] of [
+        ['28P01', 'password authentication failed for synthetic user', '28P01', 'database_credentials_rejected'],
+        ['XX000', 'Tenant or user not found', 'XX000', 'pooler_tenant_not_found'],
+        ['ENOTFOUND', 'getaddrinfo failed', 'ENOTFOUND', 'database_lookup_failed'],
+        [secretUrl, 'sensitive SQL: ' + authUser.email, 'UNKNOWN', 'database_lookup_failed'],
+      ]) {
+        const warnings = [];
+        console.warn = (...args) => warnings.push(args);
+        db.query.users.findFirst = async () => { throw Object.assign(new Error('SQL and params: ' + authUser.email + ' ' + secretUrl), { cause: Object.assign(new Error(message), { code }) }); };
+        const failed = await signInDestination('/admin/dashboard');
+        assert.equal(failed.success, false); assert.match(failed.error.message, /portal profile could not be loaded/);
+        assert.deepEqual(warnings, [['[auth] Portal profile unavailable', { databaseConfigured: true, reason, errorCode: expectedCode }]]);
+        const logged = JSON.stringify(warnings);
+        for (const value of [secretUrl, 'do-not-log', authUser.email, authUser.id, 'SQL and params']) assert.equal(logged.includes(value), false);
+      }
+    } finally {
+      db.query.users.findFirst = originalFindFirst; console.warn = originalWarn;
+      if (savedUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = savedUrl;
+    }
+  });
   await test('code callbacks retain valid destinations and errors retain next without copying auth codes', async () => {
     authenticate(cleaner);
     const url = `https://return.example.invalid/auth/callback?code=synthetic-code&next=${encodeURIComponent(jobLink)}`;

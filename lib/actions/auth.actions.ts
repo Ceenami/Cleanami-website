@@ -23,6 +23,31 @@ function redirectForRole(role: string | undefined, requestedNext: string | null 
   return redirect(destination);
 }
 
+/** Log bounded diagnostic fields only: DB errors may contain SQL and credentials. */
+function portalLookupFailure(error: unknown): { errorCode: string; reason: string } {
+  const transportCodes = new Set([
+    "ERR_INVALID_URL", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET",
+    "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "CONNECT_TIMEOUT",
+    "CONNECTION_CLOSED", "CONNECTION_ENDED", "CONNECTION_DESTROYED",
+    "ERR_TLS_CERT_ALTNAME_INVALID", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  ]);
+  let current = error;
+  let errorCode = "UNKNOWN";
+  let reason = "database_lookup_failed";
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
+    const entry = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (errorCode === "UNKNOWN" && typeof entry.code === "string" &&
+        (/^[0-9A-Z]{5}$/.test(entry.code) || transportCodes.has(entry.code))) errorCode = entry.code;
+    if (typeof entry.message === "string") {
+      if (/tenant or user not found/i.test(entry.message)) reason = "pooler_tenant_not_found";
+      else if (/password authentication failed|invalid password|sasl.*signature/i.test(entry.message)) reason = "database_credentials_rejected";
+    }
+    current = entry.cause;
+  }
+  return { errorCode, reason };
+}
+
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut({ scope: "global" });
@@ -217,13 +242,22 @@ export async function signInUser(
   }
 
   let userRole: string | undefined;
+  let lookupFailure: ReturnType<typeof portalLookupFailure> | undefined;
   try {
     userRole = result.data?.id ? await resolveRoleFromDatabase(result.data.id, result.data.email) : undefined;
-  } catch { /* Authentication succeeded, but portal access still needs the DB profile. */ }
-  if (!userRole) return {
-    success: false, data: { email: validatedFields.email },
-    error: { message: "Signed in, but your portal profile could not be loaded. Try again or contact CleanNami." },
-  };
+  } catch (error) { lookupFailure = portalLookupFailure(error); }
+  if (!userRole) {
+    const databaseConfigured = Boolean(process.env.DATABASE_URL?.trim());
+    console.warn("[auth] Portal profile unavailable", {
+      databaseConfigured,
+      reason: lookupFailure?.reason ?? (databaseConfigured ? "profile_not_found" : "database_unconfigured"),
+      errorCode: lookupFailure?.errorCode ?? null,
+    });
+    return {
+      success: false, data: { email: validatedFields.email },
+      error: { message: "Signed in, but your portal profile could not be loaded. Try again or contact CleanNami." },
+    };
+  }
   const requestedNext = formData.get("next");
   return redirectForRole(userRole, typeof requestedNext === "string" ? requestedNext : null);
 }
