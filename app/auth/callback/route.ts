@@ -2,9 +2,11 @@ import { resolveAuthCallbackDestination, signInReturnPath } from "@/lib/auth-red
 import { createClient } from "@/lib/supabase/server";
 import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import { NextResponse } from "next/server";
+import { getAuthResponseOrigin } from "@/lib/app-url";
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const origin = getAuthResponseOrigin(request);
   const code = searchParams.get("code");
   const requestedNext = searchParams.get("next");
 

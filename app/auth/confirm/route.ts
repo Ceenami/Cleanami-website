@@ -3,6 +3,7 @@ import { resolveAuthCallbackDestination, signInReturnPath } from "@/lib/auth-red
 import { resolveRoleFromDatabase } from "@/lib/auth/server-roles";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { getAuthResponseOrigin } from "@/lib/app-url";
 
 /**
  * Entry point for emailed auth links (confirmation, magic link, password
@@ -18,7 +19,8 @@ import { NextResponse } from "next/server";
  * craft, so an unchecked value would turn this into an open redirect.
  */
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const origin = getAuthResponseOrigin(request);
   const tokenHash = searchParams.get("token_hash");
   const type = searchParams.get("type") as EmailOtpType | null;
   const code = searchParams.get("code");

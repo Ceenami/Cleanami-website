@@ -152,6 +152,48 @@ async function run() {
     databaseAvailable = true; authenticate(admin);
     assert.equal(location(await confirm.GET(new Request(`https://return.example.invalid/auth/confirm?token_hash=synthetic&type=magiclink&next=${encodeURIComponent(period)}`))).pathname, '/admin/dashboard');
   });
+  await test('proxied callback and confirmation success, failure and recovery retain the stable TEST host', async () => {
+    const saved = process.env.NEXT_PUBLIC_APP_URL;
+    const stable = 'https://phase3a-test--sensational-crepe-5b0e1a.netlify.app';
+    const internal = 'https://6b0052e1ac0dee9f4574ac90--sensational-crepe-5b0e1a.netlify.app';
+    process.env.NEXT_PUBLIC_APP_URL = stable;
+    try {
+      authenticate(cleaner);
+      for (const headers of [{ 'x-forwarded-host': new URL(stable).host }, { host: new URL(stable).host }, { host: new URL(internal).host }, {}]) {
+        for (const [route, handler] of [['callback', callback], ['confirm', confirm]]) {
+          const request = new Request(`${internal}/auth/${route}?code=synthetic&next=${encodeURIComponent(period)}`, { headers });
+          const completed = location(await handler.GET(request));
+          assert.equal(completed.origin, stable); assert.equal(completed.pathname + completed.search, period);
+          verificationFails = true;
+          const failed = location(await handler.GET(request)); verificationFails = false;
+          assert.equal(failed.origin, stable); assert.equal(failed.pathname, '/sign-in');
+          assert.equal(failed.searchParams.get('next'), period); assert.equal(failed.searchParams.has('code'), false);
+        }
+        const recovery = location(await confirm.GET(new Request(`${internal}/auth/confirm?token_hash=synthetic&type=recovery&next=/reset-password`, { headers })));
+        assert.equal(recovery.origin, stable); assert.equal(recovery.pathname, '/reset-password');
+      }
+    } finally { process.env.NEXT_PUBLIC_APP_URL = saved; verificationFails = false; }
+  });
+  await test('auth origin rejects untrusted proxy hosts and preserves both production and legacy hosts', () => {
+    const { getAuthResponseOrigin } = require('../lib/app-url.ts');
+    const saved = process.env.NEXT_PUBLIC_APP_URL;
+    const stable = 'https://phase3a-test--sensational-crepe-5b0e1a.netlify.app';
+    const internal = 'https://6b0052e1ac0dee9f4574ac90--sensational-crepe-5b0e1a.netlify.app';
+    process.env.NEXT_PUBLIC_APP_URL = stable;
+    try {
+      for (const host of ['attacker.invalid', 'cleannami.com', 'phase3a-test--foreign.netlify.app', 'https://attacker.invalid', 'attacker.invalid, cleannami.com', 'user@attacker.invalid', new URL(stable).host + '/bad', new URL(stable).host + '?bad']) {
+        assert.equal(getAuthResponseOrigin(new Request(internal + '/auth/callback', { headers: { 'x-forwarded-host': host } })), stable);
+      }
+      const otherProject = 'https://6b0052e1ac0dee9f4574ac90--foreign.netlify.app';
+      assert.equal(getAuthResponseOrigin(new Request(otherProject + '/auth/callback')), otherProject);
+      process.env.NEXT_PUBLIC_APP_URL = 'https://cleannami.com';
+      for (const origin of ['https://cleannami.com', 'https://www.cleannami.com', 'https://cleannami.ceenami.com']) {
+        assert.equal(getAuthResponseOrigin(new Request(origin + '/auth/callback')), origin);
+        assert.equal(getAuthResponseOrigin(new Request(internal + '/auth/callback', { headers: { 'x-forwarded-host': new URL(origin).host } })), origin);
+      }
+      assert.equal(getAuthResponseOrigin(new Request('http://localhost:3103/auth/callback', { headers: { 'x-forwarded-host': 'attacker.invalid' } })), 'http://localhost:3103');
+    } finally { process.env.NEXT_PUBLIC_APP_URL = saved; }
+  });
   await test('actual sign-in page/form carries validated hidden next, including after action error, and drops duplicate next arrays', async () => {
     const React = require('react'), { renderToStaticMarkup } = require('react-dom/server');
     const form = loadUi('app/(auth)/sign-in/credentials-signin-form.tsx', {

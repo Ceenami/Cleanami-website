@@ -34,6 +34,38 @@ export function getAppBaseUrl(): string {
   return isProd ? DEFAULT_PROD_URL : DEFAULT_DEV_URL;
 }
 
+/** Keep auth cookies and redirects on the public host behind the Netlify proxy. */
+export function getAuthResponseOrigin(request: Request): string {
+  const incoming = new URL(request.url);
+  const allowLocal = process.env.NODE_ENV !== "production";
+  if (allowLocal && isLocalHost(incoming.hostname)) return incoming.origin;
+
+  const configured = siteOrigin(process.env.NEXT_PUBLIC_APP_URL, allowLocal);
+  const allowed = new Set([incoming.origin]);
+  if (configured) allowed.add(configured);
+  const productionOrigins = [LEGACY_SITE_ORIGIN, "https://cleannami.com", "https://www.cleannami.com"];
+  if (productionOrigins.includes(incoming.origin) || (configured && productionOrigins.includes(configured))) {
+    for (const origin of productionOrigins) allowed.add(origin);
+  }
+
+  for (const name of ["x-forwarded-host", "host"]) {
+    const host = request.headers.get(name)?.trim();
+    // A forwarded header is useful only for a known host, never an arbitrary URL.
+    if (!host || /[\s,/@\\?#]/.test(host)) continue;
+    const origin = siteOrigin(`https://${host}`, allowLocal);
+    if (origin && origin !== incoming.origin && allowed.has(origin)) return origin;
+  }
+
+  // Some Netlify requests expose only the immutable deploy URL. Restrict the
+  // fallback to the configured stable host of that exact same Netlify project.
+  const deployment = incoming.hostname.match(/^[a-f0-9]{24}--(.+\.netlify\.app)$/i);
+  if (deployment && configured) {
+    const publicHost = new URL(configured).hostname;
+    if (publicHost === deployment[1] || publicHost.endsWith(`--${deployment[1]}`)) return configured;
+  }
+  return incoming.origin;
+}
+
 /** Stripe Connect requires HTTPS redirect URLs in live mode. */
 export function getStripeRedirectBaseUrl(): string {
   const base = getAppBaseUrl();
