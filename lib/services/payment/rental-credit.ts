@@ -6,13 +6,14 @@ import { sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import type { RentalCheckoutTerms } from "@/db/schemas";
 import { rentalFinanceReady, RENTAL_FINANCE_POLICY } from "./rental-finance-settings";
+import { PURCHASE_DATE_START, purchaseTermDates } from "@/lib/subscriptions/purchase-start";
 
 export type FinanceTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export type FinanceWriter = FinanceTx | typeof db;
 export const rows = <T>(result: unknown): T[] => (Array.isArray(result) ? result : (result as { rows: T[] }).rows) as T[];
 export const json = (value: unknown) => sql`${JSON.stringify(value)}::jsonb`;
 export type Entitlement = { id: string; customer_id: string; property_id: string; source_payment_id: string;
-  funded_cents: number; purchase: { scope: string; price: RentalCheckoutTerms["price"]; form: Record<string, unknown> };
+  funded_cents: number; purchase: { scope: string; price: RentalCheckoutTerms["price"]; form: Record<string, unknown>; serviceNotBefore?: string };
   state: "active" | "held"; hold_reason: string | null; balance: number; applied: number; reserved: number };
 export type FinanceContract = { subscription_id: string; customer_id: string; property_id: string; entitlement_id: string; policy: string;
   reactivation_terms: { startDate: string; endDate: string; minimumEndsAt: string; requestId: string; sourceSubscriptionId: string } | null };
@@ -57,7 +58,11 @@ export async function recordRentalFunding(tx: FinanceTx, subscription: { id: str
     throw new RentalFinanceError("Accepted prepayment needs compatible credit setup. Preserve payment and retry; do not pay again.");
   if (!rows(await tx.execute(sql`select identity from rental_finance_audit where identity=${`consent:${pi.id}`} and action='accept_financial_terms' and details->>'policy'=${policy}`)).length)
     throw new RentalFinanceError("Accepted financial terms are missing; preserve payment for management review");
-  const purchase = { scope: rentalScope(terms.form), form: terms.form, price: terms.price };
+  const charge = typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+  const serviceNotBefore = terms.subscriptionStartPolicy === PURCHASE_DATE_START
+    ? purchaseTermDates(charge?.created ?? 0, Number(terms.form.subscriptionMonths)).serviceNotBefore : undefined;
+  const purchase = { scope: rentalScope(terms.form), form: terms.form, price: terms.price,
+    ...(serviceNotBefore ? { serviceNotBefore } : {}) };
   const [e] = rows<{ id: string }>(await tx.execute(sql`insert into prepaid_entitlements(customer_id,property_id,source_payment_id,funded_cents,purchase)
     values(${subscription.customerId}::uuid,${subscription.propertyId}::uuid,${pi.id},${pi.amount},${json(purchase)}) returning id`));
   await tx.execute(sql`insert into prepaid_entries(entitlement_id,kind,cents,identity,actor,reason)

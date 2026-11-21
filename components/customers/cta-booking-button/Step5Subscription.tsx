@@ -9,6 +9,7 @@ import { SubscriptionCard } from "./SubscriptionCard";
 import { SUBSCRIPTION_DISCOUNT_TIERS } from "@/lib/pricing/subscription-discount";
 
 interface Step5Props extends StepsProps {
+  prepaidCredit?: boolean;
   /** Called when user books a call */
   onBookCall?: () => void;
   /** Called when user continues without booking */
@@ -32,6 +33,7 @@ export const Step5Subscription = ({
   errors,
   onBookCall,
   onContinueSetup,
+  prepaidCredit = false,
 }: Step5Props) => {
   const handleDateSelect = (date: Date | undefined) => {
     if (date) {
@@ -113,7 +115,11 @@ export const Step5Subscription = ({
         </div>
       </div>
 
-      <div>
+      {prepaidCredit ? <div className="rounded-lg border border-teal-200 bg-teal-50 p-4 text-sm text-gray-700">
+        Your subscription term starts when payment succeeds, using US Eastern dates.
+        You do not need to choose a clean date to fund your property credit.
+        The seven-day setup period still applies before the first clean.
+      </div> : <div>
         <h3 className="text-lg font-medium text-gray-900">Select First Clean Date</h3>
         
         {/* Reassurance text ABOVE date selector - per spec */}
@@ -159,13 +165,14 @@ export const Step5Subscription = ({
         </div>
       </div>
 
+      }
       <StepFeedback 
         errors={errors}
         fields={['subscriptionMonths', 'firstCleanDate']}
       />
 
       {/* Founder Card - CALL DECISION POINT D (after date selection) */}
-      {hasSelectedDate && onBookCall && onContinueSetup && (
+      {(prepaidCredit || hasSelectedDate) && onBookCall && onContinueSetup && (
         <FounderCard
           onBookCall={onBookCall}
           onContinue={onContinueSetup}

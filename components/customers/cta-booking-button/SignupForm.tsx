@@ -4,6 +4,7 @@ import {
   PriceDetails,
   SignupFormData,
   signupFormSchema,
+  prepaidSignupFormSchema,
 } from "@/lib/validations/bookng-modal";
 import React, { useState, useEffect, useMemo } from "react";
 import { Step1CustomerInfo } from "./Step1CustomerInfo";
@@ -135,6 +136,19 @@ export const SignupForm = ({
   const [isChangingServiceType, setIsChangingServiceType] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [portalInviteEmailSent, setPortalInviteEmailSent] = useState(true);
+  const [prepaidCredit, setPrepaidCredit] = useState<boolean | null>(null);
+  const [policyError, setPolicyError] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/payment/rental-policy", { cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw Error("Booking setup unavailable");
+        const policy = await response.json();
+        if (typeof policy.prepaidCredit !== "boolean") throw Error("Invalid booking setup");
+        setPrepaidCredit(policy.prepaidCredit);
+      }).catch(error => { if (error.name !== "AbortError") setPolicyError(true); });
+    return () => controller.abort();
+  }, []);
 
   // Call booking state
   const [showCallBookedConfirmation, setShowCallBookedConfirmation] = useState(false);
@@ -316,7 +330,9 @@ export const SignupForm = ({
       return true;
     }
 
-    const result = signupFormSchema.partial().safeParse(formData);
+    const result = prepaidCredit
+      ? prepaidSignupFormSchema.partial().safeParse({ ...formData, firstCleanDate: formData.firstCleanDate ?? undefined })
+      : signupFormSchema.partial().safeParse(formData);
     if (result.success) {
       setErrors({});
       return true;
@@ -488,6 +504,7 @@ export const SignupForm = ({
       case 5:
         return (
           <Step5Subscription
+            prepaidCredit={prepaidCredit === true}
             formData={formData}
             setFormData={setFormData}
             errors={errors}
@@ -560,6 +577,8 @@ export const SignupForm = ({
 
   // Render main content
   const renderContent = () => {
+    if (policyError) return <p role="alert">Booking setup could not be loaded. Please reopen this form later.</p>;
+    if (prepaidCredit === null) return <p role="status">Loading booking setup…</p>;
     // Skip loading state if we have initialData (already verified via resume link)
     if (isLoadingSession && !initialData) {
       return (

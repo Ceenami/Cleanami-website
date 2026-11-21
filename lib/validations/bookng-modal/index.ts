@@ -5,7 +5,7 @@ import {
 } from "@/lib/validations/laundry-loads";
 import { ENTRY_METHOD_VALUES, SERVICE_TYPES } from "@/lib/constants/service-type";
 
-function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true) {
+function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true, allowNoCleanDate = false) {
   return z
   .object({
     name: z.string().min(2, "Name is required"),
@@ -71,7 +71,7 @@ function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true)
         "Enter the time guests check out"
       ),
     iCalUrl: z.string().url("Please enter a valid URL"),
-    firstCleanDate: z.date({
+    firstCleanDate: allowNoCleanDate ? z.date().optional() : z.date({
       message: "Please select a valid start date for your first clean.",
     }),
     /**
@@ -103,7 +103,7 @@ function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true)
       const earliest = new Date();
       earliest.setHours(0, 0, 0, 0);
       earliest.setDate(earliest.getDate() + 7);
-      const chosen = new Date(data.firstCleanDate);
+      const chosen = new Date(data.firstCleanDate!);
       chosen.setHours(0, 0, 0, 0);
       return chosen.getTime() >= earliest.getTime();
     },
@@ -135,12 +135,17 @@ function createSignupFormSchema(enforceNotice: boolean, requireChecklist = true)
 
 export const signupFormSchema = createSignupFormSchema(true);
 export const paidSignupFormSchema = createSignupFormSchema(false);
+export const prepaidSignupFormSchema = createSignupFormSchema(false, true, true);
 
 // The JSON payment request cannot carry a custom checklist File. That file is
 // validated during onboarding; all other fresh purchase fields must already be
 // persistable before the card can be confirmed. Notice uses the server's Eastern
 // check, and accepted checkout recovery precedes this fresh-purchase validation.
 export const paymentSignupFormSchema = createSignupFormSchema(false, false).safeExtend({
+  sqft: z.number().int("Please enter a whole number of square feet").positive(),
+  subscriptionMonths: z.number().int("Please select a whole number of months").min(1).max(6),
+});
+export const prepaidPaymentSignupFormSchema = createSignupFormSchema(false, false, true).safeExtend({
   sqft: z.number().int("Please enter a whole number of square feet").positive(),
   subscriptionMonths: z.number().int("Please select a whole number of months").min(1).max(6),
 });

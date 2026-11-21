@@ -92,6 +92,29 @@ exports.verify = async ctx => {
     const contract=await contracts.getExecutionContract(f.job.id);
     await assert.rejects(()=>service.saveExecutionDraft(f.job.id,f.cleaner.id,{revision:0,items:contract.checklist.map(item=>({id:item.id,completed:true})),notes:''},true),/room-photo/);
   });
+  await test('required Before and After final packet settles once using only After completion photos',async()=>{
+    const f=await fixture(),contract=await contracts.getExecutionContract(f.job.id);
+    await service.recordExecutionVisit(f.job.id,f.cleaner.id,'arrival',null,'Synthetic location override');
+    for(const room of (await gate.readBeforeRequirements(f.job.id)).rooms)
+      for(let i=0;i<room.minPhotos;i++)await upload(f,room.roomKey,'before');
+    await service.startExecutionCleaning(f.job.id,f.cleaner.id);
+    await service.recordExecutionVisit(f.job.id,f.cleaner.id,'departure',null);
+    const draft={revision:0,items:contract.checklist.map(item=>({id:item.id,completed:true})),notes:'Synthetic completed clean'};
+    await assert.rejects(()=>service.saveExecutionDraft(f.job.id,f.cleaner.id,draft,true),/room-photo/);
+    const after=[];
+    for(const room of contract.rooms)for(let i=0;i<room.minPhotos;i++)after.push(await upload(f,room.roomKey,'after'));
+    await service.saveExecutionDraft(f.job.id,f.cleaner.id,draft,true);
+    const packet=await row(schema.evidencePackets,schema.evidencePackets.jobId,f.job.id);
+    assert.equal(packet.photoUrls.length,after.length);
+    assert.ok(packet.photoUrls.every(p=>!p.includes('/issued-before/')));
+    const settlement=require('../lib/services/payment/execution-settlement.ts');
+    const outcome=await settlement.settleExecutionJob(f.job.id);
+    assert.equal(outcome.httpStatus,200,JSON.stringify(outcome.body));
+    assert.equal((await settlement.settleExecutionJob(f.job.id)).body.alreadySettled,true);
+    assert.equal((await db.select().from(schema.payouts).where(eq(schema.payouts.jobId,f.job.id))).length,1);
+    assert.equal((await db.select().from(schema.reserveTransactions).where(eq(schema.reserveTransactions.jobId,f.job.id))).length,0);
+    assert.equal((await row(schema.jobs,schema.jobs.id,f.job.id)).status,'completed');
+  });
   await test('new required enrollment can stop without dropping existing gates or blocking physical departure',async()=>{
     delete process.env.BEFORE_REQUIRED_ENROLLMENT;delete process.env.BEFORE_EVIDENCE_ENROLLMENT;
     const f=await seed(),[job]=await contracts.insertIssuedJobs(db,[{propertyId:f.property.id,calendarEventUid:uuid(),status:'assigned',jobSource:'manual',checkInTime:new Date(Date.now()-1000),checkOutTime:new Date(Date.now()+8*3600000),expectedHours:'3'}]);

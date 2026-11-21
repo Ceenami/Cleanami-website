@@ -2,7 +2,7 @@ import "server-only";
 
 import { PricingService } from "@/lib/services/pricing.service";
 import { rentalQuoteRefusal } from "@/lib/pricing/rental-quote-refusal";
-import { PriceDetails, SignupFormData, paymentSignupFormSchema } from "@/lib/validations/bookng-modal";
+import { PriceDetails, SignupFormData, paymentSignupFormSchema, prepaidPaymentSignupFormSchema } from "@/lib/validations/bookng-modal";
 import { normalizeSignupFormDataForPricing } from "@/lib/validations/bookng-modal/serialize-signup-form";
 import {
   applyFirstCleanDiscount,
@@ -25,6 +25,7 @@ import { newSignupMinimumPolicy } from "./subscription-minimum.service";
 import { newSignupTermPolicy } from "./subscription-term.service";
 import { createRentalCheckout, recoverRentalCheckout, rentalCheckoutForm } from "./rental-checkout.service";
 import { newRentalFinancePolicy } from "./payment/rental-finance-settings";
+import { PURCHASE_DATE_START } from "@/lib/subscriptions/purchase-start";
 
 const pricingService = new PricingService();
 
@@ -153,6 +154,7 @@ export async function createPaymentIntentForSignup(
   minimumCommitmentPolicy?: string;
   termEndPolicy?: string;
   financePolicy?: string;
+  subscriptionStartPolicy?: string;
   error?: string;
 }> {
   const stripe = getStripe();
@@ -175,7 +177,8 @@ export async function createPaymentIntentForSignup(
   const recovered = await recoverRentalCheckout(stripe, normalizedFormData);
   if (recovered) return recovered;
 
-  const validPurchase = paymentSignupFormSchema.safeParse(normalizedFormData);
+  const financePolicy = newRentalFinancePolicy();
+  const validPurchase = (financePolicy ? prepaidPaymentSignupFormSchema : paymentSignupFormSchema).safeParse(normalizedFormData);
   if (!validPurchase.success) {
     return { error: validPurchase.error.issues[0]?.message ?? "Please review the booking details before payment." };
   }
@@ -230,14 +233,14 @@ export async function createPaymentIntentForSignup(
   // Re-enforce the 7-day first-clean buffer server-side (the client date picker
   // is not trusted). Compare calendar days in US Eastern (ops timezone).
   const firstCleanDate = normalizedFormData.firstCleanDate;
-  if (!(firstCleanDate instanceof Date) || Number.isNaN(firstCleanDate.getTime())) {
+  if (!financePolicy && (!(firstCleanDate instanceof Date) || Number.isNaN(firstCleanDate.getTime()))) {
     return { error: "Please select a valid first clean date." };
   }
   const earliestFirstClean = addDays(
     getStartOfTodayEastern(),
     FIRST_CLEAN_BUFFER_DAYS
   );
-  if (firstCleanDate < earliestFirstClean) {
+  if (!financePolicy && firstCleanDate! < earliestFirstClean) {
     return {
       error: `The first clean must be at least ${FIRST_CLEAN_BUFFER_DAYS} days out. Please choose a later date.`,
     };
@@ -308,7 +311,6 @@ export async function createPaymentIntentForSignup(
 
   const minimumCommitmentPolicy = newSignupMinimumPolicy();
   const termEndPolicy = newSignupTermPolicy();
-  const financePolicy = newRentalFinancePolicy();
   const metadata: Stripe.MetadataParam = {
     ...(financePolicy ? { rental_finance_policy: financePolicy } : {}),
     ...(termEndPolicy ? { subscription_term_end_policy: termEndPolicy } : {}),
@@ -348,6 +350,7 @@ export async function createPaymentIntentForSignup(
   return createRentalCheckout(stripe, normalizedFormData, {
     version: 1, form: rentalCheckoutForm(normalizedFormData), price: serverPriceDetails,
     minimumPolicy: minimumCommitmentPolicy, termPolicy: termEndPolicy, financePolicy, promoDiscountCents,
+    ...(financePolicy ? { subscriptionStartPolicy: PURCHASE_DATE_START } : {}),
   }, {
     amount: chargeAmountCents,
     currency: "usd",

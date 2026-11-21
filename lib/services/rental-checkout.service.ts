@@ -54,7 +54,8 @@ function response(attempt: Attempt, pi: Stripe.PaymentIntent) {
   if (!pi.client_secret) throw new Error("Could not initialize payment. Contact CleanNami before paying again.");
   return { clientSecret: pi.client_secret, amountInCents: attempt.providerParams.amount,
     promoDiscountCents: attempt.terms.promoDiscountCents, minimumCommitmentPolicy: attempt.terms.minimumPolicy,
-    termEndPolicy: attempt.terms.termPolicy, financePolicy: attempt.terms.financePolicy };
+    termEndPolicy: attempt.terms.termPolicy, financePolicy: attempt.terms.financePolicy,
+    subscriptionStartPolicy: attempt.terms.subscriptionStartPolicy };
 }
 
 /** Recover BEFORE today's price/notice/promo checks. Changed scope cancels a

@@ -19,6 +19,7 @@ import {
 import { and, desc, eq } from "drizzle-orm";
 import { getExecutionContract } from "../job-execution-contract";
 import { ExecutionError } from "../job-execution";
+import { isBeforeUpload } from "@/lib/evidence/phases";
 import { evaluateArrival } from "../gps/geofence";
 import { computeCleanerPay } from "@/lib/pricing/cleaner-pay";
 import { readResidentialSnapshot } from "@/lib/pricing/residential-v2/contracts";
@@ -84,8 +85,11 @@ export async function settleExecutionJob(
           }),
         )
         .digest("hex");
+      // The final hash includes both phases, while completion requirements and
+      // the submitted packet contain After photos only.
+      const completionPhotos = verified.filter((upload) => !isBeforeUpload(upload));
       const roomPhotos: Record<string, string[]> = {};
-      for (const upload of verified)
+      for (const upload of completionPhotos)
         (roomPhotos[upload.roomKey] ??= []).push(upload.path);
       const log = packet.checklistLog as {
         items?: { id: string; completed: boolean }[];
@@ -100,7 +104,7 @@ export async function settleExecutionJob(
           (room) => (roomPhotos[room.roomKey]?.length ?? 0) < room.minPhotos,
         ) ||
         JSON.stringify(packet.photoUrls) !==
-          JSON.stringify(verified.map((u) => u.path)) ||
+          JSON.stringify(completionPhotos.map((u) => u.path)) ||
         draft.items.length !== canonicalItems.length ||
         canonicalItems.some(
           (item) =>

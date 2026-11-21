@@ -27,7 +27,7 @@ const stripe = { customers: { list: async () => ({data:[]}), create: async () =>
     if(keys.has(options.idempotencyKey)) return intents.get(keys.get(options.idempotencyKey));
     const id = 'pi_' + crypto.randomUUID(); keys.set(options.idempotencyKey,id);
     const pi = { ...input,id,client_secret:'synthetic_secret',status:'succeeded',amount_received:input.amount };
-    pi.latest_charge = { id:'ch_'+id,payment_intent:id,currency:'usd',amount:input.amount,amount_refunded:0,refunded:false,paid:true,captured:true };
+    pi.latest_charge = { id:'ch_'+id,payment_intent:id,currency:'usd',amount:input.amount,amount_refunded:0,refunded:false,paid:true,captured:true,created:Math.floor(Date.now()/1000) };
     intents.set(id,pi); charges.push(id);
     if(loseIntentResponse){loseIntentResponse=false;throw Error('Synthetic lost intent response');}
     return pi;

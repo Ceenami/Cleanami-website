@@ -11,6 +11,7 @@ import { ShieldCheck, Lock } from 'lucide-react';
 import { isServiceUnavailableMessage } from '@/lib/env/messages';
 import { getStripe } from '@/lib/stripe/client';
 import { THIRTY_DAY_MINIMUM } from '@/lib/subscriptions/minimum';
+import { PURCHASE_DATE_START } from '@/lib/subscriptions/purchase-start';
 
 const stripePromise = getStripe();
 
@@ -46,6 +47,7 @@ export const Step7Payment = ({
   const [minimumPolicy, setMinimumPolicy] = useState<string | undefined>();
   const [termEndPolicy, setTermEndPolicy] = useState<string | undefined>();
   const [financePolicy, setFinancePolicy] = useState<string | undefined>();
+  const [startPolicy, setStartPolicy] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
 
@@ -74,6 +76,8 @@ export const Step7Payment = ({
     setAmountInCents(null);
     setMinimumPolicy(undefined);
     setTermEndPolicy(undefined);
+    setFinancePolicy(undefined);
+    setStartPolicy(undefined);
 
     try {
       const response = await fetch('/api/payment/create-intent', {
@@ -90,6 +94,7 @@ export const Step7Payment = ({
         minimumCommitmentPolicy?: string;
         termEndPolicy?: string;
         financePolicy?: string;
+        subscriptionStartPolicy?: string;
         error?: string;
       };
 
@@ -110,6 +115,7 @@ export const Step7Payment = ({
         setMinimumPolicy(result.minimumCommitmentPolicy);
         setTermEndPolicy(result.termEndPolicy);
         setFinancePolicy(result.financePolicy);
+        setStartPolicy(result.subscriptionStartPolicy);
       } else {
         setError('Could not initialize payment. Please refresh and try again.');
       }
@@ -226,8 +232,15 @@ export const Step7Payment = ({
 
           {clientSecret && !error ? (
             <>
+              {startPolicy === PURCHASE_DATE_START && <p className="text-sm text-gray-700">
+                Your {formData.subscriptionMonths}-month term starts on the date payment succeeds,
+                using US Eastern calendar dates, and lasts at least 30 days. It ends without
+                automatic renewal. Your first clean can be scheduled after the seven-day setup
+                period; this payment does not itself schedule a clean. Unused property credit
+                survives subscription end.
+              </p>}
               <p className="text-sm text-gray-600">
-                {minimumPolicy === THIRTY_DAY_MINIMUM
+                {startPolicy === PURCHASE_DATE_START ? "The 30-day minimum begins on the successful payment date. Individual cleans follow the cancellation policy." : minimumPolicy === THIRTY_DAY_MINIMUM
                   ? "Your subscription has a 30-day minimum from its service start date, using US Eastern calendar days. You can cancel the subscription after that minimum; individual cleans follow the cancellation policy."
                   : "Your subscription has a first-month minimum from its service start date. You can cancel the subscription after that minimum; individual cleans follow the cancellation policy."}
               </p>

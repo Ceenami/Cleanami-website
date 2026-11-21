@@ -10,7 +10,7 @@ import {
   checklistFiles,
   jobs,
 } from "@/db/schema";
-import { SignupFormData, signupFormSchema, paidSignupFormSchema } from "@/lib/validations/bookng-modal";
+import { SignupFormData, signupFormSchema, paidSignupFormSchema, prepaidSignupFormSchema } from "@/lib/validations/bookng-modal";
 import { ICalService } from "@/lib/services/iCal/ical.service";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe/get-stripe";
@@ -31,6 +31,7 @@ import { recordSubscriptionTerm } from "./subscription-term.service";
 import { THIRTY_DAY_MINIMUM, thirtyDayMinimumEndDate } from "@/lib/subscriptions/minimum";
 import { verifySettledPayment } from "./payment/verify-settled-payment";
 import { loadPaidRentalCheckout } from "./rental-checkout.service";
+import { PURCHASE_DATE_START, purchaseTermDates } from "@/lib/subscriptions/purchase-start";
 
 const pricingService = new PricingService();
 
@@ -151,9 +152,12 @@ export async function completeOnboardingForPayment(
 
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     const checkout = await loadPaidRentalCheckout(paymentIntent, formData);
-    const validatedData = (checkout ? paidSignupFormSchema : signupFormSchema).parse(checkout ? {
+    const purchaseDateStart = checkout?.terms.subscriptionStartPolicy === PURCHASE_DATE_START;
+    if (checkout?.terms.subscriptionStartPolicy && !purchaseDateStart)
+      throw Error("Unsupported accepted subscription start policy; preserve payment for review");
+    const validatedData = (purchaseDateStart ? prepaidSignupFormSchema : checkout ? paidSignupFormSchema : signupFormSchema).parse(checkout ? {
       ...formData, ...checkout.terms.form,
-      firstCleanDate: new Date(checkout.terms.form.firstCleanDate as string),
+      firstCleanDate: checkout.terms.form.firstCleanDate ? new Date(checkout.terms.form.firstCleanDate as string) : undefined,
     } : formData);
     const stripeCustomerId =
       typeof paymentIntent.customer === "string" ? paymentIntent.customer : null;
@@ -164,6 +168,16 @@ export async function completeOnboardingForPayment(
         error:
           "Payment has not completed successfully. Customer portal access cannot be granted.",
       };
+    }
+    let purchaseDates: ReturnType<typeof purchaseTermDates> | undefined;
+    let fundingPayment = paymentIntent;
+    if (purchaseDateStart) {
+      const charge = typeof paymentIntent.latest_charge === "string"
+        ? await stripe.charges.retrieve(paymentIntent.latest_charge) : paymentIntent.latest_charge;
+      if (!charge || charge.payment_intent !== paymentIntent.id || !charge.paid || !charge.captured)
+        throw Error("Verified successful purchase time is required; preserve payment for review");
+      purchaseDates = purchaseTermDates(charge.created, Number(checkout!.terms.form.subscriptionMonths));
+      fundingPayment = { ...paymentIntent, latest_charge: charge };
     }
 
     if (!stripeCustomerId) {
@@ -387,11 +401,11 @@ export async function completeOnboardingForPayment(
         .values(propertyValues as typeof properties.$inferInsert)
         .returning();
 
-      const startDate = new Date(firstCleanDate);
+      const startDate = purchaseDates ? new Date(`${purchaseDates.startDate}T12:00:00Z`) : new Date(firstCleanDate!);
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + subscriptionMonths);
-      const issuedStartDay = firstCleanDate.toISOString().split("T")[0];
-      let issuedEndDay = endDate.toISOString().split("T")[0];
+      const issuedStartDay = purchaseDates?.startDate ?? firstCleanDate!.toISOString().split("T")[0];
+      let issuedEndDay = purchaseDates?.endDate ?? endDate.toISOString().split("T")[0];
       if (paymentIntent.metadata?.subscription_minimum_policy === THIRTY_DAY_MINIMUM) {
         // A short February term must not end before its disclosed minimum.
         const minimumEndDay = thirtyDayMinimumEndDate(issuedStartDay);
@@ -415,7 +429,7 @@ export async function completeOnboardingForPayment(
 
       await recordSubscriptionMinimum(tx, subscription, paymentIntent.metadata?.subscription_minimum_policy);
       await recordSubscriptionTerm(tx, subscription, paymentIntent.metadata?.subscription_term_end_policy);
-      await recordRentalFunding(tx, subscription, paymentIntent, checkout?.terms);
+      await recordRentalFunding(tx, subscription, fundingPayment, checkout?.terms);
       return { customer, property, subscription };
     });
 
@@ -551,7 +565,8 @@ export async function completeOnboardingForPayment(
         to: email,
         name,
         propertyAddress: result.property.address,
-        firstCleanDate: firstCleanDate.toDateString(),
+        ...(purchaseDates ? { subscriptionTerm: { startDate: purchaseDates.startDate, endDate: result.subscription.endDate } }
+          : { firstCleanDate: firstCleanDate!.toDateString() }),
         amount: `$${(paymentIntent.amount / 100).toFixed(2)}`,
       });
     } catch (emailError) {

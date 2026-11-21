@@ -9,6 +9,7 @@ export type RentalCheckoutTerms = {
   minimumPolicy?: string;
   termPolicy?: string;
   financePolicy?: string;
+  subscriptionStartPolicy?: string;
   promoDiscountCents: number;
 };
 

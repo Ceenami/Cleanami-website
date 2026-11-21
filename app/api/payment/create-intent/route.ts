@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
       minimumCommitmentPolicy: result.minimumCommitmentPolicy,
       termEndPolicy: result.termEndPolicy,
       financePolicy: result.financePolicy,
+      subscriptionStartPolicy: result.subscriptionStartPolicy,
     });
   } catch (error) {
     console.error("[POST /api/payment/create-intent]", error);

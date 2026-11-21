@@ -53,11 +53,47 @@ async function run(){
   await test('SQL0067 reapplies, has private RLS and no historical enrollment',async()=>{
     await migration();for(const table of financeTables){assert.equal((await pg.query(`select relrowsecurity v from pg_class where oid='${table}'::regclass`)).rows[0].v,true);for(const role of ['anon','authenticated'])assert.equal((await pg.query(`select has_table_privilege('${role}','${table}','SELECT,INSERT,UPDATE,DELETE') v`)).rows[0].v,false);assert.equal((await pg.query(`select count(*)::int n from ${table}`)).rows[0].n,0);}
   });
+  await test('purchase-date term uses Eastern successful-charge dates, calendar month ends and the 30-day minimum',()=>{
+    const {purchaseTermDates}=require('../lib/subscriptions/purchase-start.ts');
+    for(const timezone of ['UTC','America/New_York','Asia/Kolkata']){
+      process.env.TZ=timezone;
+      for(const [instant,months,start,end] of [
+        ['2027-01-31T18:00:00Z',1,'2027-01-31','2027-03-02'],
+        ['2028-01-31T18:00:00Z',1,'2028-01-31','2028-03-01'],
+        ['2027-01-31T18:00:00Z',3,'2027-01-31','2027-04-30'],
+        ['2027-03-14T03:59:59Z',3,'2027-03-13','2027-06-13'],
+        ['2027-03-14T05:00:00Z',3,'2027-03-14','2027-06-14'],
+      ]){const value=purchaseTermDates(Date.parse(instant)/1000,months);assert.equal(value.startDate,start);assert.equal(value.endDate,end);}
+    }
+    process.env.TZ='UTC';assert.throws(()=>purchaseTermDates(0,1));assert.throws(()=>purchaseTermDates(1,1.5));
+  });
+  await test('new prepaid purchase needs no clean date; verified charge date starts the term and preserves the setup buffer',async()=>{
+    const {PURCHASE_DATE_START,purchaseTermDates}=require('../lib/subscriptions/purchase-start.ts');
+    const input=h.form();delete input.firstCleanDate;
+    const payment=await h.paid(input);assert.equal(payment.result.subscriptionStartPolicy,PURCHASE_DATE_START);
+    payment.pi.created=Math.floor(Date.now()/1000)-20*86400;
+    const paidAt=payment.pi.latest_charge.created,expected=purchaseTermDates(paidAt,input.subscriptionMonths);
+    await admin.auditFinance(db,'consent:'+payment.pi.id,String(payment.pi.customer),'accept_financial_terms','Synthetic explicit checkout agreement',null,null,{policy:payment.result.financePolicy});
+    const id=await h.complete(payment),sub=await h.sub(id),contract=await credit.financeContract(id),e=await credit.entitlement(contract.entitlement_id);
+    assert.equal(sub.startDate,expected.startDate);assert.equal(sub.endDate,expected.endDate);assert.equal(e.purchase.serviceNotBefore,expected.serviceNotBefore);assert.equal(e.balance,payment.pi.amount);
+    assert.equal((await db.select().from(schema.jobs).where(eq(schema.jobs.subscriptionId,id))).length,0);
+    const termService=require('../lib/services/subscription-term.service.ts'),term=await termService.readSubscriptionTerm(id);
+    assert.equal(termService.withinRecordedTerm(term,new Date(expected.startDate+'T17:00Z')),false);
+    assert.equal(termService.withinRecordedTerm(term,new Date(expected.serviceNotBefore+'T17:00Z')),true);
+    const chargeCount=h.charges.length;delete process.env.RENTAL_FINANCE_ENROLLMENT;
+    try{assert.equal((await checkout.createPaymentIntentForSignup(input)).subscriptionStartPolicy,PURCHASE_DATE_START);assert.equal(await h.complete(payment),id);assert.equal(h.charges.length,chargeCount);}finally{enable();}
+  });
+  await test('missing authoritative purchase time preserves accepted money without issuing a subscription',async()=>{
+    const input=h.form();delete input.firstCleanDate;const payment=await h.paid(input),at=payment.pi.latest_charge.created;delete payment.pi.latest_charge.created;
+    await admin.auditFinance(db,'consent:'+payment.pi.id,String(payment.pi.customer),'accept_financial_terms','Synthetic explicit checkout agreement',null,null,{policy:payment.result.financePolicy});
+    const denied=await onboarding.completeOnboardingForPayment(input,payment.pi.id);assert.equal(denied.success,false);assert.equal((await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.firstCleanPaymentId,payment.pi.id))).length,0);
+    payment.pi.latest_charge.created=at;assert.ok(await h.complete(payment));
+  });
   await test('fee classification preserves exact24h, subhour, DST elapsed instants and started refusal',async()=>{
     const now=new Date('2026-11-01T05:30:00Z');assert.equal(isLateFinancialCancellation(new Date(+now+86400000),now),false);assert.equal(isLateFinancialCancellation(new Date(+now+86399999),now),true);assert.equal(isLateFinancialCancellation(new Date(+now+1800000),now),true);assert.throws(()=>isLateFinancialCancellation(now,now));
   });
   await test('new checkout pins financial policy but refuses funding without recorded agreement',async()=>{
-    const p=await h.paid();assert.equal(p.result.financePolicy,'property_prepaid_separate_fee_v1');const result=await onboarding.completeOnboardingForPayment(p.input,p.pi.id);assert.equal(result.success,false);assert.match(result.error,/terms are missing/);assert.equal((await db.select().from(schema.subscriptions)).length,0);
+    const p=await h.paid();assert.equal(p.result.financePolicy,'property_prepaid_separate_fee_v1');const result=await onboarding.completeOnboardingForPayment(p.input,p.pi.id);assert.equal(result.success,false);assert.match(result.error,/terms are missing/);assert.equal((await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.firstCleanPaymentId,p.pi.id))).length,0);
   });
   await test('funded owner/property credit is independent of a scheduled job and onboarding retries',async()=>{
     const o=await purchase();assert.equal(o.e.balance,20000);assert.equal(o.e.reserved,0);assert.equal((await db.select().from(schema.jobs)).length,0);assert.equal(await h.complete(o.payment),o.sub.id);assert.equal((await db.select().from(schema.prepaidEntries).where(eq(schema.prepaidEntries.entitlementId,o.e.id))).length,1);

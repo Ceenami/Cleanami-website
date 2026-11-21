@@ -132,7 +132,8 @@ export function sendBookingConfirmationEmail(params: {
   to: string;
   name?: string;
   propertyAddress: string;
-  firstCleanDate: string;
+  firstCleanDate?: string;
+  subscriptionTerm?: { startDate: string; endDate: string };
   amount: string;
 }): Promise<SendResult> {
   return sendTransactionalEmail(
@@ -144,8 +145,12 @@ export function sendBookingConfirmationEmail(params: {
       greeting: params.name ? `Hi ${params.name},` : "Hi there,",
       bodyLines: [
         `Your cleaning subscription for ${params.propertyAddress} is confirmed.`,
-        `Your first clean is scheduled for ${params.firstCleanDate}.`,
-        `Amount charged for the first clean: ${params.amount}.`,
+        ...(params.subscriptionTerm ? [
+          `Your subscription term is ${params.subscriptionTerm.startDate} to ${params.subscriptionTerm.endDate} (US Eastern dates).`,
+          "Your property credit is funded. This payment does not itself schedule a clean; the seven-day setup period applies.",
+          `Amount paid for property credit: ${params.amount}.`,
+        ] : [`Your first clean is scheduled for ${params.firstCleanDate}.`,
+          `Amount charged for the first clean: ${params.amount}.`]),
       ],
       ctaLabel: "Open your portal",
       ctaUrl: `${APP_URL}/customer/dashboard`,

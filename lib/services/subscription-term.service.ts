@@ -1,5 +1,5 @@
 import "server-only";
-import { financeContract } from "./payment/rental-credit";
+import { financeContract, entitlement } from "./payment/rental-credit";
 import { db, type Database } from "@/db";
 import { subscriptionTerms, subscriptions, phase2cAudit } from "@/db/schemas";
 import { and, eq, inArray, lt } from "drizzle-orm";
@@ -21,13 +21,18 @@ export async function recordSubscriptionTerm(writer: Writer, subscription: { id:
 export async function readSubscriptionTerm(subscriptionId: string, writer: Writer = db) {
   const [term] = subscriptionTermReady() ? await writer.select().from(subscriptionTerms).where(eq(subscriptionTerms.subscriptionId, subscriptionId)) : [];
   if (term && term.policy !== STOP_AT_TERM_END) throw Error("Unsupported recorded subscription term");
-  if (term) return term;
-  const reactivated = (await financeContract(subscriptionId, writer))?.reactivation_terms;
-  return reactivated ? { subscriptionId, policy: STOP_AT_TERM_END, startDate: reactivated.startDate, endDate: reactivated.endDate, paymentIntentId: null } : null;
+  const finance = await financeContract(subscriptionId, writer);
+  const reactivated = finance?.reactivation_terms;
+  const recorded = term ?? (reactivated ? { subscriptionId, policy: STOP_AT_TERM_END, startDate: reactivated.startDate, endDate: reactivated.endDate, paymentIntentId: null } : null);
+  if (!recorded) return null;
+  const firstService = finance ? (await entitlement(finance.entitlement_id, writer))?.purchase.serviceNotBefore : undefined;
+  if (firstService !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(firstService))
+    throw Error("Recorded setup period requires review before service");
+  return { ...recorded, serviceNotBefore: firstService };
 }
-export function withinRecordedTerm(term: { startDate: string; endDate: string }, start: Date) {
+export function withinRecordedTerm(term: { startDate: string; endDate: string; serviceNotBefore?: string }, start: Date) {
   const day = toEasternDateString(start);
-  return day >= term.startDate && day <= term.endDate;
+  return day >= term.startDate && day <= term.endDate && (!term.serviceNotBefore || day >= term.serviceNotBefore);
 }
 export async function assertSubscriptionServiceAllowed(subscriptionId: string, start: Date, writer: Writer = db) {
   const term = await readSubscriptionTerm(subscriptionId, writer);
