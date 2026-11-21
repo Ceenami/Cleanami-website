@@ -15,6 +15,7 @@ import type { ServiceType } from "@/lib/constants/service-type";
 import { SERVICE_TYPE_LABELS } from "@/lib/constants/service-type";
 import { trackBookingStart } from "@/lib/analytics";
 import { normalizeResidentialFormData } from "@/lib/validations/residential/serialize";
+import { claimBookingResume } from "@/lib/booking/claim-resume";
 
 interface ResumeData {
   formData: Partial<SignupFormData>;
@@ -54,7 +55,7 @@ export const SignupModal = () => {
   useEffect(() => {
     const resumeParam = searchParams.get("resume");
 
-    if (resumeParam) {
+    if (resumeParam && claimBookingResume(resumeParam)) {
       // Check if we already have a valid cookie session for this
       loadSession().then((result) => {
         if (result.success && result.sessionId === resumeParam) {
@@ -76,7 +77,7 @@ export const SignupModal = () => {
         // Clean up URL
         const url = new URL(window.location.href);
         url.searchParams.delete("resume");
-        router.replace(url.pathname + url.search, { scroll: false });
+        router.replace(url.pathname + url.search + url.hash, { scroll: false });
       });
     }
   }, [searchParams, router]);
